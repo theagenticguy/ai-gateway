@@ -5,6 +5,7 @@ locals {
 }
 
 module "ecs_cluster" {
+  #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/ecs/aws//modules/cluster"
   version = "6.0.0"
 
@@ -29,6 +30,7 @@ module "ecs_cluster" {
 }
 
 module "ecs_service" {
+  #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "6.0.0"
 

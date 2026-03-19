@@ -1,4 +1,5 @@
 module "alb" {
+  #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/alb/aws"
   version = "10.0.0"
 

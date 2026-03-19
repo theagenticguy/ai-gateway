@@ -3,6 +3,7 @@ data "aws_availability_zones" "available" {
 }
 
 module "vpc" {
+  #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/vpc/aws"
   version = "6.0.0"
 

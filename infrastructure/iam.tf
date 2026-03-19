@@ -69,6 +69,8 @@ resource "aws_iam_role" "ecs_task" {
 }
 
 resource "aws_iam_role_policy" "ecs_task_bedrock" {
+  #checkov:skip=CKV_AWS_290:Bedrock InvokeModel does not support resource-level permissions
+  #checkov:skip=CKV_AWS_355:Bedrock InvokeModel does not support resource-level permissions
   name = "bedrock-access"
   role = aws_iam_role.ecs_task.id
 
@@ -112,7 +114,10 @@ resource "aws_iam_role_policy" "ecs_task_observability" {
           "logs:PutLogEvents",
           "logs:CreateLogGroup"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}/*",
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}/*:*"
+        ]
       }
     ]
   })

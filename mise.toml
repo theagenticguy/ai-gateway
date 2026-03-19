@@ -14,6 +14,7 @@ python = "3.13"
 
 # IaC
 "aqua:hashicorp/terraform" = "1.10.5"
+"aqua:gruntwork-io/terragrunt" = "latest"
 
 [env]
 _.python.venv = { path = ".venv", create = true }
@@ -102,6 +103,28 @@ run = "terraform -chdir=infrastructure fmt -recursive"
 description = "Validate Terraform configuration"
 run = "terraform -chdir=infrastructure validate"
 depends = ["tf:init"]
+
+# ──────────────────────────────────────────────
+# Terragrunt tasks
+# ──────────────────────────────────────────────
+
+[tasks."tg:init"]
+description = "Terragrunt init for a specific environment"
+run = "terragrunt init"
+
+[tasks."tg:plan"]
+description = "Terragrunt plan for a specific environment"
+run = "terragrunt plan"
+
+[tasks."tg:plan-all"]
+description = "Terragrunt plan all environments"
+run = "terragrunt run-all plan --terragrunt-non-interactive"
+dir = "terragrunt"
+
+[tasks."tg:validate-all"]
+description = "Terragrunt validate all environments"
+run = "terragrunt run-all validate --terragrunt-non-interactive"
+dir = "terragrunt"
 
 # ──────────────────────────────────────────────
 # CI tasks
