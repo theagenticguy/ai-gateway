@@ -5,7 +5,7 @@ data "aws_availability_zones" "available" {
 module "vpc" {
   #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/vpc/aws"
-  version = "6.0.0"
+  version = "6.6.0"
 
   name = "${var.project_name}-${var.environment}"
   cidr = var.vpc_cidr
