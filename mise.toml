@@ -15,6 +15,7 @@ python = "3.13"
 # IaC
 "aqua:hashicorp/terraform" = "1.10.5"
 "aqua:gruntwork-io/terragrunt" = "latest"
+"aqua:terraform-docs/terraform-docs" = "latest"
 
 [env]
 _.python.venv = { path = ".venv", create = true }
@@ -103,6 +104,10 @@ run = "terraform -chdir=infrastructure fmt -recursive"
 description = "Validate Terraform configuration"
 run = "terraform -chdir=infrastructure validate"
 depends = ["tf:init"]
+
+[tasks."tf:docs"]
+description = "Generate Terraform documentation"
+run = "terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/"
 
 # ──────────────────────────────────────────────
 # Terragrunt tasks

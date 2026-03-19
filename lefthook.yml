@@ -26,6 +26,10 @@ pre-commit:
     terraform-validate:
       glob: "infrastructure/**/*.tf"
       run: terraform -chdir=infrastructure validate
+    terraform-docs:
+      glob: "infrastructure/**/*.tf"
+      run: terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/ && git add infrastructure/README.md
+      stage_fixed: true
 
 pre-push:
   parallel: true

@@ -118,6 +118,18 @@ jobs:
         working-directory: infrastructure
         run: terraform validate
 
+      - name: Install terraform-docs
+        run: |
+          curl -sSLo terraform-docs.tar.gz https://terraform-docs.io/dl/v0.19.0/terraform-docs-v0.19.0-linux-amd64.tar.gz
+          tar -xzf terraform-docs.tar.gz
+          chmod +x terraform-docs
+          sudo mv terraform-docs /usr/local/bin/
+
+      - name: Check terraform-docs is up to date
+        run: |
+          terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/
+          git diff --exit-code infrastructure/README.md || (echo "terraform-docs is out of date. Run 'mise run tf:docs'" && exit 1)
+
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
         with:

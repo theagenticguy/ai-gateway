@@ -1,3 +1,7 @@
+# =============================================================================
+# Authentication — Cognito + ALB JWT Listener
+# =============================================================================
+
 # -----------------------------------------------------------------------------
 # Cognito User Pool — M2M (Machine-to-Machine) Authentication
 # ADR-005: ALB JWT validation with Cognito as IdP
@@ -66,4 +70,51 @@ resource "aws_cognito_user_pool_client" "gateway_m2m" {
 resource "aws_cognito_user_pool_domain" "gateway" {
   domain       = var.cognito_domain_prefix != "" ? var.cognito_domain_prefix : "${var.project_name}-${var.environment}"
   user_pool_id = aws_cognito_user_pool.gateway.id
+}
+
+# -----------------------------------------------------------------------------
+# ALB JWT Validation Listener (A.2)
+#
+# When JWT auth is enabled, this raw aws_lb_listener replaces the ALB module's
+# simple HTTPS forward listener on port 443. It validates JWTs issued by the
+# Cognito User Pool before forwarding to the gateway target group.
+#
+# The ALB module's HTTPS listener is conditionally excluded when
+# enable_jwt_auth = true (see networking module).
+#
+# Ref: ADR-005 (ALB JWT over API Gateway), ADR-007 (provider v6.22+ for JWT)
+# -----------------------------------------------------------------------------
+
+resource "aws_lb_listener" "https_jwt" {
+  count = var.certificate_arn != "" && var.enable_jwt_auth ? 1 : 0
+
+  load_balancer_arn = var.alb_arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.certificate_arn
+
+  # Action 1: Validate the JWT — returns 401 automatically on invalid tokens
+  default_action {
+    type  = "jwt-validation"
+    order = 1
+
+    jwt_validation {
+      issuer        = "https://cognito-idp.${var.aws_region}.amazonaws.com/${var.cognito_user_pool_id}"
+      jwks_endpoint = "https://cognito-idp.${var.aws_region}.amazonaws.com/${var.cognito_user_pool_id}/.well-known/jwks.json"
+
+      additional_claim {
+        format = "string-array"
+        name   = "scope"
+        values = ["https://gateway.internal/invoke"]
+      }
+    }
+  }
+
+  # Action 2: Forward valid requests to the gateway target group
+  default_action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = var.alb_target_group_gateway_arn
+  }
 }
