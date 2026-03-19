@@ -131,7 +131,7 @@ jobs:
           git diff --exit-code infrastructure/README.md || (echo "terraform-docs is out of date. Run 'mise run tf:docs'" && exit 1)
 
       - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: latest
 
