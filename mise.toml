@@ -10,6 +10,7 @@ python = "3.13"
 "aqua:hadolint/hadolint" = "2.14.0"
 "aqua:evilmartians/lefthook" = "2.1.4"
 "aqua:zricethezav/gitleaks" = "latest"
+"aqua:rhysd/actionlint" = "latest"
 
 # IaC
 "aqua:hashicorp/terraform" = "1.10.5"
@@ -19,9 +20,13 @@ _.python.venv = { path = ".venv", create = true }
 PYTHONDONTWRITEBYTECODE = "1"
 PYTHONUNBUFFERED = "1"
 
+# ──────────────────────────────────────────────
+# Core tasks
+# ──────────────────────────────────────────────
+
 [tasks.install]
-description = "Install all project dependencies"
-run = "uv sync"
+description = "Install all project dependencies and git hooks"
+run = ["uv sync", "lefthook install"]
 
 [tasks.dev]
 description = "Run the API gateway in development mode"
@@ -37,16 +42,20 @@ description = "Run linter and formatter check"
 run = ["uv run ruff check .", "uv run ruff format --check ."]
 
 [tasks.format]
-description = "Auto-format code"
-run = "uv run ruff format ."
+description = "Auto-format all code"
+run = ["uv run ruff format .", "uv run ruff check --fix .", "terraform -chdir=infrastructure fmt -recursive"]
 
 [tasks.typecheck]
 description = "Run type checker"
 run = "uv run pyright src/"
 
+# ──────────────────────────────────────────────
+# Security tasks
+# ──────────────────────────────────────────────
+
 [tasks.security]
 description = "Run all security scans"
-depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile"]
+depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile", "security:fs"]
 
 [tasks."security:sast"]
 description = "SAST scan with semgrep"
@@ -68,6 +77,44 @@ run = "hadolint Dockerfile"
 description = "Scan container image with trivy"
 run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
 
+[tasks."security:fs"]
+description = "Filesystem vulnerability scan with trivy"
+run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+
+# ──────────────────────────────────────────────
+# Terraform tasks
+# ──────────────────────────────────────────────
+
+[tasks."tf:init"]
+description = "Initialize Terraform"
+run = "terraform -chdir=infrastructure init"
+
+[tasks."tf:plan"]
+description = "Terraform plan (dry-run)"
+run = "terraform -chdir=infrastructure plan"
+depends = ["tf:init"]
+
+[tasks."tf:fmt"]
+description = "Format Terraform files"
+run = "terraform -chdir=infrastructure fmt -recursive"
+
+[tasks."tf:validate"]
+description = "Validate Terraform configuration"
+run = "terraform -chdir=infrastructure validate"
+depends = ["tf:init"]
+
+# ──────────────────────────────────────────────
+# CI tasks
+# ──────────────────────────────────────────────
+
 [tasks.ci]
 description = "Full CI pipeline (lint, typecheck, test, security)"
 depends = ["lint", "typecheck", "test", "security"]
+
+[tasks."ci:lint"]
+description = "CI-only: actionlint on GitHub workflows"
+run = "actionlint"
+
+[tasks."ci:validate"]
+description = "CI-only: validate all CI + pre-commit in one shot"
+depends = ["lint", "typecheck", "security", "tf:validate", "ci:lint"]

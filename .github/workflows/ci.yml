@@ -1,3 +1,10 @@
+# ──────────────────────────────────────────────────────────────
+# CI/CD Pipeline — ai-gateway
+# ──────────────────────────────────────────────────────────────
+# Runs on every push/PR to main. Jobs are parallelised where
+# possible; build-and-push + deploy gate on all quality/security
+# jobs passing first.
+# ──────────────────────────────────────────────────────────────
 name: CI/CD Pipeline
 
 on:
@@ -6,20 +13,29 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   AWS_REGION: us-east-1
   IMAGE_NAME: ai-gateway
   PORTKEY_VERSION: "1.15.2"
+  PYTHON_VERSION: "3.13"
 
+# ── Default permissions (least-privilege) ────────────────────
 permissions:
   contents: read
-  id-token: write
-  security-events: write
 
 jobs:
-  lint:
-    name: Lint & IaC Security
+  # ────────────────────────────────────────────────────────────
+  # 1. Code Quality
+  # ────────────────────────────────────────────────────────────
+  quality:
+    name: Code Quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,34 +43,188 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Run ruff linter
-        run: uv run ruff check .
+      - name: Install dependencies
+        run: uv sync --frozen
 
-      - name: Check ruff formatting
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+
+      - name: Ruff format check
         run: uv run ruff format --check .
 
-      - name: Run hadolint on Dockerfiles
-        uses: hadolint/hadolint-action@v3.1.0
-        if: hashFiles('**/Dockerfile') != ''
-        with:
-          recursive: true
+      - name: Pyright type check
+        run: uv run pyright src/
 
-      - name: Run checkov on infrastructure
+  # ────────────────────────────────────────────────────────────
+  # 2. SAST — Static Application Security Testing
+  # ────────────────────────────────────────────────────────────
+  security-sast:
+    name: SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Semgrep SAST scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/owasp-top-ten
+            p/security-audit
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Gitleaks secret detection
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE_KEY }}
+
+  # ────────────────────────────────────────────────────────────
+  # 3. IaC Security — Terraform / Infrastructure
+  # ────────────────────────────────────────────────────────────
+  security-iac:
+    name: IaC Security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive -diff infrastructure/
+
+      - name: Terraform init (no backend)
+        working-directory: infrastructure
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: infrastructure
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Init TFLint
+        run: tflint --init
+        working-directory: infrastructure
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run TFLint
+        run: tflint --recursive --format compact
+        working-directory: infrastructure
+
+      - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: infrastructure/
           framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
           soft_fail: false
+          download_external_modules: true
 
-  scan-and-push:
-    name: Scan & Push Image
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+  # ────────────────────────────────────────────────────────────
+  # 4. Container Security — Image scan, Dockerfile lint, SBOM
+  # ────────────────────────────────────────────────────────────
+  security-container:
+    name: Container Security
     runs-on: ubuntu-latest
-    needs: lint
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull Portkey gateway image
+        run: docker pull portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+
+      - name: Hadolint Dockerfile lint
+        uses: hadolint/hadolint-action@v3.1.0
+        if: hashFiles('**/Dockerfile') != ''
+        with:
+          recursive: true
+          format: sarif
+          output-file: hadolint-results.sarif
+
+      - name: Upload Hadolint SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: hashFiles('**/Dockerfile') != '' && always()
+        with:
+          sarif_file: hadolint-results.sarif
+          category: hadolint
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+          retention-days: 90
+
+  # ────────────────────────────────────────────────────────────
+  # 5. Build & Push — Docker image to ECR (main only)
+  # ────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: [quality, security-sast, security-iac, security-container]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write        # OIDC for AWS
+    outputs:
+      image-digest: ${{ steps.push.outputs.digest }}
+      image-uri: ${{ steps.push.outputs.image-uri }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -69,68 +239,48 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Pull Portkey gateway image
-        run: docker pull portkeyai/gateway:${{ env.PORTKEY_VERSION }}
-
-      - name: Tag image for ECR
-        run: |
-          docker tag portkeyai/gateway:${{ env.PORTKEY_VERSION }} \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          exit-code: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
-
-      - name: Upload Trivy SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-
-      - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0
-        with:
-          image: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
-          format: cyclonedx-json
-          output-file: sbom.cyclonedx.json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: sbom.cyclonedx.json
-
-      - name: Push image to ECR
-        if: github.ref == 'refs/heads/main'
+      - name: Pull and tag image
+        id: push
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker tag portkeyai/gateway:${{ env.PORTKEY_VERSION }} \
-            $ECR_REGISTRY/${{ env.IMAGE_NAME }}:latest
-          docker push $ECR_REGISTRY/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push $ECR_REGISTRY/${{ env.IMAGE_NAME }}:latest
+          IMAGE_URI="${ECR_REGISTRY}/${IMAGE_NAME}"
+          SHA_TAG="${IMAGE_URI}:${GITHUB_SHA}"
+          LATEST_TAG="${IMAGE_URI}:latest"
+
+          docker pull portkeyai/gateway:${PORTKEY_VERSION}
+          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${SHA_TAG}"
+          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${LATEST_TAG}"
+
+          docker push "${SHA_TAG}"
+          docker push "${LATEST_TAG}"
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${SHA_TAG}" | cut -d@ -f2)
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image-uri=${SHA_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
-        if: github.ref == 'refs/heads/main'
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign image with cosign
-        if: github.ref == 'refs/heads/main'
+      - name: Sign image with cosign (keyless)
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: cosign sign --yes $ECR_REGISTRY/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          cosign sign --yes \
+            "${ECR_REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}"
 
+  # ────────────────────────────────────────────────────────────
+  # 6. Deploy — ECS rolling update (main only)
+  # ────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to ECS
     runs-on: ubuntu-latest
-    needs: scan-and-push
-    if: github.ref == 'refs/heads/main'
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
+    permissions:
+      contents: read
+      id-token: write        # OIDC for AWS
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

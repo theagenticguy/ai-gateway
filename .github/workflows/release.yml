@@ -1,0 +1,153 @@
+# ──────────────────────────────────────────────────────────────
+# Release — Tag-driven release automation
+# ──────────────────────────────────────────────────────────────
+# Triggered by pushing a tag matching `v*` (e.g. v1.2.0).
+# Builds the container image, signs it, generates an SBOM,
+# and creates a GitHub Release with an auto-generated changelog.
+# ──────────────────────────────────────────────────────────────
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write          # Create releases, upload assets
+  id-token: write          # OIDC for AWS + cosign keyless signing
+  packages: write          # Push container images (if using GHCR)
+  security-events: write   # Upload SARIF
+
+env:
+  AWS_REGION: us-east-1
+  IMAGE_NAME: ai-gateway
+  PORTKEY_VERSION: "1.15.2"
+
+jobs:
+  release:
+    name: Build, Sign & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history for changelog generation
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # ── AWS + ECR ────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build & Push ─────────────────────────────────────────
+      - name: Pull, tag, and push image
+        id: push
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${IMAGE_NAME}"
+
+          docker pull portkeyai/gateway:${PORTKEY_VERSION}
+
+          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:${VERSION}"
+          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:${GITHUB_SHA}"
+          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:latest"
+
+          docker push "${IMAGE_URI}:${VERSION}"
+          docker push "${IMAGE_URI}:${GITHUB_SHA}"
+          docker push "${IMAGE_URI}:latest"
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_URI}:${VERSION}" | cut -d@ -f2)
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image-uri=${IMAGE_URI}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # ── Cosign ───────────────────────────────────────────────
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with cosign (keyless)
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          cosign sign --yes \
+            "${ECR_REGISTRY}/${IMAGE_NAME}:${VERSION}"
+
+      # ── SBOM ─────────────────────────────────────────────────
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.push.outputs.image-uri }}
+          format: cyclonedx-json
+          output-file: sbom-${{ steps.version.outputs.tag }}.cyclonedx.json
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.push.outputs.image-uri }}
+          format: spdx-json
+          output-file: sbom-${{ steps.version.outputs.tag }}.spdx.json
+
+      # ── Changelog & GitHub Release ───────────────────────────
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag for changelog range
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v' | sed -n '2p')
+
+          if [ -z "${PREV_TAG}" ]; then
+            echo "body=Initial release." >> "$GITHUB_OUTPUT"
+          else
+            CHANGELOG=$(git log "${PREV_TAG}..HEAD" \
+              --pretty=format:"- %s (%h)" \
+              --no-merges)
+            # Use a delimiter for multiline output
+            {
+              echo "body<<CHANGELOG_EOF"
+              echo "## Changes since ${PREV_TAG}"
+              echo ""
+              echo "${CHANGELOG}"
+              echo ""
+              echo "## Container Image"
+              echo ""
+              echo '```'
+              echo "${{ steps.push.outputs.image-uri }}"
+              echo "Digest: ${{ steps.push.outputs.digest }}"
+              echo '```'
+              echo ""
+              echo "## Verification"
+              echo ""
+              echo '```bash'
+              echo "cosign verify ${{ steps.push.outputs.image-uri }}"
+              echo '```'
+              echo "CHANGELOG_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-rc') || contains(steps.version.outputs.tag, '-beta') || contains(steps.version.outputs.tag, '-alpha') }}
+          files: |
+            sbom-${{ steps.version.outputs.tag }}.cyclonedx.json
+            sbom-${{ steps.version.outputs.tag }}.spdx.json
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

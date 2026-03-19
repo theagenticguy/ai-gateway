@@ -1,0 +1,48 @@
+# ──────────────────────────────────────────────────────────────
+# OpenSSF Scorecard — Supply-chain security assessment
+# ──────────────────────────────────────────────────────────────
+# Evaluates the repository against OpenSSF best practices and
+# publishes the score to the GitHub Security tab.
+# ──────────────────────────────────────────────────────────────
+name: OpenSSF Scorecard
+
+on:
+  push:
+    branches: [main]
+  branch_protection_rule:
+  schedule:
+    # Every Monday at 07:30 UTC
+    - cron: "30 7 * * 1"
+
+# Required: only run on the default branch for publishing
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Upload SARIF
+      id-token: write         # Publish results
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: true
+          # Repo token is needed to identify the repository
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Scorecard SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard-results.sarif
+          category: scorecard

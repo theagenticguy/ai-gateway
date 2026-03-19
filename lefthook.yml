@@ -20,6 +20,12 @@ pre-commit:
     hadolint:
       glob: "Dockerfile*"
       run: hadolint {staged_files}
+    terraform-fmt:
+      glob: "infrastructure/**/*.tf"
+      run: terraform -chdir=infrastructure fmt -check -recursive
+    terraform-validate:
+      glob: "infrastructure/**/*.tf"
+      run: terraform -chdir=infrastructure validate
 
 pre-push:
   parallel: true
@@ -31,3 +37,16 @@ pre-push:
     iac:
       glob: "infrastructure/**/*.tf"
       run: uvx checkov -d infrastructure/ --framework terraform --compact --quiet
+    trivy-fs:
+      run: trivy fs --severity HIGH,CRITICAL --exit-code 1 --quiet .
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        msg=$(head -1 {1})
+        if ! echo "$msg" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .{1,72}$'; then
+          echo "Commit message must follow Conventional Commits: <type>(<scope>): <description>"
+          echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+          exit 1
+        fi

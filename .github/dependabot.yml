@@ -1,0 +1,77 @@
+# ──────────────────────────────────────────────────────────────
+# Dependabot — Automated dependency updates
+# ──────────────────────────────────────────────────────────────
+version: 2
+
+updates:
+  # ── Python (pip / pyproject.toml) ──────────────────────────
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 10
+    assignees:
+      - theagenticguy
+    reviewers:
+      - theagenticguy
+    commit-message:
+      prefix: "deps(python):"
+    labels:
+      - dependencies
+      - python
+    groups:
+      python-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # ── Terraform (infrastructure/) ────────────────────────────
+  - package-ecosystem: terraform
+    directory: /infrastructure
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+    assignees:
+      - theagenticguy
+    reviewers:
+      - theagenticguy
+    commit-message:
+      prefix: "deps(terraform):"
+    labels:
+      - dependencies
+      - terraform
+    groups:
+      terraform-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # ── GitHub Actions (.github/workflows/) ────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 10
+    assignees:
+      - theagenticguy
+    reviewers:
+      - theagenticguy
+    commit-message:
+      prefix: "deps(actions):"
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch

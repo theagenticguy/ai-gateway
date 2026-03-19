@@ -1,0 +1,5 @@
+# Default owner for everything
+* @theagenticguy
+
+# Infrastructure requires explicit review
+infrastructure/ @theagenticguy
