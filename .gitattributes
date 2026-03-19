@@ -1,0 +1,3 @@
+.erpaval/**/*.yaml diff=yaml
+.erpaval/**/*.md diff=markdown
+*.tf diff=hcl

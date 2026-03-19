@@ -1,0 +1,33 @@
+# lefthook.yml -- Git hooks configuration
+# Runs checks in parallel for speed
+
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.py"
+      run: uv run ruff check --fix {staged_files}
+      stage_fixed: true
+    format:
+      glob: "*.py"
+      run: uv run ruff format {staged_files}
+      stage_fixed: true
+    typecheck:
+      glob: "*.py"
+      run: uv run pyright src/
+    secrets:
+      run: gitleaks protect --staged --verbose
+    hadolint:
+      glob: "Dockerfile*"
+      run: hadolint {staged_files}
+
+pre-push:
+  parallel: true
+  commands:
+    test:
+      run: uv run pytest tests/ -x -q
+    sast:
+      run: uvx semgrep scan --config p/python --config p/owasp-top-ten --quiet .
+    iac:
+      glob: "infrastructure/**/*.tf"
+      run: uvx checkov -d infrastructure/ --framework terraform --compact --quiet

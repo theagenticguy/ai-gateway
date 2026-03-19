@@ -1,0 +1,11 @@
+environment              = "prod"
+aws_region               = "us-east-1"
+gateway_desired_count    = 2
+gateway_cpu              = 1024
+gateway_memory           = 2048
+autoscaling_min_capacity = 2
+autoscaling_max_capacity = 6
+enable_waf               = true
+certificate_arn          = "" # Set to your ACM cert ARN
+cognito_domain_prefix    = "ai-gateway-prod"
+enable_jwt_auth          = false

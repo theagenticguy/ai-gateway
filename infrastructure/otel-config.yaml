@@ -1,0 +1,52 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 100
+
+  resource:
+    attributes:
+      - key: service.name
+        value: ai-gateway
+        action: upsert
+
+exporters:
+  awsxray:
+    region: ${env:AWS_REGION}
+
+  awsemf:
+    region: ${env:AWS_REGION}
+    namespace: AIGateway
+    log_group_name: /ecs/ai-gateway/metrics
+
+  awscloudwatchlogs:
+    region: ${env:AWS_REGION}
+    log_group_name: /ecs/ai-gateway/otel-logs
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awsxray]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awsemf]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awscloudwatchlogs]

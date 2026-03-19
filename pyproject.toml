@@ -1,0 +1,13 @@
+[project]
+name = "ai-gateway"
+version = "0.1.0"
+description = "Lightweight LLM API Gateway — Portkey OSS on ECS Fargate"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "ruff>=0.15",
+    "pyright>=1.1.408",
+]

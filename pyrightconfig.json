@@ -1,0 +1,14 @@
+{
+    "include": ["src"],
+    "exclude": ["**/__pycache__", "tests"],
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Linux",
+    "typeCheckingMode": "standard",
+    "reportMissingImports": true,
+    "reportMissingTypeStubs": false,
+    "reportUnusedImport": true,
+    "reportUnusedVariable": true,
+    "reportUnusedExpression": true,
+    "venvPath": ".",
+    "venv": ".venv"
+}

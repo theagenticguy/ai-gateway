@@ -1,0 +1,73 @@
+# mise.toml -- AI Gateway project configuration
+# Manages all tool versions, env vars, and project tasks
+
+[tools]
+python = "3.13"
+"pipx:checkov" = "latest"
+
+# Security tools via aqua backend
+"aqua:aquasecurity/trivy" = "0.69.2"
+"aqua:hadolint/hadolint" = "2.14.0"
+"aqua:evilmartians/lefthook" = "2.1.4"
+"aqua:zricethezav/gitleaks" = "latest"
+
+# IaC
+"aqua:hashicorp/terraform" = "1.10.5"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+PYTHONDONTWRITEBYTECODE = "1"
+PYTHONUNBUFFERED = "1"
+
+[tasks.install]
+description = "Install all project dependencies"
+run = "uv sync"
+
+[tasks.dev]
+description = "Run the API gateway in development mode"
+run = "uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+
+[tasks.test]
+description = "Run test suite"
+run = "uv run pytest tests/ -v"
+sources = ["src/**/*.py", "tests/**/*.py"]
+
+[tasks.lint]
+description = "Run linter and formatter check"
+run = ["uv run ruff check .", "uv run ruff format --check ."]
+
+[tasks.format]
+description = "Auto-format code"
+run = "uv run ruff format ."
+
+[tasks.typecheck]
+description = "Run type checker"
+run = "uv run pyright src/"
+
+[tasks.security]
+description = "Run all security scans"
+depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile"]
+
+[tasks."security:sast"]
+description = "SAST scan with semgrep"
+run = "uvx semgrep scan --config p/python --config p/owasp-top-ten --config p/security-audit ."
+
+[tasks."security:secrets"]
+description = "Secret detection with gitleaks"
+run = "gitleaks detect --source . --verbose"
+
+[tasks."security:iac"]
+description = "IaC security scan with checkov"
+run = "uvx checkov -d infrastructure/ --framework terraform --compact"
+
+[tasks."security:dockerfile"]
+description = "Lint Dockerfiles with hadolint"
+run = "hadolint Dockerfile"
+
+[tasks."security:image"]
+description = "Scan container image with trivy"
+run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
+
+[tasks.ci]
+description = "Full CI pipeline (lint, typecheck, test, security)"
+depends = ["lint", "typecheck", "test", "security"]

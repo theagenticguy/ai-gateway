@@ -1,0 +1,7 @@
+# .hadolint.yaml -- Hadolint configuration
+ignored:
+  - DL3008  # Pin versions in apt-get install (handled by base image choice)
+trustedRegistries:
+  - public.ecr.aws
+  - cgr.dev
+  - gcr.io/distroless

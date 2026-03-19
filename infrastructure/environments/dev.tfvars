@@ -1,0 +1,11 @@
+environment              = "dev"
+aws_region               = "us-east-1"
+gateway_desired_count    = 2
+gateway_cpu              = 512
+gateway_memory           = 1024
+autoscaling_min_capacity = 1
+autoscaling_max_capacity = 3
+enable_waf               = false
+certificate_arn          = ""
+cognito_domain_prefix    = "ai-gateway-dev"
+enable_jwt_auth          = false

@@ -1,0 +1,11 @@
+# .gitleaks.toml -- Gitleaks configuration
+title = "AI Gateway Secret Detection"
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''\.venv/''',
+    '''node_modules/''',
+    '''\.git/''',
+    '''tests/fixtures/''',
+]
