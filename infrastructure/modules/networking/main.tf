@@ -9,7 +9,7 @@
 module "vpc" {
   #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/vpc/aws"
-  version = "6.0.0"
+  version = "6.6.0"
 
   name = "${var.project_name}-${var.environment}"
   cidr = var.vpc_cidr
@@ -90,7 +90,7 @@ resource "aws_vpc_endpoint" "interface" {
 module "alb" {
   #checkov:skip=CKV_TF_1:Registry modules pinned by version; commit hash not applicable
   source  = "terraform-aws-modules/alb/aws"
-  version = "10.0.0"
+  version = "10.5.0"
 
   name               = "${var.project_name}-${var.environment}"
   load_balancer_type = "application"
