@@ -93,3 +93,15 @@ variable "portkey_routing_configs" {
   type        = map(string)
   default     = {}
 }
+
+variable "cache_enabled" {
+  description = "Whether response caching via Redis is enabled"
+  type        = bool
+  default     = false
+}
+
+variable "redis_url" {
+  description = "Redis connection URL (rediss:// for TLS). Required when cache_enabled is true."
+  type        = string
+  default     = ""
+}
