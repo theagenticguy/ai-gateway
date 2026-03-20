@@ -38,8 +38,7 @@ jobs:
           results_file: scorecard-results.sarif
           results_format: sarif
           publish_results: true
-          # Repo token is needed to identify the repository
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          repo_token: ${{ secrets.SCORECARD_TOKEN }}
 
       - name: Upload Scorecard SARIF
         uses: github/codeql-action/upload-sarif@v4
