@@ -1,0 +1,105 @@
+# Prerequisites
+
+Everything you need before deploying the AI Gateway.
+
+---
+
+## Required Tools
+
+| Tool | Version | Purpose |
+|---|---|---|
+| [mise](https://mise.jdx.dev/) | latest | Tool version manager -- installs all other tools automatically |
+| [uv](https://docs.astral.sh/uv/) | latest | Python package manager |
+| [Terraform](https://www.terraform.io/) | >= 1.9 | Infrastructure as code (installed via mise) |
+| [AWS CLI](https://aws.amazon.com/cli/) | v2 | AWS operations and credential management |
+| [Docker](https://www.docker.com/) | latest | Container builds and local testing |
+
+!!! info "mise handles most tool installs"
+    Running `mise install` in the project root automatically installs pinned versions of:
+
+    - Python 3.13
+    - Terraform 1.10.5
+    - Terragrunt (latest)
+    - terraform-docs (latest)
+    - lefthook 2.1.4
+    - checkov (latest, via pipx)
+    - trivy 0.69.2
+    - hadolint 2.14.0
+    - gitleaks (latest)
+    - actionlint (latest)
+
+    You only need to install `mise`, `uv`, AWS CLI, and Docker manually.
+
+---
+
+## Install mise and uv
+
+=== "macOS"
+
+    ```bash
+    # mise
+    curl https://mise.run | sh
+    echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
+
+    # uv
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+=== "Linux"
+
+    ```bash
+    # mise
+    curl https://mise.run | sh
+    echo 'eval "$(mise activate bash)"' >> ~/.bashrc
+
+    # uv
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+---
+
+## AWS Account Requirements
+
+The gateway deploys the following AWS resources. Your IAM identity needs permissions to create and manage them.
+
+| Service | Resources Created |
+|---|---|
+| **VPC** | VPC, subnets (2 public + 2 private), NAT Gateway, Internet Gateway, route tables |
+| **ECS** | Fargate cluster, service, task definition |
+| **ECR** | Container image repository |
+| **ALB** | Application Load Balancer, listeners, target group |
+| **Cognito** | User Pool, resource server, app client, domain |
+| **WAF v2** | Web ACL with managed rules and IP rate limiting |
+| **CloudWatch** | Log groups, Logs Insights queries, operational dashboard |
+| **Secrets Manager** | Provider API keys (OpenAI, Anthropic, Google, Azure OpenAI) |
+| **IAM** | Task execution role, task role |
+| **VPC Endpoints** | ECR (API + DKR), CloudWatch Logs, Secrets Manager, S3 |
+
+!!! warning "Secrets Manager entries"
+    Before deploying, you must populate Secrets Manager with API keys for each LLM provider you intend to route to. The Terraform configuration expects these secrets to exist. Refer to the Admin Guide for details on secret management.
+
+---
+
+## Domain and TLS (Optional)
+
+For HTTPS access with a custom domain:
+
+1. **Register or delegate a domain** in Route 53 (or use an existing hosted zone)
+2. **Request an ACM certificate** for your domain in the same region as the deployment
+3. **Set the domain variables** in your Terraform `tfvars` file
+
+Without a custom domain, the gateway is accessible via the ALB's auto-generated DNS name over HTTP.
+
+---
+
+## Network Requirements
+
+- **Outbound internet access** -- The ECS tasks need to reach external LLM provider APIs (api.openai.com, api.anthropic.com, etc.) via the NAT Gateway
+- **VPN / network policy** -- If your organization restricts outbound traffic, ensure the NAT Gateway's public IP is allowed to reach provider endpoints on port 443
+
+---
+
+## Next Steps
+
+- [Authentication](authentication.md) -- Understand the Cognito M2M auth flow
+- [Getting Started](index.md) -- Return to the quickstart
