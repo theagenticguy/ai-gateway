@@ -106,6 +106,10 @@ module "compute" {
   portkey_routing_configs = var.enable_provider_fallback ? {
     for name, config in var.routing_configs : name => base64encode(config)
   } : {}
+
+  # Cache
+  cache_enabled = var.enable_cache
+  redis_url     = var.enable_cache ? module.cache.redis_connection_url : ""
 }
 
 # -----------------------------------------------------------------------------
@@ -124,7 +128,6 @@ module "cost_attribution" {
   gateway_log_group_arn   = module.observability.gateway_log_group_arn
 }
 
-# -----------------------------------------------------------------------------
 # Guardrails (Bedrock content safety filtering)
 # -----------------------------------------------------------------------------
 
@@ -138,4 +141,20 @@ module "guardrails" {
   content_filter_strength = var.guardrails_content_filter_strength
   blocked_topics          = var.guardrails_blocked_topics
   blocked_words           = var.guardrails_blocked_words
+}
+
+# -----------------------------------------------------------------------------
+# Cache (ElastiCache Redis for response caching)
+# -----------------------------------------------------------------------------
+
+module "cache" {
+  source = "./modules/cache"
+
+  project_name = var.project_name
+  environment  = var.environment
+  enable_cache = var.enable_cache
+
+  private_subnet_ids    = module.networking.private_subnets
+  vpc_id                = module.networking.vpc_id
+  ecs_security_group_id = module.compute.ecs_security_group_id
 }

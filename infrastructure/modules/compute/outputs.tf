@@ -12,3 +12,8 @@ output "ecr_repository_url" {
   description = "URL of the ECR repository"
   value       = aws_ecr_repository.gateway.repository_url
 }
+
+output "ecs_security_group_id" {
+  description = "Security group ID of the ECS service"
+  value       = module.ecs_service.security_group_id
+}

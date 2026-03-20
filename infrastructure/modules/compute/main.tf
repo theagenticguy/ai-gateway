@@ -330,7 +330,11 @@ module "ecs_service" {
         [for name, config in var.portkey_routing_configs : {
           name  = "PORTKEY_DEFAULT_CONFIG_${upper(name)}"
           value = config
-        }]
+        }],
+        var.cache_enabled ? [
+          { name = "CACHE_STORE", value = "redis" },
+          { name = "REDIS_URL", value = var.redis_url },
+        ] : []
       )
 
       secrets = [
