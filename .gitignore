@@ -68,3 +68,4 @@ trivy-results.*
 # ──────────────────────────────────────────────
 site/
 .hypothesis/
+# verified commit test
