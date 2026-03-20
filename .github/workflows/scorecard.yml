@@ -38,7 +38,9 @@ jobs:
           results_file: scorecard-results.sarif
           results_format: sarif
           publish_results: true
-          repo_token: ${{ secrets.SCORECARD_TOKEN }}
+          # Fine-grained PATs lack the GraphQL scope Scorecard needs.
+          # Use a classic PAT with public_repo scope, or fall back to GITHUB_TOKEN.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload Scorecard SARIF
         uses: github/codeql-action/upload-sarif@v4
