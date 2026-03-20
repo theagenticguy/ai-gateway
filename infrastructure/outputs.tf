@@ -47,7 +47,6 @@ output "cognito_token_endpoint" {
   value       = module.auth.cognito_token_endpoint
 }
 
-# -----------------------------------------------------------------------------
 # Multi-Client Outputs
 # -----------------------------------------------------------------------------
 
@@ -60,4 +59,18 @@ output "team_client_secrets" {
   description = "Map of team name to Cognito app client secret (empty if no client_configs)"
   sensitive   = true
   value       = length(module.clients) > 0 ? module.clients[0].client_secrets : {}
+}
+
+# -----------------------------------------------------------------------------
+# Guardrails Outputs
+# -----------------------------------------------------------------------------
+
+output "guardrail_id" {
+  description = "Bedrock Guardrail ID"
+  value       = module.guardrails.guardrail_id
+}
+
+output "guardrail_arn" {
+  description = "Bedrock Guardrail ARN"
+  value       = module.guardrails.guardrail_arn
 }
