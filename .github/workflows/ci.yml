@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
+      security-events: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -97,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
+      security-events: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -150,17 +150,9 @@ jobs:
         with:
           directory: infrastructure/
           framework: terraform
-          output_format: sarif
-          output_file_path: checkov-results.sarif
+          output_format: cli
           soft_fail: false
           download_external_modules: true
-
-      - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: checkov-results.sarif
-          category: checkov
 
   # ────────────────────────────────────────────────────────────
   # 4. Container Security — Image scan, Dockerfile lint, SBOM
@@ -170,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
+      security-events: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -183,32 +175,15 @@ jobs:
         if: hashFiles('**/Dockerfile') != ''
         with:
           recursive: true
-          format: sarif
-          output-file: hadolint-results.sarif
-
-      - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@v4
-        if: hashFiles('**/Dockerfile') != '' && always()
-        with:
-          sarif_file: hadolint-results.sarif
-          category: hadolint
 
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
-          format: sarif
-          output: trivy-results.sarif
+          format: table
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
-
-      - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy
 
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@v0
