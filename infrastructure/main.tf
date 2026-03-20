@@ -150,9 +150,10 @@ module "guardrails" {
 module "cache" {
   source = "./modules/cache"
 
-  project_name = var.project_name
-  environment  = var.environment
-  enable_cache = var.enable_cache
+  project_name    = var.project_name
+  environment     = var.environment
+  enable_cache    = var.enable_cache
+  cache_node_type = var.cache_node_type
 
   private_subnet_ids    = module.networking.private_subnets
   vpc_id                = module.networking.vpc_id
