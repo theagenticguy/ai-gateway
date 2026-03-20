@@ -46,3 +46,18 @@ output "cognito_token_endpoint" {
   description = "Cognito token endpoint URL"
   value       = module.auth.cognito_token_endpoint
 }
+
+# -----------------------------------------------------------------------------
+# Multi-Client Outputs
+# -----------------------------------------------------------------------------
+
+output "team_client_ids" {
+  description = "Map of team name to Cognito app client ID (empty if no client_configs)"
+  value       = length(module.clients) > 0 ? module.clients[0].client_ids : {}
+}
+
+output "team_client_secrets" {
+  description = "Map of team name to Cognito app client secret (empty if no client_configs)"
+  sensitive   = true
+  value       = length(module.clients) > 0 ? module.clients[0].client_secrets : {}
+}

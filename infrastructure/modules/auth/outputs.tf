@@ -17,3 +17,8 @@ output "cognito_token_endpoint" {
   description = "Cognito token endpoint URL"
   value       = "https://${aws_cognito_user_pool_domain.gateway.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
 }
+
+output "resource_server_scope_identifiers" {
+  description = "List of fully-qualified scope identifiers from the Cognito resource server"
+  value       = aws_cognito_resource_server.gateway.scope_identifiers
+}

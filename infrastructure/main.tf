@@ -59,6 +59,21 @@ module "auth" {
 }
 
 # -----------------------------------------------------------------------------
+# Clients (per-team Cognito app clients -- only created if client_configs is set)
+# -----------------------------------------------------------------------------
+
+module "clients" {
+  source = "./modules/clients"
+  count  = length(var.client_configs) > 0 ? 1 : 0
+
+  project_name                      = var.project_name
+  environment                       = var.environment
+  user_pool_id                      = module.auth.cognito_user_pool_id
+  resource_server_scope_identifiers = module.auth.resource_server_scope_identifiers
+  client_configs                    = var.client_configs
+}
+
+# -----------------------------------------------------------------------------
 # Compute (needs VPC subnets, ALB SG + target group, log group names)
 # -----------------------------------------------------------------------------
 
