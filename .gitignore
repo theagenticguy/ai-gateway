@@ -68,3 +68,4 @@ trivy-results.*
 # ──────────────────────────────────────────────
 site/
 .hypothesis/
+# bonk-ai[bot] test commit
