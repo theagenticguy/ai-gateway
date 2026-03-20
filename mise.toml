@@ -148,50 +148,14 @@ description = "CI-only: validate all CI + pre-commit in one shot"
 depends = ["lint", "typecheck", "security", "tf:validate", "ci:lint"]
 
 # ──────────────────────────────────────────────
-# Release tasks
+# Bot tasks
 # ──────────────────────────────────────────────
 
-[tasks."release:bump-patch"]
-description = "Bump patch version (0.1.0 → 0.1.1), commit, tag, and push"
-run = """
-set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git add pyproject.toml
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to trigger the release."
-"""
-
-[tasks."release:bump-minor"]
-description = "Bump minor version (0.1.0 → 0.2.0), commit, tag, and push"
-run = """
-set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="${MAJOR}.$((MINOR + 1)).0"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git add pyproject.toml
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to trigger the release."
-"""
-
-[tasks."release:bump-major"]
-description = "Bump major version (0.1.0 → 1.0.0), commit, tag, and push"
-run = """
-set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="$((MAJOR + 1)).0.0"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git add pyproject.toml
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to trigger the release."
-"""
+[tasks."bot:push"]
+description = "Push local changes as verified bot commits via GitHub API"
+usage = "mise run bot:push -- -b <branch> -m <message> [--pr] [--pr-body <body>]"
+run = "uv run scripts/bot-push.py \"$@\""
+raw = true
 
 # ──────────────────────────────────────────────
 # Documentation tasks
