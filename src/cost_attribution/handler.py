@@ -32,7 +32,7 @@ if not logger.handlers:
     logger.addHandler(_h)
 
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "AIGateway")
-cloudwatch = boto3.client("cloudwatch")
+cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 
 def _decode_log_data(event: dict[str, Any]) -> dict[str, Any]:
