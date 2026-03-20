@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
 # =============================================================================
 # Cache — ElastiCache Redis for response caching
 # =============================================================================

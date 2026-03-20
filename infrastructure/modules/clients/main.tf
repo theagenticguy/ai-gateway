@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
 # =============================================================================
 # Clients — Per-team Cognito App Clients for Multi-Tenant M2M Access
 #

@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
 resource "aws_kms_key" "logs" {
   description             = "KMS key for AI Gateway CloudWatch Logs encryption"
   deletion_window_in_days = 7

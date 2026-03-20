@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
 # =============================================================================
 # Guardrails — Bedrock Guardrails for content safety filtering
 # =============================================================================
