@@ -52,7 +52,8 @@ def _extract_provider(record: dict[str, Any]) -> str:
     req = record.get("req", {})
     headers = req.get("headers", {}) if isinstance(req, dict) else {}
     provider = headers.get("x-portkey-provider", "")
-    return provider or record.get("provider", "unknown")
+    result = provider or record.get("provider", "unknown")
+    return result if isinstance(result, str) else "unknown"
 
 
 def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
@@ -63,8 +64,8 @@ def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(record, dict):
         return None
-    usage = record.get("usage", {})
-    if not usage:
+    usage = record.get("usage")
+    if not isinstance(usage, dict) or not usage:
         return None
     prompt_tokens = _safe_int(usage.get("prompt_tokens"))
     completion_tokens = _safe_int(usage.get("completion_tokens"))

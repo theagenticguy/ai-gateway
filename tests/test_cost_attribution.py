@@ -87,6 +87,10 @@ class TestExtractProvider:
     def test_returns_unknown_when_missing(self) -> None:
         assert _extract_provider({}) == "unknown"
 
+    def test_non_string_provider_returns_unknown(self) -> None:
+        assert _extract_provider({"provider": 123}) == "unknown"
+        assert _extract_provider({"provider": ["a"]}) == "unknown"
+
 
 # ── _extract_metrics ─────────────────────────────────────────────────────────
 
@@ -144,6 +148,15 @@ class TestExtractMetrics:
     def test_returns_none_for_invalid_json(self) -> None:
         log_event = {"message": "not json at all"}
         assert _extract_metrics(log_event) is None
+
+    def test_returns_none_for_non_dict_usage(self) -> None:
+        record = {"usage": [1, 2, 3], "model": "gpt-4"}
+        log_event = {"message": json.dumps(record)}
+        assert _extract_metrics(log_event) is None
+
+        record2 = {"usage": "not a dict", "model": "gpt-4"}
+        log_event2 = {"message": json.dumps(record2)}
+        assert _extract_metrics(log_event2) is None
 
 
 # ── handler (end-to-end) ─────────────────────────────────────────────────────
