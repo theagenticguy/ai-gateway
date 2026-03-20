@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
 
       - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        uses: ossf/scorecard-action@99c09fe975337306107572b4fdf4db224cf8e2f2 # v2.4.3
         with:
           results_file: scorecard-results.sarif
           results_format: sarif
@@ -43,7 +43,7 @@ jobs:
           repo_token: ${{ secrets.SCORECARD_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload Scorecard SARIF
-        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
         with:
           sarif_file: scorecard-results.sarif
           category: scorecard

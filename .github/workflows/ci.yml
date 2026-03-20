@@ -162,7 +162,7 @@ jobs:
           download_external_modules: false
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
         if: always()
         with:
           sarif_file: checkov-results.sarif
@@ -193,7 +193,7 @@ jobs:
           output-file: hadolint-results.sarif
 
       - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
         if: hashFiles('**/Dockerfile') != '' && always()
         with:
           sarif_file: hadolint-results.sarif
@@ -210,7 +210,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
+        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
