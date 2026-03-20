@@ -32,7 +32,7 @@ if not logger.handlers:
     logger.addHandler(_h)
 
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "AIGateway")
-cloudwatch = boto3.client("cloudwatch")
+cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 
 def _decode_log_data(event: dict[str, Any]) -> dict[str, Any]:
@@ -52,7 +52,8 @@ def _extract_provider(record: dict[str, Any]) -> str:
     req = record.get("req", {})
     headers = req.get("headers", {}) if isinstance(req, dict) else {}
     provider = headers.get("x-portkey-provider", "")
-    return provider or record.get("provider", "unknown")
+    result = provider or record.get("provider", "unknown")
+    return result if isinstance(result, str) else "unknown"
 
 
 def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
@@ -61,8 +62,10 @@ def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
         record = json.loads(message) if isinstance(message, str) else message
     except (json.JSONDecodeError, TypeError):
         return None
-    usage = record.get("usage", {})
-    if not usage:
+    if not isinstance(record, dict):
+        return None
+    usage = record.get("usage")
+    if not isinstance(usage, dict) or not usage:
         return None
     prompt_tokens = _safe_int(usage.get("prompt_tokens"))
     completion_tokens = _safe_int(usage.get("completion_tokens"))
