@@ -14,10 +14,11 @@ data "aws_availability_zones" "available" {
 module "observability" {
   source = "./modules/observability"
 
-  project_name = var.project_name
-  environment  = var.environment
-  aws_region   = var.aws_region
-  account_id   = data.aws_caller_identity.current.account_id
+  project_name        = var.project_name
+  environment         = var.environment
+  aws_region          = var.aws_region
+  account_id          = data.aws_caller_identity.current.account_id
+  enable_cost_widgets = var.enable_cost_attribution
 }
 
 # -----------------------------------------------------------------------------
@@ -85,4 +86,20 @@ module "compute" {
   gateway_log_group_name = module.observability.gateway_log_group_name
   otel_log_group_name    = module.observability.otel_log_group_name
   otel_config_content    = file("${path.module}/otel-config.yaml")
+}
+
+# -----------------------------------------------------------------------------
+# Cost Attribution (Lambda pipeline: gateway logs -> CloudWatch custom metrics)
+# -----------------------------------------------------------------------------
+
+module "cost_attribution" {
+  source = "./modules/cost_attribution"
+
+  project_name            = var.project_name
+  environment             = var.environment
+  aws_region              = var.aws_region
+  account_id              = data.aws_caller_identity.current.account_id
+  enable_cost_attribution = var.enable_cost_attribution
+  gateway_log_group_name  = module.observability.gateway_log_group_name
+  gateway_log_group_arn   = module.observability.gateway_log_group_arn
 }
