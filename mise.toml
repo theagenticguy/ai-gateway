@@ -12,6 +12,9 @@ python = "3.13"
 "aqua:zricethezav/gitleaks" = "latest"
 "aqua:rhysd/actionlint" = "latest"
 
+# Release
+"aqua:orhun/git-cliff" = "latest"
+
 # IaC
 "aqua:hashicorp/terraform" = "1.10.5"
 "aqua:gruntwork-io/terragrunt" = "latest"
@@ -146,6 +149,59 @@ run = "actionlint"
 [tasks."ci:validate"]
 description = "CI-only: validate all CI + pre-commit in one shot"
 depends = ["lint", "typecheck", "security", "tf:validate", "ci:lint"]
+
+# ──────────────────────────────────────────────
+# Release tasks
+# ──────────────────────────────────────────────
+
+[tasks."release:bump-patch"]
+description = "Bump patch version, generate changelog, commit, and tag"
+run = """
+set -euo pipefail
+CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
+sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
+git-cliff --tag "v${NEW}" -o CHANGELOG.md
+git add pyproject.toml CHANGELOG.md
+git commit -m "release: v${NEW}"
+git tag "v${NEW}"
+echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+"""
+
+[tasks."release:bump-minor"]
+description = "Bump minor version, generate changelog, commit, and tag"
+run = """
+set -euo pipefail
+CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+NEW="${MAJOR}.$((MINOR + 1)).0"
+sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
+git-cliff --tag "v${NEW}" -o CHANGELOG.md
+git add pyproject.toml CHANGELOG.md
+git commit -m "release: v${NEW}"
+git tag "v${NEW}"
+echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+"""
+
+[tasks."release:bump-major"]
+description = "Bump major version, generate changelog, commit, and tag"
+run = """
+set -euo pipefail
+CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+NEW="$((MAJOR + 1)).0.0"
+sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
+git-cliff --tag "v${NEW}" -o CHANGELOG.md
+git add pyproject.toml CHANGELOG.md
+git commit -m "release: v${NEW}"
+git tag "v${NEW}"
+echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+"""
+
+[tasks."release:changelog"]
+description = "Preview changelog for unreleased changes (dry-run)"
+run = "git-cliff --unreleased"
 
 # ──────────────────────────────────────────────
 # Bot tasks

@@ -31,17 +31,27 @@ The canonical version lives in two places that must stay in sync:
 
 Use `mise run release:bump-*` tasks to update both atomically.
 
+## Changelog
+
+`CHANGELOG.md` is automatically generated from conventional commit messages using [git-cliff](https://git-cliff.org/). Configuration lives in `cliff.toml`.
+
+- Preview unreleased changes: `mise run release:changelog`
+- Full regeneration happens automatically during version bumps
+
+Commits are grouped by type (Features, Bug Fixes, Security, etc.) with PR links and author attribution.
+
 ## Release Flow
 
-1. Work is merged to `main` via PRs
+1. Work is merged to `main` via PRs (using conventional commit messages)
 2. When ready to release, run the appropriate bump task:
    ```bash
    mise run release:bump-patch   # 0.1.0 → 0.1.1
    mise run release:bump-minor   # 0.1.0 → 0.2.0
    mise run release:bump-major   # 0.1.0 → 1.0.0
    ```
-3. The task updates `pyproject.toml`, commits, tags, and pushes
-4. The `v*` tag triggers `.github/workflows/release.yml` which:
+3. The task updates `pyproject.toml`, generates `CHANGELOG.md`, commits, and tags
+4. Push the tag: `git push origin main --tags`
+5. The `v*` tag triggers `.github/workflows/release.yml` which:
    - Builds and pushes the container image to ECR
    - Signs the image with cosign (keyless)
    - Generates CycloneDX and SPDX SBOMs
