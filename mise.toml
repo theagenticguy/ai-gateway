@@ -146,3 +146,15 @@ run = "actionlint"
 [tasks."ci:validate"]
 description = "CI-only: validate all CI + pre-commit in one shot"
 depends = ["lint", "typecheck", "security", "tf:validate", "ci:lint"]
+
+# ──────────────────────────────────────────────
+# Documentation tasks
+# ──────────────────────────────────────────────
+
+[tasks."docs:serve"]
+description = "Serve documentation locally with hot reload"
+run = "uv run zensical serve"
+
+[tasks."docs:build"]
+description = "Build documentation site"
+run = "uv run zensical build --clean"

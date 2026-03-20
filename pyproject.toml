@@ -10,4 +10,5 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.15",
     "pyright>=1.1.408",
+    "zensical>=0.0.28",
 ]
