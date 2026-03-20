@@ -320,10 +320,16 @@ module "ecs_service" {
         protocol      = "tcp"
       }]
 
-      environment = [
-        { name = "NODE_ENV", value = "production" },
-        { name = "PORT", value = "8787" },
-      ]
+      environment = concat(
+        [
+          { name = "NODE_ENV", value = "production" },
+          { name = "PORT", value = "8787" },
+        ],
+        [for name, config in var.portkey_routing_configs : {
+          name  = "PORTKEY_DEFAULT_CONFIG_${upper(name)}"
+          value = config
+        }]
+      )
 
       secrets = [
         { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },

@@ -87,3 +87,9 @@ variable "otel_config_content" {
   description = "Content of the OpenTelemetry Collector configuration YAML"
   type        = string
 }
+
+variable "portkey_routing_configs" {
+  description = "Map of named Portkey routing configurations (base64-encoded JSON)."
+  type        = map(string)
+  default     = {}
+}
