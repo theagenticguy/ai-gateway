@@ -123,3 +123,19 @@ module "cost_attribution" {
   gateway_log_group_name  = module.observability.gateway_log_group_name
   gateway_log_group_arn   = module.observability.gateway_log_group_arn
 }
+
+# -----------------------------------------------------------------------------
+# Guardrails (Bedrock content safety filtering)
+# -----------------------------------------------------------------------------
+
+module "guardrails" {
+  source = "./modules/guardrails"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  enable_guardrails       = var.enable_guardrails
+  content_filter_strength = var.guardrails_content_filter_strength
+  blocked_topics          = var.guardrails_blocked_topics
+  blocked_words           = var.guardrails_blocked_words
+}
