@@ -61,6 +61,8 @@ def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
         record = json.loads(message) if isinstance(message, str) else message
     except (json.JSONDecodeError, TypeError):
         return None
+    if not isinstance(record, dict):
+        return None
     usage = record.get("usage", {})
     if not usage:
         return None
