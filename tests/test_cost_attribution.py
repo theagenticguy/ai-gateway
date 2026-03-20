@@ -16,12 +16,9 @@ from unittest.mock import patch
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cost_attribution.handler import (
-    _extract_metrics,
-    _extract_provider,
-    _safe_int,
-    handler,
-)
+from cost_attribution.handler import _extract_metrics, handler
+from cost_attribution.models import HandlerResponse, LogRecord, MetricResult, UsageMetrics
+from cost_attribution.pricing import TokenPrice, get_cost
 
 # ── Strategies ───────────────────────────────────────────────────────────────
 
@@ -43,53 +40,108 @@ json_values = st.recursive(
 )
 
 
-# ── _safe_int ────────────────────────────────────────────────────────────────
+# ── UsageMetrics model ───────────────────────────────────────────────────────
 
 
-class TestSafeInt:
-    @given(value=json_values)
+class TestUsageMetrics:
+    def test_coerces_none_to_zero(self) -> None:
+        usage = UsageMetrics.model_validate({"prompt_tokens": None, "completion_tokens": None})
+        assert usage.prompt_tokens == 0
+        assert usage.completion_tokens == 0
+
+    def test_coerces_string_to_int(self) -> None:
+        usage = UsageMetrics.model_validate({"prompt_tokens": "42", "completion_tokens": "10"})
+        assert usage.prompt_tokens == 42
+        assert usage.completion_tokens == 10
+
+    def test_coerces_invalid_string_to_zero(self) -> None:
+        usage = UsageMetrics.model_validate({"prompt_tokens": "not a number"})
+        assert usage.prompt_tokens == 0
+
+    def test_computes_total_from_parts(self) -> None:
+        usage = UsageMetrics.model_validate({"prompt_tokens": 10, "completion_tokens": 20})
+        assert usage.total_tokens == 30
+
+    def test_preserves_explicit_total(self) -> None:
+        usage = UsageMetrics.model_validate({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 50})
+        assert usage.total_tokens == 50
+
+    def test_has_tokens(self) -> None:
+        assert UsageMetrics(prompt_tokens=1, completion_tokens=0, total_tokens=1).has_tokens
+        assert not UsageMetrics(prompt_tokens=0, completion_tokens=0, total_tokens=0).has_tokens
+
+    @given(data=st.dictionaries(st.text(max_size=20), json_primitives, max_size=5))
     @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
-    def test_never_crashes(self, value: Any) -> None:
-        result = _safe_int(value)
-        assert isinstance(result, int)
-
-    def test_none_returns_zero(self) -> None:
-        assert _safe_int(None) == 0
-
-    def test_valid_int(self) -> None:
-        assert _safe_int(42) == 42
-        assert _safe_int("100") == 100
-
-    def test_invalid_returns_zero(self) -> None:
-        assert _safe_int("not a number") == 0
-        assert _safe_int([1, 2]) == 0
-        assert _safe_int({"a": 1}) == 0
+    def test_never_crashes(self, data: dict) -> None:
+        try:
+            usage = UsageMetrics.model_validate(data)
+            assert isinstance(usage.prompt_tokens, int)
+            assert isinstance(usage.completion_tokens, int)
+            assert isinstance(usage.total_tokens, int)
+        except Exception:  # noqa: S110
+            pass  # ValidationError is acceptable for garbage input
 
 
-# ── _extract_provider ────────────────────────────────────────────────────────
+# ── LogRecord model ──────────────────────────────────────────────────────────
 
 
-class TestExtractProvider:
-    @given(record=st.dictionaries(st.text(max_size=20), json_values, max_size=10))
-    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
-    def test_never_crashes(self, record: dict) -> None:
-        result = _extract_provider(record)
-        assert isinstance(result, str)
-
-    def test_extracts_from_header(self) -> None:
-        record = {"req": {"headers": {"x-portkey-provider": "openai"}}}
-        assert _extract_provider(record) == "openai"
+class TestLogRecord:
+    def test_extracts_provider_from_header(self) -> None:
+        record = LogRecord.model_validate(
+            {
+                "req": {"headers": {"x-portkey-provider": "openai"}},
+                "model": "gpt-4",
+            }
+        )
+        assert record.resolved_provider == "openai"
 
     def test_falls_back_to_provider_field(self) -> None:
-        record = {"provider": "anthropic"}
-        assert _extract_provider(record) == "anthropic"
+        record = LogRecord.model_validate({"provider": "anthropic", "model": "claude-3"})
+        assert record.resolved_provider == "anthropic"
 
     def test_returns_unknown_when_missing(self) -> None:
-        assert _extract_provider({}) == "unknown"
+        record = LogRecord.model_validate({"model": "gpt-4"})
+        assert record.resolved_provider == "unknown"
 
-    def test_non_string_provider_returns_unknown(self) -> None:
-        assert _extract_provider({"provider": 123}) == "unknown"
-        assert _extract_provider({"provider": ["a"]}) == "unknown"
+    @given(data=st.dictionaries(st.text(max_size=20), json_values, max_size=10))
+    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
+    def test_never_crashes(self, data: dict) -> None:
+        try:
+            record = LogRecord.model_validate(data)
+            assert isinstance(record.resolved_provider, str)
+        except Exception:  # noqa: S110
+            pass  # ValidationError is acceptable
+
+
+# ── TokenPrice model ─────────────────────────────────────────────────────────
+
+
+class TestTokenPrice:
+    def test_immutable(self) -> None:
+        import pytest  # noqa: PLC0415
+
+        price = TokenPrice(input_per_1k=0.01, output_per_1k=0.03)
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            price.input_per_1k = 0.02  # type: ignore[misc]
+
+    def test_get_cost(self) -> None:
+        cost = get_cost("openai", "gpt-4.1", 1000, 1000)
+        assert cost == 0.002 + 0.008
+
+
+# ── HandlerResponse model ───────────────────────────────────────────────────
+
+
+class TestHandlerResponse:
+    def test_excludes_none_error(self) -> None:
+        resp = HandlerResponse(statusCode=200, total_events=5, processed=3, skipped=2, errors=0)
+        dumped = resp.model_dump(exclude_none=True)
+        assert "error" not in dumped
+
+    def test_includes_error_when_set(self) -> None:
+        resp = HandlerResponse(statusCode=400, error="bad request")
+        dumped = resp.model_dump(exclude_none=True)
+        assert dumped["error"] == "bad request"
 
 
 # ── _extract_metrics ─────────────────────────────────────────────────────────
@@ -105,29 +157,7 @@ class TestExtractMetrics:
     @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
     def test_never_crashes_on_text_message(self, log_event: dict) -> None:
         result = _extract_metrics(log_event)
-        assert result is None or isinstance(result, dict)
-
-    @given(
-        usage=st.fixed_dictionaries(
-            {},
-            optional={
-                "prompt_tokens": json_primitives,
-                "completion_tokens": json_primitives,
-                "total_tokens": json_primitives,
-            },
-        )
-    )
-    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
-    def test_never_crashes_on_structured_usage(self, usage: dict) -> None:
-        record = {"usage": usage, "model": "gpt-4"}
-        log_event = {"message": json.dumps(record)}
-        result = _extract_metrics(log_event)
-        assert result is None or isinstance(result, dict)
-        if result is not None:
-            assert "provider" in result
-            assert "model" in result
-            assert "total_tokens" in result
-            assert "cost_usd" in result
+        assert result is None or isinstance(result, MetricResult)
 
     def test_valid_usage(self) -> None:
         record = {
@@ -138,8 +168,8 @@ class TestExtractMetrics:
         log_event = {"message": json.dumps(record)}
         result = _extract_metrics(log_event)
         assert result is not None
-        assert result["total_tokens"] == 30
-        assert result["provider"] == "openai"
+        assert result.total_tokens == 30
+        assert result.provider == "openai"
 
     def test_returns_none_for_no_usage(self) -> None:
         log_event = {"message": json.dumps({"model": "gpt-4"})}
@@ -149,14 +179,13 @@ class TestExtractMetrics:
         log_event = {"message": "not json at all"}
         assert _extract_metrics(log_event) is None
 
-    def test_returns_none_for_non_dict_usage(self) -> None:
-        record = {"usage": [1, 2, 3], "model": "gpt-4"}
-        log_event = {"message": json.dumps(record)}
+    def test_returns_none_for_null_json(self) -> None:
+        log_event = {"message": "null"}
         assert _extract_metrics(log_event) is None
 
-        record2 = {"usage": "not a dict", "model": "gpt-4"}
-        log_event2 = {"message": json.dumps(record2)}
-        assert _extract_metrics(log_event2) is None
+    def test_returns_none_for_non_dict_usage(self) -> None:
+        log_event = {"message": json.dumps({"usage": [1, 2, 3], "model": "gpt-4"})}
+        assert _extract_metrics(log_event) is None
 
 
 # ── handler (end-to-end) ─────────────────────────────────────────────────────

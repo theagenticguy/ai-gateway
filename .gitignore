@@ -67,3 +67,4 @@ trivy-results.*
 # Documentation (Zensical)
 # ──────────────────────────────────────────────
 site/
+.hypothesis/
