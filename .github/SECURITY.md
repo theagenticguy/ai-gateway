@@ -6,7 +6,13 @@ If you discover a security vulnerability in this project, please report it respo
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, please email security concerns to the repository owner. You can expect an initial response within 48 hours.
+Please use [GitHub Security Advisories](https://github.com/theagenticguy/ai-gateway/security/advisories/new) to report vulnerabilities privately. This ensures the issue is triaged confidentially before any public disclosure.
+
+Alternatively, you can email security concerns to the repository owner. You can expect:
+
+- **Initial response**: Within 48 hours
+- **Status update**: Within 5 business days
+- **Resolution target**: Within 30 days for critical issues, 90 days for others
 
 ## Supported Versions
 
@@ -14,14 +20,36 @@ Instead, please email security concerns to the repository owner. You can expect 
 | ------- | --------- |
 | main    | Yes       |
 
+## Disclosure Policy
+
+We follow [coordinated vulnerability disclosure](https://cheatsheetseries.owasp.org/cheatsheets/Vulnerability_Disclosure_Cheat_Sheet.html). After a fix is available, we will:
+
+1. Release the fix to `main`
+2. Publish a GitHub Security Advisory
+3. Credit the reporter (unless they prefer anonymity)
+
 ## Security Scanning
 
-This project runs automated security scans on every commit:
+This project runs automated security scans on every push and pull request:
 
-- **SAST**: Semgrep with Python, OWASP Top 10, and security audit rulesets
-- **Secrets**: Gitleaks for credential detection
-- **IaC**: Checkov for Terraform misconfigurations
-- **Container**: Trivy for vulnerability scanning, Hadolint for Dockerfile linting
-- **Supply chain**: Cosign image signing, Syft SBOM generation, Dependency Review
-- **Code analysis**: GitHub CodeQL
-- **Scorecard**: OpenSSF Scorecard for supply chain security posture
+| Layer | Tool | What It Covers |
+| ----- | ---- | -------------- |
+| SAST | [Semgrep](https://semgrep.dev/) | Python code analysis (OWASP Top 10, security audit rules) |
+| Secrets | [Gitleaks](https://gitleaks.io/) | Prevents secrets from entering the repository |
+| IaC | [Checkov](https://www.checkov.io/) | Terraform security and compliance (2,500+ policies) |
+| Dockerfile | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfile best practices with ShellCheck integration |
+| Container | [Trivy](https://trivy.dev/) | Vulnerability scanning of container images (HIGH + CRITICAL) |
+| SBOM | [Syft](https://github.com/anchore/syft) | CycloneDX software bill of materials generation |
+| Code analysis | [CodeQL](https://codeql.github.com/) | GitHub-native semantic code analysis |
+| Supply chain | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
+| Dependencies | [Dependency Review](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check |
+| Updates | [Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated dependency updates (Python, Terraform, Actions) |
+
+All GitHub Actions are pinned to SHA hashes to prevent supply chain attacks.
+
+## Dependency Management
+
+- Dependencies are managed via `uv` with a locked `uv.lock` file
+- Terraform providers are version-constrained in `versions.tf` and all child modules
+- Dependabot monitors Python (pip), Terraform, and GitHub Actions dependencies weekly
+- The Dependency Review action blocks PRs introducing HIGH+ severity vulnerabilities or GPL-3.0/AGPL-3.0 licenses

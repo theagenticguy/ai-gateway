@@ -38,15 +38,15 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Install dependencies
         run: uv sync --frozen
@@ -60,6 +60,10 @@ jobs:
       - name: Pyright type check
         run: uv run pyright src/
 
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+        if: hashFiles('tests/**/*.py') != ''
+
   # ────────────────────────────────────────────────────────────
   # 2. SAST — Static Application Security Testing
   # ────────────────────────────────────────────────────────────
@@ -71,10 +75,10 @@ jobs:
       security-events: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Semgrep SAST scan
-        uses: returntocorp/semgrep-action@v1
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
         with:
           config: >-
             p/python
@@ -85,7 +89,7 @@ jobs:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
       - name: Gitleaks secret detection
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE_KEY }}
@@ -101,10 +105,10 @@ jobs:
       security-events: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4
         with:
           terraform_version: "1.10.5"
 
@@ -132,7 +136,7 @@ jobs:
           git diff --exit-code infrastructure/README.md || (echo "terraform-docs is out of date. Run 'mise run tf:docs'" && exit 1)
 
       - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v6
+        uses: terraform-linters/setup-tflint@eb0f7c1b77f191dee552664e7884849ce3dd5176 # v6
         with:
           tflint_version: latest
 
@@ -147,7 +151,7 @@ jobs:
         working-directory: infrastructure
 
       - name: Checkov IaC scan
-        uses: bridgecrewio/checkov-action@v12
+        uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e # v12
         with:
           directory: infrastructure/
           framework: terraform
@@ -158,7 +162,7 @@ jobs:
           download_external_modules: false
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
         if: always()
         with:
           sarif_file: checkov-results.sarif
@@ -175,13 +179,13 @@ jobs:
       security-events: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Pull Portkey gateway image
         run: docker pull portkeyai/gateway:${{ env.PORTKEY_VERSION }}
 
       - name: Hadolint Dockerfile lint
-        uses: hadolint/hadolint-action@v3.3.0
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         if: hashFiles('**/Dockerfile') != ''
         with:
           recursive: true
@@ -189,14 +193,14 @@ jobs:
           output-file: hadolint-results.sarif
 
       - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
         if: hashFiles('**/Dockerfile') != '' && always()
         with:
           sarif_file: hadolint-results.sarif
           category: hadolint
 
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           image-ref: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
           format: sarif
@@ -206,21 +210,21 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@42c37fa6c31182c76b77826182275d3fc53b2dab # v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
           category: trivy
 
       - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0
         with:
           image: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
           format: cyclonedx-json
           output-file: sbom.cyclonedx.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: sbom-cyclonedx
           path: sbom.cyclonedx.json
