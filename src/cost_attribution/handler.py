@@ -10,7 +10,9 @@ import os
 from typing import Any
 
 import boto3
+from pydantic import ValidationError
 
+from cost_attribution.models import HandlerResponse, LogRecord, MetricResult
 from cost_attribution.pricing import get_cost
 
 logger = logging.getLogger("cost_attribution")
@@ -39,63 +41,48 @@ def _decode_log_data(event: dict[str, Any]) -> dict[str, Any]:
     return json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
 
 
-def _safe_int(value: Any) -> int:
-    if value is None:
-        return 0
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return 0
-
-
-def _extract_provider(record: dict[str, Any]) -> str:
-    req = record.get("req", {})
-    headers = req.get("headers", {}) if isinstance(req, dict) else {}
-    provider = headers.get("x-portkey-provider", "")
-    result = provider or record.get("provider", "unknown")
-    return result if isinstance(result, str) else "unknown"
-
-
-def _extract_metrics(log_event: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_metrics(log_event: dict[str, Any]) -> MetricResult | None:
     try:
         message = log_event.get("message", "")
-        record = json.loads(message) if isinstance(message, str) else message
+        raw = json.loads(message) if isinstance(message, str) else message
     except (json.JSONDecodeError, TypeError):
         return None
-    if not isinstance(record, dict):
+    if not isinstance(raw, dict):
         return None
-    usage = record.get("usage")
-    if not isinstance(usage, dict) or not usage:
+
+    try:
+        record = LogRecord.model_validate(raw)
+    except ValidationError:
         return None
-    prompt_tokens = _safe_int(usage.get("prompt_tokens"))
-    completion_tokens = _safe_int(usage.get("completion_tokens"))
-    total_tokens = _safe_int(usage.get("total_tokens"))
-    if total_tokens == 0 and (prompt_tokens + completion_tokens) == 0:
+
+    if record.usage is None or not record.usage.has_tokens:
         return None
-    if total_tokens == 0:
-        total_tokens = prompt_tokens + completion_tokens
-    provider = _extract_provider(record)
-    model = record.get("model", "unknown")
-    return {
-        "provider": provider,
-        "model": model,
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "cost_usd": get_cost(provider, model, prompt_tokens, completion_tokens),
-    }
+
+    return MetricResult(
+        provider=record.resolved_provider,
+        model=record.model,
+        prompt_tokens=record.usage.prompt_tokens,
+        completion_tokens=record.usage.completion_tokens,
+        total_tokens=record.usage.total_tokens,
+        cost_usd=get_cost(
+            record.resolved_provider,
+            record.model,
+            record.usage.prompt_tokens,
+            record.usage.completion_tokens,
+        ),
+    )
 
 
-def _publish_metrics(metrics: list[dict[str, Any]]) -> None:
+def _publish_metrics(metrics: list[MetricResult]) -> None:
     if not metrics:
         return
     metric_data: list[dict[str, Any]] = []
     for m in metrics:
-        dims = [{"Name": "Provider", "Value": m["provider"]}, {"Name": "Model", "Value": m["model"]}]
+        dims = [{"Name": "Provider", "Value": m.provider}, {"Name": "Model", "Value": m.model}]
         metric_data.extend(
             [
-                {"MetricName": "TokensUsed", "Dimensions": dims, "Value": float(m["total_tokens"]), "Unit": "Count"},
-                {"MetricName": "EstimatedCostUsd", "Dimensions": dims, "Value": m["cost_usd"], "Unit": "None"},
+                {"MetricName": "TokensUsed", "Dimensions": dims, "Value": float(m.total_tokens), "Unit": "Count"},
+                {"MetricName": "EstimatedCostUsd", "Dimensions": dims, "Value": m.cost_usd, "Unit": "None"},
                 {"MetricName": "RequestCount", "Dimensions": dims, "Value": 1.0, "Unit": "Count"},
             ]
         )
@@ -109,10 +96,12 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         log_data = _decode_log_data(event)
     except Exception:
         logger.exception("Failed to decode log event payload")
-        return {"statusCode": 400, "error": "Failed to decode log data"}
+        return HandlerResponse(statusCode=400, error="Failed to decode log data").model_dump(exclude_none=True)
+
     log_events = log_data.get("logEvents", [])
     logger.info("Processing %d log events from log group %s", len(log_events), log_data.get("logGroup", "unknown"))
-    extracted: list[dict[str, Any]] = []
+
+    extracted: list[MetricResult] = []
     errors = 0
     for log_event in log_events:
         try:
@@ -122,21 +111,20 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to process log event: %s", log_event.get("id", "unknown"))
             errors += 1
+
     if extracted:
         try:
             _publish_metrics(extracted)
         except Exception:
             logger.exception("Failed to publish metrics to CloudWatch")
-            return {
-                "statusCode": 500,
-                "processed": len(extracted),
-                "errors": errors,
-                "error": "Failed to publish metrics",
-            }
-    return {
-        "statusCode": 200,
-        "total_events": len(log_events),
-        "processed": len(extracted),
-        "skipped": len(log_events) - len(extracted) - errors,
-        "errors": errors,
-    }
+            return HandlerResponse(
+                statusCode=500, processed=len(extracted), errors=errors, error="Failed to publish metrics"
+            ).model_dump(exclude_none=True)
+
+    return HandlerResponse(
+        statusCode=200,
+        total_events=len(log_events),
+        processed=len(extracted),
+        skipped=len(log_events) - len(extracted) - errors,
+        errors=errors,
+    ).model_dump(exclude_none=True)
