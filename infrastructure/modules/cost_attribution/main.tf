@@ -29,7 +29,7 @@ resource "aws_iam_role" "lambda" {
   count = var.enable_cost_attribution ? 1 : 0
   name  = "${var.project_name}-${var.environment}-cost-attribution"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }]
   })
 }
