@@ -1,0 +1,74 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill out the sections below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Configure agent with...
+        2. Send request to...
+        3. See error...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the gateway is affected?
+      options:
+        - Gateway (Portkey routing)
+        - Authentication (Cognito/JWT)
+        - Infrastructure (Terraform)
+        - CI/CD Pipeline
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent (if applicable)
+      description: Which AI agent are you using?
+      options:
+        - Claude Code
+        - OpenCode
+        - Goose
+        - Continue.dev
+        - LangChain
+        - Codex CLI
+        - Other / N/A
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Any relevant environment details.
+      placeholder: |
+        - Environment: dev / prod
+        - Region: us-east-1
+        - Terraform version: 1.10.5
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Paste relevant logs, error messages, or screenshots.
+      render: shell
