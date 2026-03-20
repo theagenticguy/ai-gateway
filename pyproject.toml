@@ -17,8 +17,19 @@ dev = [
     "boto3-stubs>=1.42.72",
     "hypothesis>=6.151.9",
     "atheris>=3.0.0",
+    "pytest-cov>=7.0.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=cost_attribution --cov-branch --cov-report=term --cov-report=xml"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 0

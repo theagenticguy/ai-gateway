@@ -2,6 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/theagenticguy/ai-gateway/badge)](https://scorecard.dev/viewer/?uri=github.com/theagenticguy/ai-gateway)
 [![CI/CD Pipeline](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/theagenticguy/ai-gateway/graph/badge.svg)](https://codecov.io/gh/theagenticguy/ai-gateway)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Overview
