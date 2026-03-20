@@ -1,0 +1,24 @@
+{
+  "strategy": {
+    "mode": "fallback",
+    "on_status_codes": [429, 500, 502, 503, 504]
+  },
+  "targets": [
+    {
+      "provider": "openai",
+      "override_params": {
+        "model": "gpt-4.1"
+      },
+      "retry": {
+        "attempts": 2,
+        "on_status_codes": [429, 500, 502, 503]
+      }
+    },
+    {
+      "provider": "azure-openai",
+      "override_params": {
+        "model": "gpt-4.1"
+      }
+    }
+  ]
+}

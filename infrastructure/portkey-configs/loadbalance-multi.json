@@ -1,0 +1,21 @@
+{
+  "strategy": {
+    "mode": "loadbalance"
+  },
+  "targets": [
+    {
+      "provider": "bedrock",
+      "weight": 0.6,
+      "override_params": {
+        "model": "anthropic.claude-sonnet-4-20250514-v1:0"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "weight": 0.4,
+      "override_params": {
+        "model": "claude-sonnet-4-20250514"
+      }
+    }
+  ]
+}

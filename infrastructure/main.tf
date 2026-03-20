@@ -85,4 +85,9 @@ module "compute" {
   gateway_log_group_name = module.observability.gateway_log_group_name
   otel_log_group_name    = module.observability.otel_log_group_name
   otel_config_content    = file("${path.module}/otel-config.yaml")
+
+  # Routing
+  portkey_routing_configs = var.enable_provider_fallback ? {
+    for name, config in var.routing_configs : name => base64encode(config)
+  } : {}
 }
