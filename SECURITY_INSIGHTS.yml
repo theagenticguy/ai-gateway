@@ -1,0 +1,61 @@
+# OpenSSF Security Insights Specification v1.0.0
+# https://github.com/ossf/security-insights-spec
+
+header:
+  schema-version: "1.0.0"
+  expiry: "2027-03-21T00:00:00Z"
+  last-updated: "2026-03-21"
+  last-reviewed: "2026-03-21"
+  commit-hash: ""
+  project-url: "https://github.com/theagenticguy/ai-gateway"
+  changelog: "https://github.com/theagenticguy/ai-gateway/blob/main/CHANGELOG.md"
+  license: "https://github.com/theagenticguy/ai-gateway/blob/main/LICENSE"
+
+project-lifecycle:
+  status: "active"
+  roadmap: "https://github.com/theagenticguy/ai-gateway/issues"
+  bug-fixes-only: false
+  core-maintainers:
+    - github: "theagenticguy"
+
+contribution-policy:
+  accepts-pull-requests: true
+  accepts-automated-pull-requests: true
+  automated-tools-list:
+    - automated-tool: "dependabot"
+      action: "allowed"
+      path:
+        - ".github/dependabot.yml"
+  contributing-policy: "https://github.com/theagenticguy/ai-gateway/blob/main/CONTRIBUTING.md"
+
+documentation:
+  - "https://github.com/theagenticguy/ai-gateway/blob/main/README.md"
+  - "https://github.com/theagenticguy/ai-gateway/tree/main/docs"
+
+distribution-points:
+  - "https://github.com/theagenticguy/ai-gateway"
+
+security-artifacts:
+  self-assessment:
+    self-assessment-created: true
+    evidence-url:
+      - "https://www.bestpractices.dev/en/projects/12221"
+
+security-contacts:
+  - type: "email"
+    value: "security@theagenticguy.com"
+
+vulnerability-reporting:
+  accepts-vulnerability-reports: true
+  security-policy: "https://github.com/theagenticguy/ai-gateway/blob/main/.github/SECURITY.md"
+  bug-bounty-available: false
+  comment: "Please report vulnerabilities via GitHub Security Advisories."
+
+dependencies:
+  third-party-packages: true
+  dependencies-lists:
+    - "https://github.com/theagenticguy/ai-gateway/blob/main/uv.lock"
+  sbom:
+    - sbom-created: false
+  env-dependencies-policy:
+    policy-url: "https://github.com/theagenticguy/ai-gateway/blob/main/.github/dependabot.yml"
