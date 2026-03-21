@@ -47,6 +47,19 @@ output "cognito_token_endpoint" {
   value       = module.auth.cognito_token_endpoint
 }
 
+# User SSO Outputs (D.1)
+# -----------------------------------------------------------------------------
+
+output "user_client_id" {
+  description = "Cognito User SSO client ID (empty if user auth is disabled)"
+  value       = module.auth.user_client_id
+}
+
+output "hosted_ui_url" {
+  description = "Cognito Hosted UI URL for SSO login (empty if user auth is disabled)"
+  value       = module.auth.hosted_ui_url
+}
+
 # Multi-Client Outputs
 # -----------------------------------------------------------------------------
 

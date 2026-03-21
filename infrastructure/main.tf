@@ -57,6 +57,13 @@ module "auth" {
 
   alb_arn                      = module.networking.alb_arn
   alb_target_group_gateway_arn = module.networking.alb_target_group_gateway_arn
+
+  # Identity Center / SSO (D.1)
+  identity_providers = var.identity_providers
+  enable_user_auth   = var.enable_user_auth
+  callback_urls      = var.callback_urls
+  logout_urls        = var.logout_urls
+  group_mapping      = var.group_mapping
 }
 
 # -----------------------------------------------------------------------------

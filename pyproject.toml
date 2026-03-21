@@ -23,7 +23,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--cov=cost_attribution --cov-branch --cov-report=term --cov-report=xml"
+addopts = "--cov=cost_attribution --cov=pre_token --cov-branch --cov-report=term --cov-report=xml"
 
 [tool.coverage.run]
 source = ["src"]
