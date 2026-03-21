@@ -75,6 +75,20 @@ output "team_client_secrets" {
 }
 
 # -----------------------------------------------------------------------------
+# Content Scanner Outputs
+# -----------------------------------------------------------------------------
+
+output "content_scanner_function_url" {
+  description = "Lambda Function URL for the content scanner"
+  value       = module.content_scanner.function_url
+}
+
+output "content_scanner_function_arn" {
+  description = "ARN of the content scanner Lambda function"
+  value       = module.content_scanner.function_arn
+}
+
+# -----------------------------------------------------------------------------
 # Guardrails Outputs
 # -----------------------------------------------------------------------------
 

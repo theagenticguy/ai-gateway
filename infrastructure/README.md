@@ -38,6 +38,7 @@ This module is composed of 4 local sub-modules:
 | <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
 | <a name="module_clients"></a> [clients](#module\_clients) | ./modules/clients | n/a |
 | <a name="module_compute"></a> [compute](#module\_compute) | ./modules/compute | n/a |
+| <a name="module_content_scanner"></a> [content\_scanner](#module\_content\_scanner) | ./modules/content_scanner | n/a |
 | <a name="module_cost_attribution"></a> [cost\_attribution](#module\_cost\_attribution) | ./modules/cost_attribution | n/a |
 | <a name="module_guardrails"></a> [guardrails](#module\_guardrails) | ./modules/guardrails | n/a |
 | <a name="module_networking"></a> [networking](#module\_networking) | ./modules/networking | n/a |
@@ -63,8 +64,11 @@ This module is composed of 4 local sub-modules:
 | <a name="input_client_configs"></a> [client\_configs](#input\_client\_configs) | Map of team configurations for per-team Cognito app clients.<br/>Each key is the team identifier; value specifies allowed OAuth scopes<br/>and a human-readable description.<br/><br/>Example:<br/>  client\_configs = {<br/>    platform = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke"]<br/>      description    = "Platform engineering team"<br/>    }<br/>    ml-ops = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]<br/>      description    = "ML Operations team"<br/>    }<br/>  } | <pre>map(object({<br/>    allowed_scopes = list(string)<br/>    description    = string<br/>  }))</pre> | `{}` | no |
 | <a name="input_cognito_domain_prefix"></a> [cognito\_domain\_prefix](#input\_cognito\_domain\_prefix) | Cognito User Pool domain prefix for the token endpoint. Leave empty to skip domain creation. | `string` | `""` | no |
 | <a name="input_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#input\_cognito\_user\_pool\_id) | Cognito User Pool ID for JWT validation. Leave empty to disable JWT auth. | `string` | `""` | no |
+| <a name="input_content_scanner_default_injection_mode"></a> [content\_scanner\_default\_injection\_mode](#input\_content\_scanner\_default\_injection\_mode) | Default injection scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
+| <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
+| <a name="input_enable_content_scanner"></a> [enable\_content\_scanner](#input\_enable\_content\_scanner) | Whether to deploy the content scanner Lambda (PII redaction + injection detection) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to enable Bedrock Guardrails for content safety filtering | `bool` | `false` | no |
 | <a name="input_enable_jwt_auth"></a> [enable\_jwt\_auth](#input\_enable\_jwt\_auth) | Whether to enable ALB JWT validation. Requires certificate\_arn and cognito\_user\_pool\_id. | `bool` | `false` | no |
@@ -98,6 +102,8 @@ This module is composed of 4 local sub-modules:
 | <a name="output_cognito_token_endpoint"></a> [cognito\_token\_endpoint](#output\_cognito\_token\_endpoint) | Cognito token endpoint URL |
 | <a name="output_cognito_user_pool_arn"></a> [cognito\_user\_pool\_arn](#output\_cognito\_user\_pool\_arn) | Cognito User Pool ARN |
 | <a name="output_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#output\_cognito\_user\_pool\_id) | Cognito User Pool ID |
+| <a name="output_content_scanner_function_arn"></a> [content\_scanner\_function\_arn](#output\_content\_scanner\_function\_arn) | ARN of the content scanner Lambda function |
+| <a name="output_content_scanner_function_url"></a> [content\_scanner\_function\_url](#output\_content\_scanner\_function\_url) | Lambda Function URL for the content scanner |
 | <a name="output_ecr_repository_url"></a> [ecr\_repository\_url](#output\_ecr\_repository\_url) | URL of the ECR repository |
 | <a name="output_ecs_cluster_name"></a> [ecs\_cluster\_name](#output\_ecs\_cluster\_name) | Name of the ECS cluster |
 | <a name="output_ecs_service_name"></a> [ecs\_service\_name](#output\_ecs\_service\_name) | Name of the ECS service |

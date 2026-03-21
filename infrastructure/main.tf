@@ -135,6 +135,21 @@ module "cost_attribution" {
   gateway_log_group_arn   = module.observability.gateway_log_group_arn
 }
 
+# Content Scanner (Lambda: PII redaction + prompt injection detection)
+# -----------------------------------------------------------------------------
+
+module "content_scanner" {
+  source = "./modules/content_scanner"
+
+  project_name           = var.project_name
+  environment            = var.environment
+  aws_region             = var.aws_region
+  account_id             = data.aws_caller_identity.current.account_id
+  enable_content_scanner = var.enable_content_scanner
+  default_pii_mode       = var.content_scanner_default_pii_mode
+  default_injection_mode = var.content_scanner_default_injection_mode
+}
+
 # Guardrails (Bedrock content safety filtering)
 # -----------------------------------------------------------------------------
 
