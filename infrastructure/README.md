@@ -34,6 +34,7 @@ This module is composed of 4 local sub-modules:
 | Name | Source | Version |
 |------|--------|---------|
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
+| <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
 | <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
 | <a name="module_clients"></a> [clients](#module\_clients) | ./modules/clients | n/a |
 | <a name="module_compute"></a> [compute](#module\_compute) | ./modules/compute | n/a |
@@ -55,11 +56,13 @@ This module is composed of 4 local sub-modules:
 | <a name="input_autoscaling_max_capacity"></a> [autoscaling\_max\_capacity](#input\_autoscaling\_max\_capacity) | Maximum number of ECS tasks for autoscaling | `number` | `6` | no |
 | <a name="input_autoscaling_min_capacity"></a> [autoscaling\_min\_capacity](#input\_autoscaling\_min\_capacity) | Minimum number of ECS tasks for autoscaling | `number` | `2` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into | `string` | `"us-east-1"` | no |
+| <a name="input_budget_tier_defaults"></a> [budget\_tier\_defaults](#input\_budget\_tier\_defaults) | Default budget limits per tier | <pre>map(object({<br/>    rpm            = number<br/>    tokens_per_day = number<br/>    monthly_usd    = number<br/>  }))</pre> | <pre>{<br/>  "premium": {<br/>    "monthly_usd": 1000,<br/>    "rpm": 500,<br/>    "tokens_per_day": 5000000<br/>  },<br/>  "sandbox": {<br/>    "monthly_usd": 25,<br/>    "rpm": 20,<br/>    "tokens_per_day": 100000<br/>  },<br/>  "standard": {<br/>    "monthly_usd": 100,<br/>    "rpm": 100,<br/>    "tokens_per_day": 500000<br/>  },<br/>  "unlimited": {<br/>    "monthly_usd": 10000,<br/>    "rpm": 2000,<br/>    "tokens_per_day": -1<br/>  }<br/>}</pre> | no |
 | <a name="input_cache_node_type"></a> [cache\_node\_type](#input\_cache\_node\_type) | ElastiCache node instance type | `string` | `"cache.t4g.micro"` | no |
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ACM certificate ARN for HTTPS listener | `string` | `""` | no |
 | <a name="input_client_configs"></a> [client\_configs](#input\_client\_configs) | Map of team configurations for per-team Cognito app clients.<br/>Each key is the team identifier; value specifies allowed OAuth scopes<br/>and a human-readable description.<br/><br/>Example:<br/>  client\_configs = {<br/>    platform = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke"]<br/>      description    = "Platform engineering team"<br/>    }<br/>    ml-ops = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]<br/>      description    = "ML Operations team"<br/>    }<br/>  } | <pre>map(object({<br/>    allowed_scopes = list(string)<br/>    description    = string<br/>  }))</pre> | `{}` | no |
 | <a name="input_cognito_domain_prefix"></a> [cognito\_domain\_prefix](#input\_cognito\_domain\_prefix) | Cognito User Pool domain prefix for the token endpoint. Leave empty to skip domain creation. | `string` | `""` | no |
 | <a name="input_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#input\_cognito\_user\_pool\_id) | Cognito User Pool ID for JWT validation. Leave empty to disable JWT auth. | `string` | `""` | no |
+| <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to enable Bedrock Guardrails for content safety filtering | `bool` | `false` | no |
@@ -82,6 +85,10 @@ This module is composed of 4 local sub-modules:
 | Name | Description |
 |------|-------------|
 | <a name="output_alb_dns_name"></a> [alb\_dns\_name](#output\_alb\_dns\_name) | DNS name of the Application Load Balancer |
+| <a name="output_budgets_kms_key_arn"></a> [budgets\_kms\_key\_arn](#output\_budgets\_kms\_key\_arn) | ARN of the KMS key used for budget table encryption |
+| <a name="output_budgets_lambda_policy_arn"></a> [budgets\_lambda\_policy\_arn](#output\_budgets\_lambda\_policy\_arn) | ARN of the IAM policy for Lambda access to budget tables |
+| <a name="output_budgets_table_arn"></a> [budgets\_table\_arn](#output\_budgets\_table\_arn) | ARN of the budgets DynamoDB table |
+| <a name="output_budgets_table_name"></a> [budgets\_table\_name](#output\_budgets\_table\_name) | Name of the budgets DynamoDB table |
 | <a name="output_cognito_client_id"></a> [cognito\_client\_id](#output\_cognito\_client\_id) | Cognito M2M client ID |
 | <a name="output_cognito_token_endpoint"></a> [cognito\_token\_endpoint](#output\_cognito\_token\_endpoint) | Cognito token endpoint URL |
 | <a name="output_cognito_user_pool_arn"></a> [cognito\_user\_pool\_arn](#output\_cognito\_user\_pool\_arn) | Cognito User Pool ARN |
@@ -93,6 +100,8 @@ This module is composed of 4 local sub-modules:
 | <a name="output_guardrail_id"></a> [guardrail\_id](#output\_guardrail\_id) | Bedrock Guardrail ID |
 | <a name="output_team_client_ids"></a> [team\_client\_ids](#output\_team\_client\_ids) | Map of team name to Cognito app client ID (empty if no client\_configs) |
 | <a name="output_team_client_secrets"></a> [team\_client\_secrets](#output\_team\_client\_secrets) | Map of team name to Cognito app client secret (empty if no client\_configs) |
+| <a name="output_usage_table_arn"></a> [usage\_table\_arn](#output\_usage\_table\_arn) | ARN of the usage DynamoDB table |
+| <a name="output_usage_table_name"></a> [usage\_table\_name](#output\_usage\_table\_name) | Name of the usage DynamoDB table |
 | <a name="output_vpc_id"></a> [vpc\_id](#output\_vpc\_id) | ID of the VPC |
 <!-- END_TF_DOCS -->
 

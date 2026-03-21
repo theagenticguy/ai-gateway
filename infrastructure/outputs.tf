@@ -74,3 +74,37 @@ output "guardrail_arn" {
   description = "Bedrock Guardrail ARN"
   value       = module.guardrails.guardrail_arn
 }
+
+# -----------------------------------------------------------------------------
+# Budget Outputs
+# -----------------------------------------------------------------------------
+
+output "budgets_table_name" {
+  description = "Name of the budgets DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].budgets_table_name : null
+}
+
+output "budgets_table_arn" {
+  description = "ARN of the budgets DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].budgets_table_arn : null
+}
+
+output "usage_table_name" {
+  description = "Name of the usage DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].usage_table_name : null
+}
+
+output "usage_table_arn" {
+  description = "ARN of the usage DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].usage_table_arn : null
+}
+
+output "budgets_kms_key_arn" {
+  description = "ARN of the KMS key used for budget table encryption"
+  value       = length(module.budgets) > 0 ? module.budgets[0].kms_key_arn : null
+}
+
+output "budgets_lambda_policy_arn" {
+  description = "ARN of the IAM policy for Lambda access to budget tables"
+  value       = length(module.budgets) > 0 ? module.budgets[0].lambda_policy_arn : null
+}

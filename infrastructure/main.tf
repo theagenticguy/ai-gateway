@@ -159,3 +159,16 @@ module "cache" {
   vpc_id                = module.networking.vpc_id
   ecs_security_group_id = module.compute.ecs_security_group_id
 }
+
+# -----------------------------------------------------------------------------
+# Budgets (DynamoDB tables for budget definitions and usage tracking)
+# -----------------------------------------------------------------------------
+
+module "budgets" {
+  source = "./modules/budgets"
+  count  = var.enable_budgets ? 1 : 0
+
+  project_name   = var.project_name
+  environment    = var.environment
+  enable_budgets = var.enable_budgets
+}
