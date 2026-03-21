@@ -210,3 +210,24 @@ module "budgets" {
   environment    = var.environment
   enable_budgets = var.enable_budgets
 }
+
+# -----------------------------------------------------------------------------
+# Chargeback Reports (Step Functions + Lambda for monthly cost reports)
+# -----------------------------------------------------------------------------
+
+module "chargeback" {
+  source = "./modules/chargeback"
+  count  = var.enable_chargeback && var.enable_budgets ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+  account_id   = data.aws_caller_identity.current.account_id
+
+  enable_chargeback  = var.enable_chargeback
+  usage_table_name   = module.budgets[0].usage_table_name
+  usage_table_arn    = module.budgets[0].usage_table_arn
+  budgets_table_name = module.budgets[0].budgets_table_name
+  budgets_table_arn  = module.budgets[0].budgets_table_arn
+  sns_topic_arn      = module.observability.alarm_topic_arns[0]
+}

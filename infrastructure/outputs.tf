@@ -135,3 +135,22 @@ output "budgets_lambda_policy_arn" {
   description = "ARN of the IAM policy for Lambda access to budget tables"
   value       = length(module.budgets) > 0 ? module.budgets[0].lambda_policy_arn : null
 }
+
+# -----------------------------------------------------------------------------
+# Chargeback Outputs
+# -----------------------------------------------------------------------------
+
+output "chargeback_report_bucket" {
+  description = "Name of the S3 bucket storing chargeback reports"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].report_bucket : null
+}
+
+output "chargeback_state_machine_arn" {
+  description = "ARN of the chargeback Step Functions state machine"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].state_machine_arn : null
+}
+
+output "chargeback_lambda_arn" {
+  description = "ARN of the chargeback report Lambda function"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].lambda_arn : null
+}

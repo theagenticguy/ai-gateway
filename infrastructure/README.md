@@ -36,6 +36,7 @@ This module is composed of 4 local sub-modules:
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
 | <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
+| <a name="module_chargeback"></a> [chargeback](#module\_chargeback) | ./modules/chargeback | n/a |
 | <a name="module_clients"></a> [clients](#module\_clients) | ./modules/clients | n/a |
 | <a name="module_compute"></a> [compute](#module\_compute) | ./modules/compute | n/a |
 | <a name="module_content_scanner"></a> [content\_scanner](#module\_content\_scanner) | ./modules/content_scanner | n/a |
@@ -71,6 +72,7 @@ This module is composed of 4 local sub-modules:
 | <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
+| <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
 | <a name="input_enable_content_scanner"></a> [enable\_content\_scanner](#input\_enable\_content\_scanner) | Whether to deploy the content scanner Lambda (PII redaction + injection detection) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to enable Bedrock Guardrails for content safety filtering | `bool` | `false` | no |
@@ -106,6 +108,9 @@ This module is composed of 4 local sub-modules:
 | <a name="output_budgets_lambda_policy_arn"></a> [budgets\_lambda\_policy\_arn](#output\_budgets\_lambda\_policy\_arn) | ARN of the IAM policy for Lambda access to budget tables |
 | <a name="output_budgets_table_arn"></a> [budgets\_table\_arn](#output\_budgets\_table\_arn) | ARN of the budgets DynamoDB table |
 | <a name="output_budgets_table_name"></a> [budgets\_table\_name](#output\_budgets\_table\_name) | Name of the budgets DynamoDB table |
+| <a name="output_chargeback_lambda_arn"></a> [chargeback\_lambda\_arn](#output\_chargeback\_lambda\_arn) | ARN of the chargeback report Lambda function |
+| <a name="output_chargeback_report_bucket"></a> [chargeback\_report\_bucket](#output\_chargeback\_report\_bucket) | Name of the S3 bucket storing chargeback reports |
+| <a name="output_chargeback_state_machine_arn"></a> [chargeback\_state\_machine\_arn](#output\_chargeback\_state\_machine\_arn) | ARN of the chargeback Step Functions state machine |
 | <a name="output_cognito_client_id"></a> [cognito\_client\_id](#output\_cognito\_client\_id) | Cognito M2M client ID |
 | <a name="output_cognito_token_endpoint"></a> [cognito\_token\_endpoint](#output\_cognito\_token\_endpoint) | Cognito token endpoint URL |
 | <a name="output_cognito_user_pool_arn"></a> [cognito\_user\_pool\_arn](#output\_cognito\_user\_pool\_arn) | Cognito User Pool ARN |
