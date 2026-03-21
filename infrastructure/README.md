@@ -54,9 +54,12 @@ This module is composed of 4 local sub-modules:
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment (dev or prod) | `string` | n/a | yes |
+| <a name="input_alarm_sns_topic_arns"></a> [alarm\_sns\_topic\_arns](#input\_alarm\_sns\_topic\_arns) | List of SNS topic ARNs for CloudWatch alarm notifications. If empty, a default topic is created. | `list(string)` | `[]` | no |
 | <a name="input_autoscaling_max_capacity"></a> [autoscaling\_max\_capacity](#input\_autoscaling\_max\_capacity) | Maximum number of ECS tasks for autoscaling | `number` | `6` | no |
 | <a name="input_autoscaling_min_capacity"></a> [autoscaling\_min\_capacity](#input\_autoscaling\_min\_capacity) | Minimum number of ECS tasks for autoscaling | `number` | `2` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into | `string` | `"us-east-1"` | no |
+| <a name="input_budget_alarm_threshold_pct"></a> [budget\_alarm\_threshold\_pct](#input\_budget\_alarm\_threshold\_pct) | Percentage of daily budget that triggers the budget utilization alarm | `number` | `80` | no |
+| <a name="input_budget_limit_daily_usd"></a> [budget\_limit\_daily\_usd](#input\_budget\_limit\_daily\_usd) | Daily budget limit in USD for dashboard gauge and budget alarm | `number` | `1000` | no |
 | <a name="input_budget_tier_defaults"></a> [budget\_tier\_defaults](#input\_budget\_tier\_defaults) | Default budget limits per tier | <pre>map(object({<br/>    rpm            = number<br/>    tokens_per_day = number<br/>    monthly_usd    = number<br/>  }))</pre> | <pre>{<br/>  "premium": {<br/>    "monthly_usd": 1000,<br/>    "rpm": 500,<br/>    "tokens_per_day": 5000000<br/>  },<br/>  "sandbox": {<br/>    "monthly_usd": 25,<br/>    "rpm": 20,<br/>    "tokens_per_day": 100000<br/>  },<br/>  "standard": {<br/>    "monthly_usd": 100,<br/>    "rpm": 100,<br/>    "tokens_per_day": 500000<br/>  },<br/>  "unlimited": {<br/>    "monthly_usd": 10000,<br/>    "rpm": 2000,<br/>    "tokens_per_day": -1<br/>  }<br/>}</pre> | no |
 | <a name="input_cache_node_type"></a> [cache\_node\_type](#input\_cache\_node\_type) | ElastiCache node instance type | `string` | `"cache.t4g.micro"` | no |
 | <a name="input_callback_urls"></a> [callback\_urls](#input\_callback\_urls) | List of allowed callback URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/callback"<br/>]</pre> | no |
@@ -75,6 +78,8 @@ This module is composed of 4 local sub-modules:
 | <a name="input_enable_provider_fallback"></a> [enable\_provider\_fallback](#input\_enable\_provider\_fallback) | Whether to enable provider fallback routing. When true, routing configs are injected into the gateway container as environment variables. | `bool` | `false` | no |
 | <a name="input_enable_user_auth"></a> [enable\_user\_auth](#input\_enable\_user\_auth) | Whether to enable user-facing SSO authentication (authorization\_code flow) | `bool` | `false` | no |
 | <a name="input_enable_waf"></a> [enable\_waf](#input\_enable\_waf) | Whether to enable WAF on the ALB | `bool` | `true` | no |
+| <a name="input_error_rate_evaluation_minutes"></a> [error\_rate\_evaluation\_minutes](#input\_error\_rate\_evaluation\_minutes) | Number of 1-minute evaluation periods for the error rate alarm | `number` | `5` | no |
+| <a name="input_error_rate_threshold_pct"></a> [error\_rate\_threshold\_pct](#input\_error\_rate\_threshold\_pct) | Error rate percentage threshold that triggers the high error rate alarm | `number` | `5` | no |
 | <a name="input_gateway_cpu"></a> [gateway\_cpu](#input\_gateway\_cpu) | Total CPU units for the gateway ECS task | `number` | `1024` | no |
 | <a name="input_gateway_desired_count"></a> [gateway\_desired\_count](#input\_gateway\_desired\_count) | Desired number of gateway ECS tasks | `number` | `2` | no |
 | <a name="input_gateway_memory"></a> [gateway\_memory](#input\_gateway\_memory) | Total memory (MiB) for the gateway ECS task | `number` | `2048` | no |
@@ -83,9 +88,12 @@ This module is composed of 4 local sub-modules:
 | <a name="input_guardrails_blocked_words"></a> [guardrails\_blocked\_words](#input\_guardrails\_blocked\_words) | List of words or phrases to block in inputs and outputs | `list(string)` | `[]` | no |
 | <a name="input_guardrails_content_filter_strength"></a> [guardrails\_content\_filter\_strength](#input\_guardrails\_content\_filter\_strength) | Strength of content filters (LOW, MEDIUM, HIGH) | `string` | `"HIGH"` | no |
 | <a name="input_identity_providers"></a> [identity\_providers](#input\_identity\_providers) | Map of external identity providers (SAML/OIDC) to federate with Cognito | <pre>map(object({<br/>    provider_type     = string<br/>    metadata_url      = string<br/>    provider_details  = map(string)<br/>    attribute_mapping = map(string)<br/>  }))</pre> | `{}` | no |
+| <a name="input_latency_evaluation_minutes"></a> [latency\_evaluation\_minutes](#input\_latency\_evaluation\_minutes) | Number of 1-minute evaluation periods for the latency alarm | `number` | `5` | no |
 | <a name="input_logout_urls"></a> [logout\_urls](#input\_logout\_urls) | List of allowed logout URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/logout"<br/>]</pre> | no |
+| <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
 | <a name="input_portkey_image"></a> [portkey\_image](#input\_portkey\_image) | Docker image for the Portkey AI Gateway | `string` | `"portkeyai/gateway:1.15.2"` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
+| <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
 | <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are Portkey-compatible routing JSON. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr"></a> [vpc\_cidr](#input\_vpc\_cidr) | CIDR block for the VPC | `string` | `"10.0.0.0/16"` | no |
 

@@ -14,11 +14,22 @@ data "aws_availability_zones" "available" {
 module "observability" {
   source = "./modules/observability"
 
-  project_name        = var.project_name
-  environment         = var.environment
-  aws_region          = var.aws_region
-  account_id          = data.aws_caller_identity.current.account_id
-  enable_cost_widgets = var.enable_cost_attribution
+  project_name         = var.project_name
+  environment          = var.environment
+  aws_region           = var.aws_region
+  account_id           = data.aws_caller_identity.current.account_id
+  enable_cost_widgets  = var.enable_cost_attribution
+  enable_cache_widgets = var.enable_cache
+
+  # Alarm configuration
+  alarm_sns_topic_arns          = var.alarm_sns_topic_arns
+  budget_limit_daily_usd        = var.budget_limit_daily_usd
+  budget_alarm_threshold_pct    = var.budget_alarm_threshold_pct
+  error_rate_threshold_pct      = var.error_rate_threshold_pct
+  error_rate_evaluation_minutes = var.error_rate_evaluation_minutes
+  p99_latency_threshold_ms      = var.p99_latency_threshold_ms
+  latency_evaluation_minutes    = var.latency_evaluation_minutes
+  provider_down_minutes         = var.provider_down_minutes
 }
 
 # -----------------------------------------------------------------------------

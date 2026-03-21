@@ -11,6 +11,12 @@ set -euo pipefail
 #   ./cw-queries.sh errors
 #   ./cw-queries.sh latency
 #   ./cw-queries.sh endpoints
+#   ./cw-queries.sh tokens
+#   ./cw-queries.sh cost
+#   ./cw-queries.sh cache
+#   ./cw-queries.sh budget
+#   ./cw-queries.sh ttft
+#   ./cw-queries.sh expensive
 #
 # Environment variables:
 #   LOG_GROUP    — Override the target log group (default: /ecs/ai-gateway/gateway)
@@ -81,32 +87,89 @@ query_endpoints() {
 }
 
 # ---------------------------------------------------------------------------
-# Set 2: Cost & Token Visibility (PENDING: requires cost-visibility pipeline)
+# Set 2: Cost & Token Visibility
 # ---------------------------------------------------------------------------
-# These queries target custom fields emitted by the cost-visibility pipeline
-# once token counting and cost attribution are wired in.
-#
-# query_tokens() {
-#   run_query "Token usage by provider and model" \
-#     "fields @timestamp, provider, model, promptTokens, completionTokens
-# | filter ispresent(promptTokens)
-# | stats sum(promptTokens) as total_prompt,
-#         sum(completionTokens) as total_completion,
-#         sum(promptTokens + completionTokens) as total_tokens
-#   by provider, model
-# | sort total_tokens desc"
-# }
-#
-# query_cost() {
-#   run_query "Estimated cost by provider and model" \
-#     "fields @timestamp, provider, model, estimatedCostUsd
-# | filter ispresent(estimatedCostUsd)
-# | stats sum(estimatedCostUsd) as total_cost,
-#         avg(estimatedCostUsd) as avg_cost,
-#         count(*) as requests
-#   by provider, model
-# | sort total_cost desc"
-# }
+
+query_tokens() {
+  run_query "Token usage by provider and model" \
+    "fields @timestamp, provider, model, usage.prompt_tokens, usage.completion_tokens
+| filter ispresent(usage.prompt_tokens)
+| stats sum(usage.prompt_tokens) as total_prompt,
+        sum(usage.completion_tokens) as total_completion,
+        sum(usage.prompt_tokens + usage.completion_tokens) as total_tokens
+  by provider, model
+| sort total_tokens desc"
+}
+
+query_cost() {
+  run_query "Estimated cost by provider and model" \
+    "fields @timestamp, provider, model, estimatedCostUsd
+| filter ispresent(estimatedCostUsd)
+| stats sum(estimatedCostUsd) as total_cost,
+        avg(estimatedCostUsd) as avg_cost,
+        count(*) as requests
+  by provider, model
+| sort total_cost desc"
+}
+
+# ---------------------------------------------------------------------------
+# Set 3: Cache Performance
+# ---------------------------------------------------------------------------
+
+query_cache() {
+  run_query "Cache hit rate by hour" \
+    "fields @timestamp, cacheHit, cacheTokensSaved
+| filter ispresent(cacheHit)
+| stats sum(cacheHit) as hits,
+        sum(not cacheHit) as misses,
+        sum(cacheHit) / count(*) * 100 as hit_rate_pct,
+        sum(cacheTokensSaved) as tokens_saved
+  by bin(1h)
+| sort bin(1h) desc"
+}
+
+# ---------------------------------------------------------------------------
+# Set 4: Budget Utilization
+# ---------------------------------------------------------------------------
+
+query_budget() {
+  run_query "Budget utilization (daily spend)" \
+    "fields @timestamp, estimatedCostUsd
+| filter ispresent(estimatedCostUsd)
+| stats sum(estimatedCostUsd) as daily_spend
+  by bin(1d)
+| sort bin(1d) desc
+| limit 7"
+}
+
+# ---------------------------------------------------------------------------
+# Set 5: Time to First Token
+# ---------------------------------------------------------------------------
+
+query_ttft() {
+  run_query "TTFT percentiles by provider and model" \
+    "fields @timestamp, timeToFirstToken, \`req.headers.x-portkey-provider\` as provider, model
+| filter ispresent(timeToFirstToken)
+| stats pct(timeToFirstToken, 50) as p50_ms,
+        pct(timeToFirstToken, 95) as p95_ms,
+        pct(timeToFirstToken, 99) as p99_ms,
+        avg(timeToFirstToken) as avg_ms
+  by provider, model
+| sort p99_ms desc"
+}
+
+# ---------------------------------------------------------------------------
+# Set 6: Top Expensive Requests
+# ---------------------------------------------------------------------------
+
+query_expensive() {
+  run_query "Top 50 most expensive requests" \
+    "fields @timestamp, \`req.headers.x-team-id\` as team, provider, model,
+       usage.prompt_tokens, usage.completion_tokens, estimatedCostUsd
+| filter ispresent(estimatedCostUsd)
+| sort estimatedCostUsd desc
+| limit 50"
+}
 
 # ---------------------------------------------------------------------------
 # Dispatcher
@@ -126,6 +189,24 @@ main() {
     endpoints)
       query_endpoints
       ;;
+    tokens)
+      query_tokens
+      ;;
+    cost)
+      query_cost
+      ;;
+    cache)
+      query_cache
+      ;;
+    budget)
+      query_budget
+      ;;
+    ttft)
+      query_ttft
+      ;;
+    expensive)
+      query_expensive
+      ;;
     all)
       query_requests
       echo ""
@@ -134,9 +215,21 @@ main() {
       query_latency
       echo ""
       query_endpoints
+      echo ""
+      query_tokens
+      echo ""
+      query_cost
+      echo ""
+      query_cache
+      echo ""
+      query_budget
+      echo ""
+      query_ttft
+      echo ""
+      query_expensive
       ;;
     *)
-      echo "Usage: $0 {requests|errors|latency|endpoints|all}" >&2
+      echo "Usage: $0 {requests|errors|latency|endpoints|tokens|cost|cache|budget|ttft|expensive|all}" >&2
       exit 1
       ;;
   esac
