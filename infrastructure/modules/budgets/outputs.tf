@@ -27,3 +27,13 @@ output "lambda_policy_arn" {
   description = "ARN of the IAM policy for Lambda access to budget tables"
   value       = var.enable_budgets ? aws_iam_policy.budget_lambda[0].arn : null
 }
+
+output "budget_alerts_topic_arn" {
+  description = "ARN of the SNS topic for budget threshold alerts (E.6)"
+  value       = var.enable_budgets ? aws_sns_topic.budget_alerts[0].arn : null
+}
+
+output "budget_alerts_publish_policy_arn" {
+  description = "ARN of the IAM policy for publishing to the budget alerts SNS topic"
+  value       = var.enable_budgets ? aws_iam_policy.budget_alerts_publish[0].arn : null
+}

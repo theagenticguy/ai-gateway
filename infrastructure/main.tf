@@ -144,6 +144,11 @@ module "cost_attribution" {
   enable_cost_attribution = var.enable_cost_attribution
   gateway_log_group_name  = module.observability.gateway_log_group_name
   gateway_log_group_arn   = module.observability.gateway_log_group_arn
+
+  # E.6: Budget alerts integration
+  usage_table                 = var.enable_budgets ? module.budgets[0].usage_table_name : ""
+  budgets_table               = var.enable_budgets ? module.budgets[0].budgets_table_name : ""
+  budget_alerts_sns_topic_arn = var.enable_budgets ? module.budgets[0].budget_alerts_topic_arn : ""
 }
 
 # Content Scanner (Lambda: PII redaction + prompt injection detection)

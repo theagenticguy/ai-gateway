@@ -26,3 +26,21 @@ variable "enable_cost_attribution" {
 variable "account_id" {
   type = string
 }
+
+variable "usage_table" {
+  description = "DynamoDB table name for accumulated usage records"
+  type        = string
+  default     = ""
+}
+
+variable "budgets_table" {
+  description = "DynamoDB table name for budget configurations"
+  type        = string
+  default     = ""
+}
+
+variable "budget_alerts_sns_topic_arn" {
+  description = "ARN of the SNS topic for budget alerts (E.6)"
+  type        = string
+  default     = ""
+}

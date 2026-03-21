@@ -87,6 +87,12 @@ resource "aws_iam_role_policy" "enforcement_lambda" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = aws_kms_key.enforcement_lambda_env[0].arn
+      },
+      {
+        Sid      = "SNSPublishAlerts"
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = var.enable_budgets ? [aws_sns_topic.budget_alerts[0].arn] : []
       }
     ]
   })
@@ -117,12 +123,14 @@ resource "aws_lambda_function" "budget_enforcement" {
 
   environment {
     variables = {
-      BUDGETS_TABLE           = var.budgets_table
-      USAGE_TABLE             = var.usage_table
-      TIER_DEFAULT_FREE       = var.tier_default_free
-      TIER_DEFAULT_STANDARD   = var.tier_default_standard
-      TIER_DEFAULT_PREMIUM    = var.tier_default_premium
-      TIER_DEFAULT_ENTERPRISE = var.tier_default_enterprise
+      BUDGETS_TABLE               = var.budgets_table
+      USAGE_TABLE                 = var.usage_table
+      TIER_DEFAULTS               = jsonencode(var.tier_defaults)
+      BUDGET_ALERTS_SNS_TOPIC_ARN = var.enable_budgets ? aws_sns_topic.budget_alerts[0].arn : ""
+      TIER_DEFAULT_FREE           = var.tier_default_free
+      TIER_DEFAULT_STANDARD       = var.tier_default_standard
+      TIER_DEFAULT_PREMIUM        = var.tier_default_premium
+      TIER_DEFAULT_ENTERPRISE     = var.tier_default_enterprise
     }
   }
 

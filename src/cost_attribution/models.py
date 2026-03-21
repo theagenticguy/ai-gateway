@@ -123,6 +123,15 @@ class TenantTier(StrEnum):
     ENTERPRISE = "enterprise"
 
 
+class ModelLimit(BaseModel):
+    """Per-model spending limit within a team budget (E.5)."""
+
+    monthly_usd: Decimal = Field(default=Decimal(0), ge=0, description="Monthly USD cap for this model")
+    daily_tokens: int = Field(default=-1, description="Daily token cap for this model (-1 for unlimited)")
+
+    model_config = {"frozen": True}
+
+
 class BudgetRecord(BaseModel):
     """A budget configuration stored in DynamoDB.
 
@@ -145,6 +154,18 @@ class BudgetRecord(BaseModel):
         default=Decimal("100.0"),
         ge=0,
         description="Percentage at which to block requests",
+    )
+    model_limits: dict[str, ModelLimit] = Field(
+        default_factory=dict,
+        description="Per-model spending limits (E.5)",
+    )
+    alert_thresholds: list[int] = Field(
+        default_factory=lambda: [50, 80, 100],
+        description="Budget utilization percentages that trigger SNS alerts (E.6)",
+    )
+    alerts_sent: list[int] = Field(
+        default_factory=list,
+        description="Threshold percentages for which alerts have already been sent",
     )
 
     model_config = {"frozen": True}

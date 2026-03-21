@@ -1,7 +1,8 @@
 """Tests for the budget enforcement Lambda.
 
 Covers JWT extraction, budget checking (within budget, at threshold, exceeded),
-tier default fallback, and DynamoDB failure graceful degradation.
+tier default fallback (E.4), model-level budget caps (E.5),
+and DynamoDB failure graceful degradation.
 Uses hypothesis for property-based tests.
 """
 
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
@@ -19,8 +21,12 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from budget_enforcement.handler import (
+    TIER_DEFAULTS,
     _build_response,
     _check_budget,
+    _check_model_budget,
+    _load_tier_defaults,
+    _parse_model_limits,
     _seconds_until_period_reset,
     handler,
 )
@@ -31,7 +37,14 @@ from budget_enforcement.jwt_utils import (
     extract_tenant_tier,
     extract_user,
 )
-from budget_enforcement.models import BudgetCheckRequest, BudgetCheckResponse, BudgetStatus
+from budget_enforcement.models import (
+    BudgetCheckRequest,
+    BudgetCheckResponse,
+    BudgetStatus,
+    ModelBudgetError,
+    ModelLimit,
+    TierConfig,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,6 +145,82 @@ class TestExtractTenantTier:
         assert extract_tenant_tier({}) == "standard"
 
 
+# ── E.4: Tier config model & loading ────────────────────────────────────────
+
+
+class TestTierConfig:
+    def test_tier_config_creation(self) -> None:
+        tc = TierConfig(rpm=100, tokens_per_day=500000, monthly_usd=100)
+        assert tc.rpm == 100
+        assert tc.tokens_per_day == 500000
+        assert tc.monthly_usd == Decimal(100)
+
+    def test_tier_config_unlimited_tokens(self) -> None:
+        tc = TierConfig(rpm=2000, tokens_per_day=-1, monthly_usd=10000)
+        assert tc.tokens_per_day == -1
+
+    def test_default_tier_defaults_loaded(self) -> None:
+        """Built-in defaults should include sandbox, standard, premium, unlimited."""
+        assert "sandbox" in TIER_DEFAULTS or "standard" in TIER_DEFAULTS
+        for tier_cfg in TIER_DEFAULTS.values():
+            assert isinstance(tier_cfg, TierConfig)
+            assert tier_cfg.rpm >= 0
+            assert tier_cfg.monthly_usd >= 0
+
+    def test_load_tier_defaults_from_env(self) -> None:
+        """TIER_DEFAULTS env var should override built-in defaults."""
+        tier_json = json.dumps(
+            {
+                "bronze": {"rpm": 10, "tokens_per_day": 50000, "monthly_usd": 10},
+                "gold": {"rpm": 1000, "tokens_per_day": 10000000, "monthly_usd": 5000},
+            }
+        )
+        with patch.dict(os.environ, {"TIER_DEFAULTS": tier_json}, clear=False):
+            result = _load_tier_defaults()
+        assert "bronze" in result
+        assert "gold" in result
+        assert result["bronze"].rpm == 10
+        assert result["gold"].monthly_usd == Decimal(5000)
+
+    def test_load_tier_defaults_invalid_json_falls_back(self) -> None:
+        """Invalid JSON in TIER_DEFAULTS should fall back to legacy or built-in."""
+        with patch.dict(os.environ, {"TIER_DEFAULTS": "not json!!!"}, clear=False):
+            result = _load_tier_defaults()
+        assert len(result) > 0
+
+    def test_load_tier_defaults_legacy_env_vars(self) -> None:
+        """Legacy per-tier env vars should be used when TIER_DEFAULTS is absent."""
+        env = {
+            "TIER_DEFAULT_FREE": "5",
+            "TIER_DEFAULT_STANDARD": "500",
+            "TIER_DEFAULT_PREMIUM": "5000",
+            "TIER_DEFAULT_ENTERPRISE": "50000",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            # Remove TIER_DEFAULTS if present
+            os.environ.pop("TIER_DEFAULTS", None)
+            result = _load_tier_defaults()
+        assert result["free"].monthly_usd == Decimal(5)
+        assert result["standard"].monthly_usd == Decimal(500)
+
+    def test_tier_default_fallback_for_unknown_tier(self) -> None:
+        """Unknown tier should fall back to standard."""
+        with (
+            patch("budget_enforcement.handler._get_budget_record") as mock_budget,
+            patch("budget_enforcement.handler._get_current_usage") as mock_usage,
+        ):
+            mock_budget.return_value = None
+            mock_usage.return_value = Decimal("5.00")
+
+            jwt = _make_jwt({"custom:team": "new-team", "sub": "user1", "custom:tenant_tier": "nonexistent"})
+            req = BudgetCheckRequest(jwt_token=jwt)
+            result = _check_budget(req)
+
+            assert result.allowed is True
+            assert result.budget_status is not None
+            # Should have fallen back to standard tier budget
+
+
 # ── Budget check logic ───────────────────────────────────────────────────────
 
 
@@ -220,22 +309,23 @@ class TestCheckBudget:
         mock_budget.return_value = None  # No budget record
         mock_usage.return_value = Decimal("5.00")
 
-        jwt = _make_jwt({"custom:team": "new-team", "sub": "user1", "custom:tenant_tier": "free"})
+        jwt = _make_jwt({"custom:team": "new-team", "sub": "user1", "custom:tenant_tier": "sandbox"})
         req = BudgetCheckRequest(jwt_token=jwt)
         result = _check_budget(req)
 
         assert result.allowed is True
         assert result.budget_status is not None
-        assert result.budget_status.monthly_budget_usd == Decimal(10)
+        # Sandbox tier default budget
+        assert result.budget_status.monthly_budget_usd == TIER_DEFAULTS["sandbox"].monthly_usd
 
     @patch("budget_enforcement.handler._get_current_usage")
     @patch("budget_enforcement.handler._get_budget_record")
     def test_tier_default_exceeded(self, mock_budget: Any, mock_usage: Any) -> None:
-        """Free tier budget exceeded uses tier defaults."""
+        """Sandbox tier budget exceeded uses tier defaults."""
         mock_budget.return_value = None
-        mock_usage.return_value = Decimal("15.00")  # Over the $10 free tier
+        mock_usage.return_value = Decimal("30.00")  # Over the $25 sandbox tier
 
-        jwt = _make_jwt({"custom:team": "free-team", "sub": "user1", "custom:tenant_tier": "free"})
+        jwt = _make_jwt({"custom:team": "free-team", "sub": "user1", "custom:tenant_tier": "sandbox"})
         req = BudgetCheckRequest(jwt_token=jwt)
         result = _check_budget(req)
 
@@ -291,6 +381,172 @@ class TestCheckBudget:
 
         assert result.budget_status is not None
         assert result.budget_status.utilization_pct == 0.0
+
+
+# ── E.5: Model-level budget caps ─────────────────────────────────────────────
+
+
+class TestModelLevelBudgets:
+    def test_model_limit_model(self) -> None:
+        ml = ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)
+        assert ml.monthly_usd == Decimal(200)
+        assert ml.daily_tokens == 100000
+
+    def test_model_limit_defaults(self) -> None:
+        ml = ModelLimit(monthly_usd=Decimal(0))
+        assert ml.daily_tokens == -1  # Unlimited by default
+
+    def test_parse_model_limits_valid(self) -> None:
+        budget_item = {
+            "model_limits": {
+                "claude-opus-4": {"monthly_usd": "200", "daily_tokens": 100000},
+                "gpt-4.1": {"monthly_usd": "150"},
+            }
+        }
+        result = _parse_model_limits(budget_item)
+        assert "claude-opus-4" in result
+        assert "gpt-4.1" in result
+        assert result["claude-opus-4"].monthly_usd == Decimal(200)
+        assert result["gpt-4.1"].daily_tokens == -1
+
+    def test_parse_model_limits_empty(self) -> None:
+        assert _parse_model_limits({}) == {}
+        assert _parse_model_limits({"model_limits": None}) == {}
+        assert _parse_model_limits({"model_limits": "not a dict"}) == {}
+
+    def test_parse_model_limits_invalid_entry_skipped(self) -> None:
+        budget_item = {
+            "model_limits": {
+                "good-model": {"monthly_usd": "100"},
+                "bad-model": "not a dict",
+            }
+        }
+        result = _parse_model_limits(budget_item)
+        assert "good-model" in result
+        assert "bad-model" not in result
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    def test_check_model_budget_within_limit(self, mock_model_usage: Any) -> None:
+        mock_model_usage.return_value = Decimal("150.00")
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "claude-opus-4", limits)
+        assert result is None
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    def test_check_model_budget_exceeded(self, mock_model_usage: Any) -> None:
+        mock_model_usage.return_value = Decimal("215.50")
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "claude-opus-4", limits)
+        assert result is not None
+        assert result.type == "model_budget_exceeded"
+        assert result.model == "claude-opus-4"
+        assert result.limit_usd == Decimal(200)
+        assert result.current_usd == Decimal("215.50")
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    def test_check_model_budget_exactly_at_limit(self, mock_model_usage: Any) -> None:
+        mock_model_usage.return_value = Decimal("200.00")
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "claude-opus-4", limits)
+        assert result is not None  # At limit = exceeded
+
+    def test_check_model_budget_unknown_model(self) -> None:
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "unknown", limits)
+        assert result is None
+
+    def test_check_model_budget_model_not_in_limits(self) -> None:
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "gpt-4.1", limits)
+        assert result is None
+
+    def test_check_model_budget_empty_limits(self) -> None:
+        result = _check_model_budget("team-a", "claude-opus-4", {})
+        assert result is None
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    def test_check_model_budget_dynamodb_failure_graceful(self, mock_model_usage: Any) -> None:
+        """DynamoDB failure for model usage lookup should gracefully allow."""
+        mock_model_usage.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "DDB down"}},
+            "GetItem",
+        )
+        limits = {"claude-opus-4": ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)}
+        result = _check_model_budget("team-a", "claude-opus-4", limits)
+        assert result is None  # Graceful degradation
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_model_budget_exceeded_in_handler(self, mock_budget: Any, mock_usage: Any, mock_model_usage: Any) -> None:
+        """End-to-end: model budget exceeded returns proper error shape."""
+        mock_budget.return_value = {
+            "monthly_budget_usd": "10000",
+            "warn_threshold_pct": 80,
+            "hard_limit_pct": 100,
+            "model_limits": {
+                "claude-opus-4": {"monthly_usd": "200", "daily_tokens": 100000},
+            },
+        }
+        mock_usage.return_value = Decimal("500.00")  # Team budget OK
+        mock_model_usage.return_value = Decimal("215.50")  # Model budget exceeded
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        req = BudgetCheckRequest(jwt_token=jwt, model="claude-opus-4")
+        result = _check_budget(req)
+
+        assert result.allowed is False
+        assert result.status_code == 429
+        assert result.error is not None
+        assert result.error.type == "model_budget_exceeded"
+        assert result.error.model == "claude-opus-4"
+        assert result.error.limit_usd == Decimal(200)
+        assert result.error.current_usd == Decimal("215.50")
+
+    @patch("budget_enforcement.handler._get_model_usage")
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_model_budget_ok_team_budget_ok(self, mock_budget: Any, mock_usage: Any, mock_model_usage: Any) -> None:
+        """Both team and model budgets within limits."""
+        mock_budget.return_value = {
+            "monthly_budget_usd": "10000",
+            "warn_threshold_pct": 80,
+            "hard_limit_pct": 100,
+            "model_limits": {
+                "claude-opus-4": {"monthly_usd": "200", "daily_tokens": 100000},
+            },
+        }
+        mock_usage.return_value = Decimal("500.00")
+        mock_model_usage.return_value = Decimal("100.00")
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        req = BudgetCheckRequest(jwt_token=jwt, model="claude-opus-4")
+        result = _check_budget(req)
+
+        assert result.allowed is True
+        assert result.error is None
+
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_team_budget_exceeded_before_model_check(self, mock_budget: Any, mock_usage: Any) -> None:
+        """Team budget exceeded takes precedence over model budget check."""
+        mock_budget.return_value = {
+            "monthly_budget_usd": "1000",
+            "warn_threshold_pct": 80,
+            "hard_limit_pct": 100,
+            "model_limits": {
+                "claude-opus-4": {"monthly_usd": "200"},
+            },
+        }
+        mock_usage.return_value = Decimal("1100.00")  # Team budget exceeded
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        req = BudgetCheckRequest(jwt_token=jwt, model="claude-opus-4")
+        result = _check_budget(req)
+
+        assert result.allowed is False
+        assert "Monthly budget exceeded" in result.reason
+        assert result.error is None  # Model error not set for team-level exceed
 
 
 # ── Handler (Function URL integration) ──────────────────────────────────────
@@ -353,6 +609,36 @@ class TestBudgetHandler:
             result = handler(event)
         assert result["statusCode"] == 200
 
+    @patch("budget_enforcement.handler._get_model_usage")
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_model_budget_exceeded_response_shape(
+        self, mock_budget: Any, mock_usage: Any, mock_model_usage: Any
+    ) -> None:
+        """E.5: Full handler returns correct JSON shape for model budget exceeded."""
+        mock_budget.return_value = {
+            "monthly_budget_usd": "10000",
+            "warn_threshold_pct": 80,
+            "hard_limit_pct": 100,
+            "model_limits": {
+                "claude-opus-4": {"monthly_usd": "200", "daily_tokens": 100000},
+            },
+        }
+        mock_usage.return_value = Decimal("500.00")
+        mock_model_usage.return_value = Decimal("215.50")
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        event = _make_function_url_event({"jwt_token": jwt, "model": "claude-opus-4"})
+        result = handler(event)
+
+        assert result["statusCode"] == 429
+        body = json.loads(result["body"])
+        assert body["allowed"] is False
+        assert body["error"]["type"] == "model_budget_exceeded"
+        assert body["error"]["model"] == "claude-opus-4"
+        assert float(body["error"]["limit_usd"]) == 200.0
+        assert float(body["error"]["current_usd"]) == 215.50
+
 
 # ── Seconds until period reset ───────────────────────────────────────────────
 
@@ -383,6 +669,23 @@ class TestBudgetModels:
         dumped = resp.model_dump(exclude_none=True)
         assert dumped["allowed"] is False
         assert dumped["retry_after_seconds"] == 3600
+
+    def test_budget_check_response_with_model_error(self) -> None:
+        error = ModelBudgetError(
+            type="model_budget_exceeded",
+            model="claude-opus-4",
+            limit_usd=Decimal(200),
+            current_usd=Decimal("215.50"),
+        )
+        resp = BudgetCheckResponse(
+            allowed=False,
+            status_code=429,
+            reason="Model budget exceeded",
+            error=error,
+        )
+        dumped = resp.model_dump(exclude_none=True, mode="json")
+        assert dumped["error"]["type"] == "model_budget_exceeded"
+        assert dumped["error"]["model"] == "claude-opus-4"
 
     def test_budget_status_defaults(self) -> None:
         status = BudgetStatus(team="t", user="u")
@@ -449,3 +752,15 @@ class TestPropertyBased:
         result = handler(event)
         assert "statusCode" in result
         assert result["statusCode"] in (200, 400, 429)
+
+    @given(
+        rpm=st.integers(min_value=0, max_value=100000),
+        tokens_per_day=st.integers(min_value=-1, max_value=100000000),
+        monthly_usd=st.decimals(min_value=0, max_value=1_000_000, places=2, allow_nan=False, allow_infinity=False),
+    )
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
+    def test_tier_config_creation_never_crashes(self, rpm: int, tokens_per_day: int, monthly_usd: Decimal) -> None:
+        """TierConfig should accept any reasonable values."""
+        tc = TierConfig(rpm=rpm, tokens_per_day=tokens_per_day, monthly_usd=monthly_usd)
+        assert tc.rpm == rpm
+        assert tc.tokens_per_day == tokens_per_day

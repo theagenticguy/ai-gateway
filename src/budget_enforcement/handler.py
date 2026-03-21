@@ -29,7 +29,14 @@ from budget_enforcement.jwt_utils import (
     extract_tenant_tier,
     extract_user,
 )
-from budget_enforcement.models import BudgetCheckRequest, BudgetCheckResponse, BudgetStatus
+from budget_enforcement.models import (
+    BudgetCheckRequest,
+    BudgetCheckResponse,
+    BudgetStatus,
+    ModelBudgetError,
+    ModelLimit,
+    TierConfig,
+)
 
 logger = logging.getLogger("budget_enforcement")
 logger.setLevel(logging.INFO)
@@ -52,13 +59,55 @@ if not logger.handlers:
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 
-# Tier defaults (monthly budget in USD)
-TIER_DEFAULTS: dict[str, Decimal] = {
-    "free": Decimal(os.environ.get("TIER_DEFAULT_FREE", "10")),
-    "standard": Decimal(os.environ.get("TIER_DEFAULT_STANDARD", "1000")),
-    "premium": Decimal(os.environ.get("TIER_DEFAULT_PREMIUM", "10000")),
-    "enterprise": Decimal(os.environ.get("TIER_DEFAULT_ENTERPRISE", "100000")),
+# ── Tier defaults ────────────────────────────────────────────────────────────
+# E.4: Load tier defaults from TIER_DEFAULTS env var (JSON) or fall back to
+# legacy per-tier env vars for backward compatibility.
+
+_DEFAULT_TIER_DEFAULTS: dict[str, dict[str, Any]] = {
+    "sandbox": {"rpm": 20, "tokens_per_day": 100000, "monthly_usd": 25},
+    "standard": {"rpm": 100, "tokens_per_day": 500000, "monthly_usd": 100},
+    "premium": {"rpm": 500, "tokens_per_day": 5000000, "monthly_usd": 1000},
+    "unlimited": {"rpm": 2000, "tokens_per_day": -1, "monthly_usd": 10000},
 }
+
+
+def _load_tier_defaults() -> dict[str, TierConfig]:
+    """Load tier defaults from the TIER_DEFAULTS env var (JSON) or built-in defaults."""
+    raw = os.environ.get("TIER_DEFAULTS", "")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {k.lower(): TierConfig.model_validate(v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, ValidationError):
+            logger.warning("Failed to parse TIER_DEFAULTS env var, using built-in defaults", exc_info=True)
+
+    # Legacy fallback: per-tier env vars (monthly_usd only)
+    legacy_free = os.environ.get("TIER_DEFAULT_FREE")
+    if legacy_free is not None:
+        return {
+            "free": TierConfig(rpm=20, tokens_per_day=100000, monthly_usd=Decimal(legacy_free)),
+            "standard": TierConfig(
+                rpm=100,
+                tokens_per_day=500000,
+                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_STANDARD", "1000")),
+            ),
+            "premium": TierConfig(
+                rpm=500,
+                tokens_per_day=5000000,
+                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_PREMIUM", "10000")),
+            ),
+            "enterprise": TierConfig(
+                rpm=2000,
+                tokens_per_day=-1,
+                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_ENTERPRISE", "100000")),
+            ),
+        }
+
+    return {k: TierConfig.model_validate(v) for k, v in _DEFAULT_TIER_DEFAULTS.items()}
+
+
+TIER_DEFAULTS: dict[str, TierConfig] = _load_tier_defaults()
 
 dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
@@ -87,6 +136,20 @@ def _get_current_usage(team: str) -> Decimal:
         return Decimal("0.00")
 
 
+def _get_model_usage(team: str, model: str) -> Decimal:
+    """Fetch the current-period spend for a specific model within a team."""
+    table = dynamodb.Table(USAGE_TABLE)
+    period = datetime.now(tz=UTC).strftime("%Y-%m")
+    resp = table.get_item(Key={"pk": f"USAGE#TEAM#{team}#MODEL#{model}", "sk": f"PERIOD#{period}"})
+    item = resp.get("Item")
+    if not item:
+        return Decimal("0.00")
+    try:
+        return Decimal(str(item.get("total_cost_usd", "0")))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0.00")
+
+
 def _seconds_until_period_reset() -> int:
     """Seconds remaining until the start of next month (UTC)."""
     now = datetime.now(tz=UTC)
@@ -94,6 +157,52 @@ def _seconds_until_period_reset() -> int:
     end_of_month = now.replace(day=days_in_month, hour=23, minute=59, second=59)
     delta = end_of_month - now
     return max(1, int(delta.total_seconds()))
+
+
+# ── Model-level budget check (E.5) ──────────────────────────────────────────
+
+
+def _parse_model_limits(budget_item: dict[str, Any]) -> dict[str, ModelLimit]:
+    """Parse model_limits from a DynamoDB budget record."""
+    raw = budget_item.get("model_limits")
+    if not raw or not isinstance(raw, dict):
+        return {}
+    result: dict[str, ModelLimit] = {}
+    for model_name, limit_data in raw.items():
+        try:
+            if isinstance(limit_data, dict):
+                result[model_name] = ModelLimit.model_validate(limit_data)
+        except ValidationError:
+            logger.warning("Invalid model_limit for model=%s, skipping", model_name)
+    return result
+
+
+def _check_model_budget(team: str, model: str, model_limits: dict[str, ModelLimit]) -> ModelBudgetError | None:
+    """Check if a model-level budget cap is exceeded.
+
+    Returns a ``ModelBudgetError`` if the limit is exceeded, ``None`` otherwise.
+    """
+    if model == "unknown" or not model_limits:
+        return None
+
+    limit = model_limits.get(model)
+    if limit is None:
+        return None
+
+    try:
+        current_model_spend = _get_model_usage(team, model)
+    except (ClientError, Exception):
+        logger.warning("DynamoDB unreachable for model usage lookup (team=%s, model=%s)", team, model, exc_info=True)
+        return None  # Graceful degradation
+
+    if current_model_spend >= limit.monthly_usd:
+        return ModelBudgetError(
+            type="model_budget_exceeded",
+            model=model,
+            limit_usd=limit.monthly_usd,
+            current_usd=current_model_spend,
+        )
+    return None
 
 
 # ── Core budget check ────────────────────────────────────────────────────────
@@ -105,7 +214,8 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
     1. Decode JWT and extract identity claims.
     2. Look up the team's budget record in DynamoDB (fall back to tier defaults).
     3. Compare current spend against the budget.
-    4. Return allow/deny decision.
+    4. Check model-level budgets if applicable.
+    5. Return allow/deny decision.
     """
     claims = decode_jwt_payload(request.jwt_token)
     team = extract_team(claims)
@@ -113,12 +223,14 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
     cost_center = extract_cost_center(claims)
     tenant_tier = extract_tenant_tier(claims)
 
-    # Fetch budget config (DynamoDB failure → graceful allow)
+    # Fetch budget config (DynamoDB failure -> graceful allow)
     try:
         budget_item = _get_budget_record(team)
     except (ClientError, Exception):
         logger.warning("DynamoDB unreachable for budget lookup (team=%s), allowing request", team, exc_info=True)
         return BudgetCheckResponse(allowed=True, reason="budget-check-degraded")
+
+    model_limits: dict[str, ModelLimit] = {}
 
     if budget_item:
         try:
@@ -127,13 +239,20 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
             monthly_budget = Decimal(1000)
         warn_pct = float(budget_item.get("warn_threshold_pct", 80))
         hard_pct = float(budget_item.get("hard_limit_pct", 100))
+        model_limits = _parse_model_limits(budget_item)
     else:
-        # Fall back to tier defaults
-        monthly_budget = TIER_DEFAULTS.get(tenant_tier, TIER_DEFAULTS["standard"])
+        # E.4: Fall back to tier defaults with full TierConfig
+        tier_config = TIER_DEFAULTS.get(tenant_tier)
+        if tier_config is None:
+            # Unknown tier -> fall back to first available or standard-like defaults
+            tier_config = TIER_DEFAULTS.get(
+                "standard", TierConfig(rpm=100, tokens_per_day=500000, monthly_usd=Decimal(100))
+            )
+        monthly_budget = tier_config.monthly_usd
         warn_pct = 80.0
         hard_pct = 100.0
 
-    # Fetch current spend (DynamoDB failure → graceful allow)
+    # Fetch current spend (DynamoDB failure -> graceful allow)
     try:
         current_spend = _get_current_usage(team)
     except (ClientError, Exception):
@@ -154,7 +273,7 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
         hard_limit_pct=hard_pct,
     )
 
-    # Hard limit exceeded → block
+    # Hard limit exceeded -> block
     if utilization_pct >= hard_pct:
         logger.info(
             "Budget exceeded for team=%s (%.1f%% >= %.1f%% of $%s)",
@@ -171,7 +290,27 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
             retry_after_seconds=_seconds_until_period_reset(),
         )
 
-    # Warning threshold → allow with warning
+    # E.5: Check model-level budget caps
+    if model_limits and request.model != "unknown":
+        model_error = _check_model_budget(team, request.model, model_limits)
+        if model_error is not None:
+            logger.info(
+                "Model budget exceeded for team=%s model=%s ($%s >= $%s)",
+                team,
+                request.model,
+                model_error.current_usd,
+                model_error.limit_usd,
+            )
+            return BudgetCheckResponse(
+                allowed=False,
+                status_code=429,
+                reason=f"Model budget exceeded for {request.model}",
+                budget_status=budget_status,
+                error=model_error,
+                retry_after_seconds=_seconds_until_period_reset(),
+            )
+
+    # Warning threshold -> allow with warning
     if utilization_pct >= warn_pct:
         logger.info(
             "Budget warning for team=%s (%.1f%% >= %.1f%% of $%s)",

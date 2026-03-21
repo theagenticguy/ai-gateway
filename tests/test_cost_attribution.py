@@ -1,8 +1,10 @@
 """Property-based fuzz tests for the cost attribution handler.
 
 Uses hypothesis to generate random inputs and verify the handler
-never crashes on any input shape — only raises controlled exceptions
+never crashes on any input shape -- only raises controlled exceptions
 or returns valid results.
+
+Also covers E.5 (model-level usage tracking) and E.6 (budget alerts).
 """
 
 from __future__ import annotations
@@ -10,14 +12,27 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cost_attribution.handler import _extract_metrics, handler
-from cost_attribution.models import HandlerResponse, LogRecord, MetricResult, UsageMetrics
+from cost_attribution.handler import (
+    _extract_metrics,
+    _find_top_model,
+    check_and_publish_alerts,
+    detect_crossed_thresholds,
+    handler,
+)
+from cost_attribution.models import (
+    HandlerResponse,
+    LogRecord,
+    MetricResult,
+    ModelLimit,
+    UsageMetrics,
+)
 from cost_attribution.pricing import TokenPrice, get_cache_savings, get_cost
 
 # ── Strategies ───────────────────────────────────────────────────────────────
@@ -178,7 +193,7 @@ class TestTokenPrice:
         assert savings > 0
 
     def test_get_cache_savings_clamped_to_zero(self) -> None:
-        # Huge cache creation with tiny reads → clamped to 0
+        # Huge cache creation with tiny reads -> clamped to 0
         savings = get_cache_savings("openai", "gpt-4.1", 0, 100000)
         assert savings == 0.0
 
@@ -196,6 +211,27 @@ class TestHandlerResponse:
         resp = HandlerResponse(statusCode=400, error="bad request")
         dumped = resp.model_dump(exclude_none=True)
         assert dumped["error"] == "bad request"
+
+
+# ── ModelLimit model (E.5) ───────────────────────────────────────────────────
+
+
+class TestModelLimit:
+    def test_model_limit_creation(self) -> None:
+        ml = ModelLimit(monthly_usd=Decimal(200), daily_tokens=100000)
+        assert ml.monthly_usd == Decimal(200)
+        assert ml.daily_tokens == 100000
+
+    def test_model_limit_frozen(self) -> None:
+        import pytest  # noqa: PLC0415
+
+        ml = ModelLimit(monthly_usd=Decimal(200))
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            ml.monthly_usd = Decimal(300)  # type: ignore[misc]
+
+    def test_model_limit_defaults(self) -> None:
+        ml = ModelLimit(monthly_usd=Decimal(0))
+        assert ml.daily_tokens == -1
 
 
 # ── _extract_metrics ─────────────────────────────────────────────────────────
@@ -275,6 +311,304 @@ class TestExtractMetrics:
         assert _extract_metrics(log_event) is None
 
 
+# ── E.6: Alert threshold detection ──────────────────────────────────────────
+
+
+class TestDetectCrossedThresholds:
+    def test_no_thresholds_crossed(self) -> None:
+        result = detect_crossed_thresholds(40.0, [50, 80, 100], [])
+        assert result == []
+
+    def test_fifty_pct_crossed(self) -> None:
+        result = detect_crossed_thresholds(55.0, [50, 80, 100], [])
+        assert result == [50]
+
+    def test_multiple_thresholds_crossed(self) -> None:
+        result = detect_crossed_thresholds(85.0, [50, 80, 100], [])
+        assert result == [50, 80]
+
+    def test_all_thresholds_crossed(self) -> None:
+        result = detect_crossed_thresholds(110.0, [50, 80, 100], [])
+        assert result == [50, 80, 100]
+
+    def test_already_sent_excluded(self) -> None:
+        result = detect_crossed_thresholds(85.0, [50, 80, 100], [50])
+        assert result == [80]
+
+    def test_all_already_sent(self) -> None:
+        result = detect_crossed_thresholds(110.0, [50, 80, 100], [50, 80, 100])
+        assert result == []
+
+    def test_exact_threshold(self) -> None:
+        result = detect_crossed_thresholds(50.0, [50, 80, 100], [])
+        assert result == [50]
+
+    def test_just_below_threshold(self) -> None:
+        result = detect_crossed_thresholds(49.9, [50, 80, 100], [])
+        assert result == []
+
+    def test_empty_thresholds(self) -> None:
+        result = detect_crossed_thresholds(90.0, [], [])
+        assert result == []
+
+    def test_custom_thresholds(self) -> None:
+        result = detect_crossed_thresholds(75.0, [25, 50, 75, 90], [])
+        assert result == [25, 50, 75]
+
+    @given(
+        utilization=st.floats(min_value=0, max_value=200, allow_nan=False, allow_infinity=False),
+        thresholds=st.lists(st.integers(min_value=1, max_value=200), min_size=0, max_size=10),
+        already_sent=st.lists(st.integers(min_value=1, max_value=200), min_size=0, max_size=10),
+    )
+    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
+    def test_detect_thresholds_never_crashes(
+        self, utilization: float, thresholds: list[int], already_sent: list[int]
+    ) -> None:
+        """detect_crossed_thresholds should never crash on any reasonable input."""
+        result = detect_crossed_thresholds(utilization, thresholds, already_sent)
+        assert isinstance(result, list)
+        # All returned thresholds should be in the original thresholds
+        for t in result:
+            assert t in thresholds
+        # No returned threshold should be in already_sent
+        for t in result:
+            assert t not in already_sent
+        # All returned thresholds should have been crossed
+        for t in result:
+            assert utilization >= t
+
+    @given(
+        utilization=st.floats(min_value=0, max_value=200, allow_nan=False, allow_infinity=False),
+        thresholds=st.lists(st.integers(min_value=1, max_value=200), min_size=0, max_size=10, unique=True),
+    )
+    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
+    def test_idempotency(self, utilization: float, thresholds: list[int]) -> None:
+        """Running with empty alerts_sent, then feeding results back, should yield no new alerts."""
+        first_pass = detect_crossed_thresholds(utilization, thresholds, [])
+        second_pass = detect_crossed_thresholds(utilization, thresholds, first_pass)
+        assert second_pass == []
+
+    @given(
+        utilization=st.floats(min_value=0, max_value=200, allow_nan=False, allow_infinity=False),
+        thresholds=st.lists(st.integers(min_value=1, max_value=200), min_size=0, max_size=10),
+    )
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
+    def test_results_always_sorted(self, utilization: float, thresholds: list[int]) -> None:
+        result = detect_crossed_thresholds(utilization, thresholds, [])
+        assert result == sorted(result)
+
+
+def _metric(
+    *,
+    provider: str = "openai",
+    model: str = "gpt-4",
+    cost_usd: float = 0.5,
+    team: str = "team-a",
+    user: str = "u1",
+) -> MetricResult:
+    """Helper to build a MetricResult with sensible defaults."""
+    return MetricResult(
+        provider=provider,
+        model=model,
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        cost_usd=cost_usd,
+        team=team,
+        user=user,
+    )
+
+
+class TestFindTopModel:
+    def test_single_model(self) -> None:
+        metrics = [_metric()]
+        assert _find_top_model(metrics, "team-a") == "gpt-4"
+
+    def test_multiple_models(self) -> None:
+        metrics = [
+            _metric(cost_usd=0.5),
+            _metric(provider="anthropic", model="claude-opus-4", cost_usd=2.0),
+            _metric(cost_usd=0.3),
+        ]
+        assert _find_top_model(metrics, "team-a") == "claude-opus-4"
+
+    def test_filters_by_team(self) -> None:
+        metrics = [
+            _metric(cost_usd=5.0, team="team-b"),
+            _metric(provider="anthropic", model="claude-opus-4", cost_usd=2.0),
+        ]
+        assert _find_top_model(metrics, "team-a") == "claude-opus-4"
+
+    def test_no_metrics_for_team(self) -> None:
+        metrics = [_metric(team="team-b")]
+        assert _find_top_model(metrics, "team-a") == "unknown"
+
+
+class TestCheckAndPublishAlerts:
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "")
+    def test_no_topic_arn_noop(self) -> None:
+        assert check_and_publish_alerts([_metric()]) == 0
+
+    def test_empty_metrics_noop(self) -> None:
+        assert check_and_publish_alerts([]) == 0
+
+    @patch("cost_attribution.handler.sns")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_publishes_alert_on_threshold_crossed(self, mock_ddb: Any, mock_sns: Any) -> None:
+        """Alert should be published when usage crosses a threshold."""
+        mock_budgets_table = MagicMock()
+        mock_usage_table = MagicMock()
+
+        def table_router(name: str) -> MagicMock:
+            if "budget" in name.lower():
+                return mock_budgets_table
+            return mock_usage_table
+
+        mock_ddb.Table.side_effect = table_router
+
+        mock_budgets_table.get_item.return_value = {
+            "Item": {
+                "monthly_budget_usd": Decimal(1000),
+                "alert_thresholds": [50, 80, 100],
+                "alerts_sent": [],
+            }
+        }
+        mock_usage_table.get_item.return_value = {
+            "Item": {"total_cost_usd": Decimal(550)}  # 55% -> crosses 50
+        }
+
+        result = check_and_publish_alerts([_metric(cost_usd=10.0)])
+
+        assert result == 1
+        mock_sns.publish.assert_called_once()
+        published_msg = json.loads(mock_sns.publish.call_args[1]["Message"])
+        assert published_msg["team"] == "team-a"
+        assert published_msg["threshold_pct"] == 50
+
+    @patch("cost_attribution.handler.sns")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_does_not_resend_alert(self, mock_ddb: Any, mock_sns: Any) -> None:
+        """Already-sent thresholds should not trigger new alerts."""
+        mock_budgets_table = MagicMock()
+        mock_usage_table = MagicMock()
+
+        def table_router(name: str) -> MagicMock:
+            if "budget" in name.lower():
+                return mock_budgets_table
+            return mock_usage_table
+
+        mock_ddb.Table.side_effect = table_router
+
+        mock_budgets_table.get_item.return_value = {
+            "Item": {
+                "monthly_budget_usd": Decimal(1000),
+                "alert_thresholds": [50, 80, 100],
+                "alerts_sent": [50],  # Already sent
+            }
+        }
+        mock_usage_table.get_item.return_value = {
+            "Item": {"total_cost_usd": Decimal(550)}  # 55%
+        }
+
+        result = check_and_publish_alerts([_metric(cost_usd=10.0)])
+
+        assert result == 0
+        mock_sns.publish.assert_not_called()
+
+    @patch("cost_attribution.handler.sns")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_multiple_thresholds_crossed_at_once(self, mock_ddb: Any, mock_sns: Any) -> None:
+        """Multiple thresholds crossed in one batch should publish multiple alerts."""
+        mock_budgets_table = MagicMock()
+        mock_usage_table = MagicMock()
+
+        def table_router(name: str) -> MagicMock:
+            if "budget" in name.lower():
+                return mock_budgets_table
+            return mock_usage_table
+
+        mock_ddb.Table.side_effect = table_router
+
+        mock_budgets_table.get_item.return_value = {
+            "Item": {
+                "monthly_budget_usd": Decimal(1000),
+                "alert_thresholds": [50, 80, 100],
+                "alerts_sent": [],
+            }
+        }
+        mock_usage_table.get_item.return_value = {
+            "Item": {"total_cost_usd": Decimal(850)}  # 85% -> crosses 50 and 80
+        }
+
+        result = check_and_publish_alerts([_metric(cost_usd=10.0)])
+
+        assert result == 2
+        assert mock_sns.publish.call_count == 2
+
+    @patch("cost_attribution.handler.sns")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_no_budget_record_no_alert(self, mock_ddb: Any, mock_sns: Any) -> None:
+        """Teams without a budget record should not generate alerts."""
+        mock_budgets_table = MagicMock()
+        mock_usage_table = MagicMock()
+
+        def table_router(name: str) -> MagicMock:
+            if "budget" in name.lower():
+                return mock_budgets_table
+            return mock_usage_table
+
+        mock_ddb.Table.side_effect = table_router
+
+        mock_budgets_table.get_item.return_value = {}  # No Item
+
+        result = check_and_publish_alerts([_metric(cost_usd=10.0)])
+
+        assert result == 0
+        mock_sns.publish.assert_not_called()
+
+    @patch("cost_attribution.handler.sns")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_updates_alerts_sent_in_dynamodb(self, mock_ddb: Any, mock_sns: Any) -> None:
+        """After publishing alerts, alerts_sent should be updated in DynamoDB."""
+        mock_budgets_table = MagicMock()
+        mock_usage_table = MagicMock()
+
+        def table_router(name: str) -> MagicMock:
+            if "budget" in name.lower():
+                return mock_budgets_table
+            return mock_usage_table
+
+        mock_ddb.Table.side_effect = table_router
+
+        mock_budgets_table.get_item.return_value = {
+            "Item": {
+                "monthly_budget_usd": Decimal(1000),
+                "alert_thresholds": [50, 80, 100],
+                "alerts_sent": [],
+            }
+        }
+        mock_usage_table.get_item.return_value = {"Item": {"total_cost_usd": Decimal(550)}}
+
+        check_and_publish_alerts([_metric(cost_usd=10.0)])
+
+        # Verify update_item was called to persist alerts_sent
+        mock_budgets_table.update_item.assert_called_once()
+        update_call = mock_budgets_table.update_item.call_args
+        assert update_call[1]["ExpressionAttributeValues"][":as"] == [50]
+
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123456789012:budget-alerts")
+    def test_unknown_team_skipped(self, mock_ddb: Any) -> None:
+        """Metrics with 'unknown' team should be skipped."""
+        result = check_and_publish_alerts([_metric(cost_usd=10.0, team="unknown")])
+        assert result == 0
+
+
 # ── handler (end-to-end) ─────────────────────────────────────────────────────
 
 
@@ -287,9 +621,11 @@ def _make_event(log_events: list[dict]) -> dict:
 
 
 class TestHandler:
+    @patch("cost_attribution.handler.check_and_publish_alerts")
     @patch("cost_attribution.handler.dynamodb")
     @patch("cost_attribution.handler.cloudwatch")
-    def test_valid_event(self, mock_cw: Any, mock_ddb: Any) -> None:
+    def test_valid_event(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any) -> None:
+        mock_alerts.return_value = 0
         log_events = [
             {
                 "id": "1",
@@ -310,9 +646,11 @@ class TestHandler:
         result = handler({"awslogs": {"data": "not-valid-base64!!!"}})
         assert result["statusCode"] == 400
 
+    @patch("cost_attribution.handler.check_and_publish_alerts")
     @patch("cost_attribution.handler.dynamodb")
     @patch("cost_attribution.handler.cloudwatch")
-    def test_mixed_events(self, mock_cw: Any, mock_ddb: Any) -> None:
+    def test_mixed_events(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any) -> None:
+        mock_alerts.return_value = 0
         log_events = [
             {"id": "1", "message": "garbage"},
             {
@@ -330,10 +668,12 @@ class TestHandler:
         assert result["processed"] == 1
         assert result["skipped"] == 1
 
+    @patch("cost_attribution.handler.check_and_publish_alerts")
     @patch("cost_attribution.handler.dynamodb")
     @patch("cost_attribution.handler.cloudwatch")
-    def test_dynamodb_failure_does_not_block(self, mock_cw: Any, mock_ddb: Any) -> None:
+    def test_dynamodb_failure_does_not_block(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any) -> None:
         """DynamoDB write failures must not affect the CloudWatch publishing flow."""
+        mock_alerts.return_value = 0
         mock_table = MagicMock()
         mock_table.update_item.side_effect = Exception("DynamoDB timeout")
         mock_ddb.Table.return_value = mock_table
@@ -354,11 +694,38 @@ class TestHandler:
         assert result["statusCode"] == 200
         assert result["processed"] == 1
 
-    @given(messages=st.lists(st.text(max_size=100), min_size=1, max_size=10))
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    @patch("cost_attribution.handler.check_and_publish_alerts")
     @patch("cost_attribution.handler.dynamodb")
     @patch("cost_attribution.handler.cloudwatch")
-    def test_never_crashes_on_random_messages(self, mock_cw: Any, mock_ddb: Any, messages: list[str]) -> None:
+    def test_alert_failure_does_not_block(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any) -> None:
+        """Alert publishing failures must not affect the main handler flow."""
+        mock_alerts.side_effect = Exception("SNS timeout")
+
+        log_events = [
+            {
+                "id": "1",
+                "message": json.dumps(
+                    {
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                        "model": "gpt-4",
+                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                    }
+                ),
+            }
+        ]
+        result = handler(_make_event(log_events))
+        assert result["statusCode"] == 200
+        assert result["processed"] == 1
+
+    @given(messages=st.lists(st.text(max_size=100), min_size=1, max_size=10))
+    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    @patch("cost_attribution.handler.check_and_publish_alerts")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_never_crashes_on_random_messages(
+        self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, messages: list[str]
+    ) -> None:
+        mock_alerts.return_value = 0
         log_events = [{"id": str(i), "message": m} for i, m in enumerate(messages)]
         result = handler(_make_event(log_events))
         assert result["statusCode"] in (200, 400, 500)
