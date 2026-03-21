@@ -19,3 +19,53 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "account_id" {
+  description = "AWS account ID"
+  type        = string
+  default     = ""
+}
+
+variable "enable_budget_enforcement" {
+  description = "Whether to deploy the budget enforcement Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "budgets_table" {
+  description = "DynamoDB table name for budget configurations"
+  type        = string
+  default     = "gateway-budgets"
+}
+
+variable "usage_table" {
+  description = "DynamoDB table name for accumulated usage records"
+  type        = string
+  default     = "gateway-usage"
+}
+
+variable "tier_default_free" {
+  type    = string
+  default = "10"
+}
+
+variable "tier_default_standard" {
+  type    = string
+  default = "1000"
+}
+
+variable "tier_default_premium" {
+  type    = string
+  default = "10000"
+}
+
+variable "tier_default_enterprise" {
+  type    = string
+  default = "100000"
+}
