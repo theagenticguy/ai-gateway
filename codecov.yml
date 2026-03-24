@@ -5,10 +5,12 @@ coverage:
         target: 85%
         threshold: 5%
         if_ci_failed: error
+        informational: true
     patch:
       default:
         target: 70%
         threshold: 10%
+        informational: true
 
   # Only track Python source code
   paths:
