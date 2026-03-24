@@ -24,7 +24,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--cov=cost_attribution --cov=pre_token --cov=budget_enforcement --cov=content_scanner --cov-branch --cov-report=term --cov-report=xml"
+addopts = "--cov=cost_attribution --cov=pre_token --cov=budget_enforcement --cov=content_scanner --cov=budget_admin --cov=chargeback_report --cov=routing_config --cov=team_registration --cov-branch --cov-report=term --cov-report=xml"
 
 [tool.coverage.run]
 source = ["src"]
