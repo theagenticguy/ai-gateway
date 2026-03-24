@@ -105,8 +105,6 @@ locals {
   period = 300
   h6     = 6
   w12    = 12
-  w24    = 24
-  w6     = 6
   w8     = 8
 
   alarm_topic_arns = length(var.alarm_sns_topic_arns) > 0 ? var.alarm_sns_topic_arns : (length(aws_sns_topic.alarms) > 0 ? [aws_sns_topic.alarms[0].arn] : [])

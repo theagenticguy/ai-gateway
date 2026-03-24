@@ -91,6 +91,10 @@ resource "aws_lambda_function" "pre_token" {
     log_group  = aws_cloudwatch_log_group.pre_token[0].name
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   depends_on = [
     aws_cloudwatch_log_group.pre_token,
     aws_iam_role_policy.pre_token,

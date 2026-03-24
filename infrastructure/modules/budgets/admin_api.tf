@@ -138,6 +138,10 @@ resource "aws_lambda_function" "budget_admin_api" {
     log_group  = aws_cloudwatch_log_group.admin_api_lambda[0].name
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   depends_on = [
     aws_cloudwatch_log_group.admin_api_lambda,
     aws_iam_role_policy.admin_api_lambda,

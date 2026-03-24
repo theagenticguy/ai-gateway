@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 6.22"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = ">= 2.0"
+    }
   }
 }
 
@@ -308,6 +312,10 @@ resource "aws_lambda_function" "team_registration" {
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.lambda[0].name
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   depends_on = [

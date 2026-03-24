@@ -108,6 +108,10 @@ resource "aws_lambda_function" "cost_attribution" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.lambda[0].name
   }
+  tracing_config {
+    mode = "Active"
+  }
+
   depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy.lambda]
 }
 

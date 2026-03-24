@@ -78,6 +78,14 @@ resource "aws_dynamodb_table" "config" {
     type = "S"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
   tags = merge(var.tags, {
     Name = "${var.project_name}-${var.environment}-content-scanner-config"
   })
@@ -111,6 +119,10 @@ resource "aws_lambda_function" "content_scanner" {
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.lambda[0].name
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   depends_on = [

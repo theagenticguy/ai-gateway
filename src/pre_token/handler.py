@@ -103,9 +103,9 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             groups = [g.strip() for g in cognito_groups.split(",") if g.strip()]
 
     logger.info(
-        "Processing pre-token for user '%s', groups: %s",
+        "Processing pre-token for user '%s', group_count=%d",
         trigger.user_name,
-        groups,
+        len(groups),
     )
 
     mapping = _load_group_mapping()

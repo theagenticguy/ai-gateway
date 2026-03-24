@@ -139,6 +139,10 @@ resource "aws_lambda_function" "budget_enforcement" {
     log_group  = aws_cloudwatch_log_group.enforcement_lambda[0].name
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   depends_on = [
     aws_cloudwatch_log_group.enforcement_lambda,
     aws_iam_role_policy.enforcement_lambda,

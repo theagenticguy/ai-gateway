@@ -96,6 +96,10 @@ resource "aws_lambda_function" "routing_config" {
     log_group  = aws_cloudwatch_log_group.routing_lambda[0].name
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   depends_on = [
     aws_cloudwatch_log_group.routing_lambda,
     aws_iam_role_policy.routing_lambda,
