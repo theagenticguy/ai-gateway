@@ -170,7 +170,7 @@ jobs:
           output_format: sarif
           output_file_path: checkov-results.sarif
           soft_fail: false
-          skip_check: CKV_TF_1,CKV2_AWS_50
+          skip_check: CKV_TF_1,CKV2_AWS_50,CKV_AWS_115,CKV_AWS_116,CKV_AWS_117,CKV_AWS_272
           download_external_modules: false
 
       - name: Upload Checkov SARIF

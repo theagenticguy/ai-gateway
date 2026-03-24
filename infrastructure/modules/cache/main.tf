@@ -81,6 +81,7 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_ecs" {
 
 #checkov:skip=CKV_AWS_2:False positive — this is ElastiCache Redis, not an ALB listener
 resource "aws_elasticache_replication_group" "redis" {
+  #checkov:skip=CKV2_AWS_50:Single-node dev cluster
   count = var.enable_cache ? 1 : 0
 
   replication_group_id = "${var.project_name}-${var.environment}"
