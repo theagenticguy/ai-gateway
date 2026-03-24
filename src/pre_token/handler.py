@@ -102,7 +102,8 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         if cognito_groups:
             groups = [g.strip() for g in cognito_groups.split(",") if g.strip()]
 
-    logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak
+    # nosemgrep: python.lang.security.audit.logging.logger-credential-leak  # noqa: ERA001
+    logger.info(
         "Processing pre-token for user '%s', group_count=%d",
         trigger.user_name,
         len(groups),
