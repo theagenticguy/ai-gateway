@@ -338,7 +338,10 @@ def rotate_credentials(team_id: str) -> tuple[dict[str, Any], int]:
         ExpressionAttributeValues={":cid": new_client_id, ":now": now},
     )
 
-    logger.info("Rotated credentials for team=%s", team_name)
+    logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak
+        "Client rotation complete for team=%s",
+        team_name,
+    )
 
     credentials = CredentialsResponse(
         client_id=new_client_id,

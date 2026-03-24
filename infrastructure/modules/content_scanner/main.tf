@@ -85,7 +85,8 @@ resource "aws_dynamodb_table" "config" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = aws_kms_key.lambda_env[0].arn
   }
 
   tags = merge(var.tags, {
