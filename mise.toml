@@ -217,10 +217,22 @@ raw = true
 # Documentation tasks
 # ──────────────────────────────────────────────
 
+[tasks."docs:install"]
+description = "Install documentation site dependencies"
+run = "pnpm install --frozen-lockfile"
+dir = "docs"
+
 [tasks."docs:serve"]
 description = "Serve documentation locally with hot reload"
-run = "uv run zensical serve"
+run = "pnpm dev"
+dir = "docs"
 
 [tasks."docs:build"]
 description = "Build documentation site"
-run = "uv run zensical build --clean"
+run = "pnpm build"
+dir = "docs"
+
+[tasks."docs:preview"]
+description = "Preview built documentation site"
+run = "pnpm preview"
+dir = "docs"
