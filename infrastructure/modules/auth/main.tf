@@ -26,6 +26,18 @@ resource "aws_cognito_user_pool" "gateway" {
     allow_admin_create_user_only = true
   }
 
+  # Pre-Token-Generation V2 trigger — maps IdP groups to custom claims
+  # Only configured when user auth (SSO) is enabled
+  dynamic "lambda_config" {
+    for_each = var.enable_user_auth ? [1] : []
+    content {
+      pre_token_generation_config {
+        lambda_arn     = aws_lambda_function.pre_token[0].arn
+        lambda_version = "V2_0"
+      }
+    }
+  }
+
   tags = {
     Name = "${var.project_name}-${var.environment}"
   }

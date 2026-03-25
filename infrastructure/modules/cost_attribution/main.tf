@@ -58,7 +58,22 @@ resource "aws_iam_role_policy" "lambda" {
     Statement = [
       { Sid = "CloudWatchMetrics", Effect = "Allow", Action = ["cloudwatch:PutMetricData"], Resource = "*", Condition = { StringEquals = { "cloudwatch:namespace" = "AIGateway" } } },
       { Sid = "CloudWatchLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/${var.project_name}-${var.environment}-cost-attribution:*" },
-      { Sid = "KMSDecrypt", Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.lambda_env[0].arn }
+      { Sid = "KMSDecrypt", Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.lambda_env[0].arn },
+      {
+        Sid    = "DynamoDBReadWrite"
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"]
+        Resource = [
+          "arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/${var.usage_table}",
+          "arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/${var.budgets_table}",
+        ]
+      },
+      {
+        Sid      = "SNSPublishAlerts"
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = var.budget_alerts_sns_topic_arn != "" ? [var.budget_alerts_sns_topic_arn] : []
+      }
     ]
   })
 }
@@ -81,7 +96,14 @@ resource "aws_lambda_function" "cost_attribution" {
   timeout          = 60
   memory_size      = 128
   kms_key_arn      = aws_kms_key.lambda_env[0].arn
-  environment { variables = { METRIC_NAMESPACE = "AIGateway" } }
+  environment {
+    variables = {
+      METRIC_NAMESPACE            = "AIGateway"
+      USAGE_TABLE                 = var.usage_table
+      BUDGETS_TABLE               = var.budgets_table
+      BUDGET_ALERTS_SNS_TOPIC_ARN = var.budget_alerts_sns_topic_arn
+    }
+  }
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.lambda[0].name

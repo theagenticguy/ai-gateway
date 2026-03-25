@@ -14,11 +14,22 @@ data "aws_availability_zones" "available" {
 module "observability" {
   source = "./modules/observability"
 
-  project_name        = var.project_name
-  environment         = var.environment
-  aws_region          = var.aws_region
-  account_id          = data.aws_caller_identity.current.account_id
-  enable_cost_widgets = var.enable_cost_attribution
+  project_name         = var.project_name
+  environment          = var.environment
+  aws_region           = var.aws_region
+  account_id           = data.aws_caller_identity.current.account_id
+  enable_cost_widgets  = var.enable_cost_attribution
+  enable_cache_widgets = var.enable_cache
+
+  # Alarm configuration
+  alarm_sns_topic_arns          = var.alarm_sns_topic_arns
+  budget_limit_daily_usd        = var.budget_limit_daily_usd
+  budget_alarm_threshold_pct    = var.budget_alarm_threshold_pct
+  error_rate_threshold_pct      = var.error_rate_threshold_pct
+  error_rate_evaluation_minutes = var.error_rate_evaluation_minutes
+  p99_latency_threshold_ms      = var.p99_latency_threshold_ms
+  latency_evaluation_minutes    = var.latency_evaluation_minutes
+  provider_down_minutes         = var.provider_down_minutes
 }
 
 # -----------------------------------------------------------------------------
@@ -57,6 +68,13 @@ module "auth" {
 
   alb_arn                      = module.networking.alb_arn
   alb_target_group_gateway_arn = module.networking.alb_target_group_gateway_arn
+
+  # Identity Center / SSO (D.1)
+  identity_providers = var.identity_providers
+  enable_user_auth   = var.enable_user_auth
+  callback_urls      = var.callback_urls
+  logout_urls        = var.logout_urls
+  group_mapping      = var.group_mapping
 }
 
 # -----------------------------------------------------------------------------
@@ -126,6 +144,26 @@ module "cost_attribution" {
   enable_cost_attribution = var.enable_cost_attribution
   gateway_log_group_name  = module.observability.gateway_log_group_name
   gateway_log_group_arn   = module.observability.gateway_log_group_arn
+
+  # E.6: Budget alerts integration
+  usage_table                 = var.enable_budgets ? module.budgets[0].usage_table_name : ""
+  budgets_table               = var.enable_budgets ? module.budgets[0].budgets_table_name : ""
+  budget_alerts_sns_topic_arn = var.enable_budgets ? module.budgets[0].budget_alerts_topic_arn : ""
+}
+
+# Content Scanner (Lambda: PII redaction + prompt injection detection)
+# -----------------------------------------------------------------------------
+
+module "content_scanner" {
+  source = "./modules/content_scanner"
+
+  project_name           = var.project_name
+  environment            = var.environment
+  aws_region             = var.aws_region
+  account_id             = data.aws_caller_identity.current.account_id
+  enable_content_scanner = var.enable_content_scanner
+  default_pii_mode       = var.content_scanner_default_pii_mode
+  default_injection_mode = var.content_scanner_default_injection_mode
 }
 
 # Guardrails (Bedrock content safety filtering)
@@ -158,4 +196,38 @@ module "cache" {
   private_subnet_ids    = module.networking.private_subnets
   vpc_id                = module.networking.vpc_id
   ecs_security_group_id = module.compute.ecs_security_group_id
+}
+
+# -----------------------------------------------------------------------------
+# Budgets (DynamoDB tables for budget definitions and usage tracking)
+# -----------------------------------------------------------------------------
+
+module "budgets" {
+  source = "./modules/budgets"
+  count  = var.enable_budgets ? 1 : 0
+
+  project_name   = var.project_name
+  environment    = var.environment
+  enable_budgets = var.enable_budgets
+}
+
+# -----------------------------------------------------------------------------
+# Chargeback Reports (Step Functions + Lambda for monthly cost reports)
+# -----------------------------------------------------------------------------
+
+module "chargeback" {
+  source = "./modules/chargeback"
+  count  = var.enable_chargeback && var.enable_budgets ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+  account_id   = data.aws_caller_identity.current.account_id
+
+  enable_chargeback  = var.enable_chargeback
+  usage_table_name   = module.budgets[0].usage_table_name
+  usage_table_arn    = module.budgets[0].usage_table_arn
+  budgets_table_name = module.budgets[0].budgets_table_name
+  budgets_table_arn  = module.budgets[0].budgets_table_arn
+  sns_topic_arn      = module.observability.alarm_topic_arns[0]
 }

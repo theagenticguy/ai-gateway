@@ -39,6 +39,133 @@ The request was authenticated but rejected by authorization or WAF rules.
 
 ---
 
+## 429 Too Many Requests
+
+The gateway or upstream provider is rate-limiting your requests.
+
+**Possible causes:**
+
+- **Budget exceeded** -- Your team's token budget has been exhausted for the current period. Check your budget status:
+  ```bash
+  # Decode your token to see team/client claims
+  echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
+  ```
+  Contact the gateway admin to check remaining budget or request an increase.
+
+- **Provider rate limit** -- The upstream LLM provider (OpenAI, Anthropic, etc.) is rate-limiting requests. This is typically transient.
+  - Wait 10-30 seconds and retry.
+  - If persistent, the gateway may need higher provider-side rate limits.
+
+- **WAF rate limit** -- AWS WAF enforces a per-IP request limit (2,000 requests per 5 minutes). If you are sending high-volume automated requests, you may hit this limit.
+  - Spread requests over time or contact the admin for a higher threshold.
+
+**Retry strategy:** Implement exponential backoff. Most 429 responses include a `Retry-After` header with the number of seconds to wait.
+
+---
+
+## 502 Bad Gateway
+
+The gateway could not reach the upstream LLM provider.
+
+**Possible causes:**
+
+- **Provider outage** -- The upstream provider (OpenAI, Anthropic, Google, etc.) may be experiencing downtime. Check the provider's status page.
+- **Invalid provider API key** -- The gateway's stored API key for the provider may be expired or revoked. Contact the gateway admin.
+- **Network issue** -- The ECS task may not have outbound internet access. Check NAT Gateway and VPC endpoint configuration.
+
+**What to try:**
+
+1. Test a different provider to isolate the issue:
+   ```bash
+   # Try anthropic instead of openai, or vice versa
+   curl -H "Authorization: Bearer $TOKEN" \
+        -H "x-portkey-provider: anthropic" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+        ${GATEWAY_URL}/v1/chat/completions
+   ```
+2. Run the health check with provider testing:
+   ```bash
+   TOKEN="$TOKEN" ./scripts/check-health.sh --url "$GATEWAY_URL" --token "$TOKEN" --providers
+   ```
+
+---
+
+## 503 Service Unavailable
+
+The gateway itself is overloaded or unhealthy.
+
+**Possible causes:**
+
+- **All ECS tasks unhealthy** -- The ALB returns 503 when no healthy targets are available. Check ECS service events in the AWS console.
+- **Gateway overloaded** -- Too many concurrent requests for the current capacity. The auto-scaling policy should add more tasks, but there is a ramp-up delay.
+- **Deployment in progress** -- A rolling deployment may temporarily reduce capacity.
+
+**What to try:**
+
+1. Wait 30-60 seconds and retry. Auto-scaling should recover.
+2. Run the basic health check:
+   ```bash
+   ./scripts/check-health.sh --url "$GATEWAY_URL"
+   ```
+3. If persistent, contact the gateway admin to check ECS service health and scaling configuration.
+
+---
+
+## Token Refresh
+
+Cognito JWTs expire after 1 hour. Here is how to refresh for each agent type.
+
+### Claude Code
+
+Claude Code handles token refresh automatically. The `apiKeyHelper` script is re-invoked:
+
+- Proactively, based on `CLAUDE_CODE_API_KEY_HELPER_TTL_MS` (recommended: `3000000` = 50 minutes)
+- Reactively, on any `401` response
+
+No manual intervention is needed. If token refresh is failing, check that the helper script is executable and that your M2M credentials are still valid:
+
+```bash
+chmod +x ~/workplace/ai-gateway/scripts/get-gateway-token.sh
+./scripts/get-gateway-token.sh  # Should print a JWT
+```
+
+### Other Agents
+
+For agents that read tokens from environment variables (OpenCode, Goose, Codex CLI, LangChain), tokens do not auto-refresh. Options:
+
+1. **Re-export the variable** when the token expires:
+   ```bash
+   export OPENAI_API_KEY=$(./scripts/get-gateway-token.sh)
+   ```
+
+2. **Use the caching wrapper** to auto-refresh (recommended). See [Authentication -- Shell Wrapper Pattern](../getting-started/authentication.md#shell-wrapper-pattern-other-agents).
+
+3. **Restart the agent** after exporting a fresh token, since some agents read the env var only at startup.
+
+### Checking Token Expiry
+
+Use the health check script to see when your token expires:
+
+```bash
+TOKEN=$(./scripts/get-gateway-token.sh)
+TOKEN="$TOKEN" ./scripts/check-health.sh --url "$GATEWAY_URL" --token "$TOKEN"
+```
+
+Or decode manually:
+
+```bash
+echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | python3 -c "
+import json, sys, datetime
+data = json.load(sys.stdin)
+exp = data.get('exp', 0)
+remaining = exp - int(datetime.datetime.now().timestamp())
+print(f'Expires in {remaining // 60} minutes ({datetime.datetime.fromtimestamp(exp)})')
+"
+```
+
+---
+
 ## Connection Refused / Timeout
 
 The gateway URL is unreachable.

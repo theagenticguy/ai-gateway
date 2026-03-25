@@ -21,6 +21,28 @@ processors:
         value: ai-gateway
         action: upsert
 
+  # GenAI semantic convention attributes — enrich spans with LLM-specific metadata
+  attributes/genai:
+    actions:
+      - key: gen_ai.system
+        action: upsert
+        from_attribute: provider
+      - key: gen_ai.request.model
+        action: upsert
+        from_attribute: model
+      - key: gen_ai.usage.input_tokens
+        action: upsert
+        from_attribute: usage.prompt_tokens
+      - key: gen_ai.usage.output_tokens
+        action: upsert
+        from_attribute: usage.completion_tokens
+      - key: gen_ai.usage.cached_tokens
+        action: upsert
+        from_attribute: usage.cached_tokens
+      - key: gen_ai.response.finish_reason
+        action: upsert
+        from_attribute: finish_reason
+
 exporters:
   awsxray:
     region: ${env:AWS_REGION}
@@ -29,6 +51,34 @@ exporters:
     region: ${env:AWS_REGION}
     namespace: AIGateway
     log_group_name: /ecs/ai-gateway/metrics
+    dimension_rollup_option: NoDimensionRollup
+    metric_declarations:
+      # Token usage metrics — per provider and model
+      - dimensions: [[Provider], [Provider, Model]]
+        metric_name_selectors:
+          - PromptTokens
+          - CompletionTokens
+          - CachedTokens
+          - TokensUsed
+      # Cost metrics — per provider and model
+      - dimensions: [[Provider], [Provider, Model], [Team]]
+        metric_name_selectors:
+          - EstimatedCostUsd
+      # Request metrics — per provider, model, and status class
+      - dimensions: [[Provider], [Provider, Model], [StatusClass]]
+        metric_name_selectors:
+          - RequestCount
+      # Latency metrics — per provider and model
+      - dimensions: [[Provider], [Provider, Model]]
+        metric_name_selectors:
+          - ResponseTime
+          - TimeToFirstToken
+      # Cache metrics
+      - dimensions: [[Provider]]
+        metric_name_selectors:
+          - CacheHits
+          - CacheMisses
+          - CacheCostSavingsUsd
 
   awscloudwatchlogs:
     region: ${env:AWS_REGION}
@@ -38,15 +88,15 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, attributes/genai, batch]
       exporters: [awsxray]
 
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, attributes/genai, batch]
       exporters: [awsemf]
 
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, batch]
       exporters: [awscloudwatchlogs]

@@ -47,6 +47,19 @@ output "cognito_token_endpoint" {
   value       = module.auth.cognito_token_endpoint
 }
 
+# User SSO Outputs (D.1)
+# -----------------------------------------------------------------------------
+
+output "user_client_id" {
+  description = "Cognito User SSO client ID (empty if user auth is disabled)"
+  value       = module.auth.user_client_id
+}
+
+output "hosted_ui_url" {
+  description = "Cognito Hosted UI URL for SSO login (empty if user auth is disabled)"
+  value       = module.auth.hosted_ui_url
+}
+
 # Multi-Client Outputs
 # -----------------------------------------------------------------------------
 
@@ -62,6 +75,20 @@ output "team_client_secrets" {
 }
 
 # -----------------------------------------------------------------------------
+# Content Scanner Outputs
+# -----------------------------------------------------------------------------
+
+output "content_scanner_function_url" {
+  description = "Lambda Function URL for the content scanner"
+  value       = module.content_scanner.function_url
+}
+
+output "content_scanner_function_arn" {
+  description = "ARN of the content scanner Lambda function"
+  value       = module.content_scanner.function_arn
+}
+
+# -----------------------------------------------------------------------------
 # Guardrails Outputs
 # -----------------------------------------------------------------------------
 
@@ -73,4 +100,57 @@ output "guardrail_id" {
 output "guardrail_arn" {
   description = "Bedrock Guardrail ARN"
   value       = module.guardrails.guardrail_arn
+}
+
+# -----------------------------------------------------------------------------
+# Budget Outputs
+# -----------------------------------------------------------------------------
+
+output "budgets_table_name" {
+  description = "Name of the budgets DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].budgets_table_name : null
+}
+
+output "budgets_table_arn" {
+  description = "ARN of the budgets DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].budgets_table_arn : null
+}
+
+output "usage_table_name" {
+  description = "Name of the usage DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].usage_table_name : null
+}
+
+output "usage_table_arn" {
+  description = "ARN of the usage DynamoDB table"
+  value       = length(module.budgets) > 0 ? module.budgets[0].usage_table_arn : null
+}
+
+output "budgets_kms_key_arn" {
+  description = "ARN of the KMS key used for budget table encryption"
+  value       = length(module.budgets) > 0 ? module.budgets[0].kms_key_arn : null
+}
+
+output "budgets_lambda_policy_arn" {
+  description = "ARN of the IAM policy for Lambda access to budget tables"
+  value       = length(module.budgets) > 0 ? module.budgets[0].lambda_policy_arn : null
+}
+
+# -----------------------------------------------------------------------------
+# Chargeback Outputs
+# -----------------------------------------------------------------------------
+
+output "chargeback_report_bucket" {
+  description = "Name of the S3 bucket storing chargeback reports"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].report_bucket : null
+}
+
+output "chargeback_state_machine_arn" {
+  description = "ARN of the chargeback Step Functions state machine"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].state_machine_arn : null
+}
+
+output "chargeback_lambda_arn" {
+  description = "ARN of the chargeback report Lambda function"
+  value       = length(module.chargeback) > 0 ? module.chargeback[0].lambda_arn : null
 }

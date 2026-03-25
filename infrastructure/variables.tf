@@ -93,3 +93,45 @@ variable "enable_jwt_auth" {
   type        = bool
   default     = false
 }
+
+# Identity Center / SSO (D.1)
+
+variable "identity_providers" {
+  description = "Map of external identity providers (SAML/OIDC) to federate with Cognito"
+  type = map(object({
+    provider_type     = string
+    metadata_url      = string
+    provider_details  = map(string)
+    attribute_mapping = map(string)
+  }))
+  default = {}
+}
+
+variable "enable_user_auth" {
+  description = "Whether to enable user-facing SSO authentication (authorization_code flow)"
+  type        = bool
+  default     = false
+}
+
+variable "callback_urls" {
+  description = "List of allowed callback URLs for the user SSO client"
+  type        = list(string)
+  default     = ["http://localhost:3000/callback"]
+}
+
+variable "logout_urls" {
+  description = "List of allowed logout URLs for the user SSO client"
+  type        = list(string)
+  default     = ["http://localhost:3000/logout"]
+}
+
+variable "group_mapping" {
+  description = "Mapping from IdP group names to gateway claims (team, org_unit, cost_center, tenant_tier)"
+  type = map(object({
+    team        = string
+    org_unit    = string
+    cost_center = string
+    tenant_tier = string
+  }))
+  default = {}
+}
