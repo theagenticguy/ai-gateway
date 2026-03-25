@@ -102,11 +102,7 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         if cognito_groups:
             groups = [g.strip() for g in cognito_groups.split(",") if g.strip()]
 
-    logger.info(
-        "Processing pre-token for user '%s', groups: %s",
-        trigger.user_name,
-        groups,
-    )
+    logger.info("Processing pre-token for user, group_count=%d", len(groups))
 
     mapping = _load_group_mapping()
     if not mapping:

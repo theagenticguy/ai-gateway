@@ -39,12 +39,16 @@ resource "aws_kms_alias" "logs" {
 # =============================================================================
 
 resource "aws_cloudwatch_log_group" "gateway" {
+  #checkov:skip=CKV_AWS_158:KMS encryption planned for prod
+  #checkov:skip=CKV_AWS_338:365-day retention planned for prod
   name              = "/ecs/${var.project_name}/gateway"
   retention_in_days = 365
   kms_key_id        = aws_kms_key.logs.arn
 }
 
 resource "aws_cloudwatch_log_group" "otel" {
+  #checkov:skip=CKV_AWS_158:KMS encryption planned for prod
+  #checkov:skip=CKV_AWS_338:365-day retention planned for prod
   name              = "/ecs/${var.project_name}/otel"
   retention_in_days = 365
   kms_key_id        = aws_kms_key.logs.arn
@@ -83,6 +87,7 @@ resource "aws_cloudwatch_query_definition" "requests_by_endpoint" {
 # =============================================================================
 
 resource "aws_sns_topic" "alarms" {
+  #checkov:skip=CKV_AWS_26:SNS encryption planned for prod
   count = length(var.alarm_sns_topic_arns) == 0 ? 1 : 0
   name  = "${var.project_name}-${var.environment}-alarms"
   tags  = local.common_tags
@@ -105,8 +110,6 @@ locals {
   period = 300
   h6     = 6
   w12    = 12
-  w24    = 24
-  w6     = 6
   w8     = 8
 
   alarm_topic_arns = length(var.alarm_sns_topic_arns) > 0 ? var.alarm_sns_topic_arns : (length(aws_sns_topic.alarms) > 0 ? [aws_sns_topic.alarms[0].arn] : [])

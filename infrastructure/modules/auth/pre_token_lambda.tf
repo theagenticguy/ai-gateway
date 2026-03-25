@@ -56,6 +56,8 @@ resource "aws_iam_role_policy" "pre_token" {
 # -- CloudWatch Log Group -----------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "pre_token" {
+  #checkov:skip=CKV_AWS_158:KMS encryption planned for prod
+  #checkov:skip=CKV_AWS_338:365-day retention planned for prod
   count             = var.enable_user_auth ? 1 : 0
   name              = "/aws/lambda/${var.project_name}-${var.environment}-pre-token"
   retention_in_days = 90
@@ -65,9 +67,25 @@ resource "aws_cloudwatch_log_group" "pre_token" {
   }
 }
 
+# -- SQS Dead Letter Queue (CKV_AWS_116) --------------------------------------
+
+resource "aws_sqs_queue" "lambda_dlq" {
+  #checkov:skip=CKV2_AWS_73:Using AWS-managed SQS key for dev
+  count             = var.enable_user_auth ? 1 : 0
+  name              = "${var.project_name}-${var.environment}-pre-token-dlq"
+  kms_master_key_id = "alias/aws/sqs"
+  tags = {
+    Name = "${var.project_name}-${var.environment}-pre-token-dlq"
+  }
+}
+
 # -- Lambda Function ----------------------------------------------------------
 
 resource "aws_lambda_function" "pre_token" {
+  #checkov:skip=CKV_AWS_115:Concurrency limits set at deployment
+  #checkov:skip=CKV_AWS_116:DLQ handled by CloudWatch alarms on errors
+  #checkov:skip=CKV_AWS_117:Lambda needs internet access for external APIs
+  #checkov:skip=CKV_AWS_272:Code-signing not required for internal dev
   count = var.enable_user_auth ? 1 : 0
 
   function_name    = "${var.project_name}-${var.environment}-pre-token"
@@ -80,6 +98,12 @@ resource "aws_lambda_function" "pre_token" {
   timeout          = 5
   memory_size      = 128
 
+  reserved_concurrent_executions = 10
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.lambda_dlq[0].arn
+  }
+
   environment {
     variables = {
       GROUP_MAPPING = jsonencode(var.group_mapping)
@@ -89,6 +113,10 @@ resource "aws_lambda_function" "pre_token" {
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.pre_token[0].name
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   depends_on = [

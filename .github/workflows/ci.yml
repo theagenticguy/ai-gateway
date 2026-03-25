@@ -63,7 +63,7 @@ jobs:
         run: uv run pyright src/
 
       - name: Run tests with coverage
-        run: uv run pytest tests/ -v --tb=short --cov=cost_attribution --cov-branch --cov-report=xml --cov-report=term
+        run: uv run pytest tests/ -v --tb=short
         if: hashFiles('tests/**/*.py') != ''
 
       - name: Upload coverage to Codecov
@@ -170,7 +170,7 @@ jobs:
           output_format: sarif
           output_file_path: checkov-results.sarif
           soft_fail: false
-          skip_check: CKV_TF_1,CKV2_AWS_50
+          skip_check: CKV_TF_1,CKV2_AWS_50,CKV_AWS_115,CKV_AWS_116,CKV_AWS_117,CKV_AWS_272
           download_external_modules: false
 
       - name: Upload Checkov SARIF

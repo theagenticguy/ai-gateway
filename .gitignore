@@ -69,3 +69,5 @@ trivy-results.*
 site/
 .hypothesis/
 # verified commit test
+.coverage
+coverage.xml

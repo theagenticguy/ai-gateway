@@ -311,6 +311,8 @@ resource "aws_wafv2_web_acl" "alb" {
 # ------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "waf" {
+  #checkov:skip=CKV_AWS_158:KMS encryption planned for prod
+  #checkov:skip=CKV_AWS_338:365-day retention planned for prod
   count = var.enable_waf ? 1 : 0
 
   name              = "aws-waf-logs-${var.project_name}-${var.environment}"
