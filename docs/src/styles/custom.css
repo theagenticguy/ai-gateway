@@ -1,0 +1,16 @@
+/* AI Gateway — custom Starlight styles */
+
+/* Deep purple accent to match the previous Material theme */
+:root {
+  --sl-color-accent-low: #1a0a2e;
+  --sl-color-accent: #7c3aed;
+  --sl-color-accent-high: #c4b5fd;
+}
+
+/* Mermaid diagram styling */
+pre.mermaid {
+  background: transparent;
+  border: none;
+  text-align: center;
+  padding: 1rem 0;
+}

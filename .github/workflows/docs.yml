@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# Documentation — Build and deploy to GitHub Pages (Zensical)
+# Documentation — Build and deploy to GitHub Pages (Starlight)
 # ──────────────────────────────────────────────────────────────
 name: Documentation
 
@@ -8,7 +8,6 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "zensical.toml"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -29,27 +28,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - name: Install, build, and upload site
+        uses: withastro/action@74d664f13f9f9063e37b49d74a74613dbf94db3c # v6
         with:
-          python-version: "3.13"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Configure Pages
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-
-      - name: Build documentation
-        run: uv run zensical build --clean
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
-        with:
-          path: site
+          path: docs
+          node-version: 22
+          package-manager: pnpm@latest
 
   deploy:
     name: Deploy to GitHub Pages
