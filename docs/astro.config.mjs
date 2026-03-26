@@ -26,7 +26,7 @@ export default defineConfig({
 
       editLink: {
         baseUrl:
-          "https://github.com/theagenticguy/ai-gateway/edit/main/docs-site/src/content/docs/",
+          "https://github.com/theagenticguy/ai-gateway/edit/main/docs/",
       },
 
       lastUpdated: true,
@@ -45,18 +45,15 @@ export default defineConfig({
           content: `
             import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
             mermaid.initialize({ startOnLoad: false, theme: 'dark' });
-            const observer = new MutationObserver(() => {
+            function renderMermaid() {
               const els = document.querySelectorAll('pre.mermaid:not([data-processed])');
-              if (els.length) {
-                els.forEach(el => el.setAttribute('data-processed', 'true'));
-                mermaid.run({ nodes: els });
-              }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-            document.addEventListener('DOMContentLoaded', () => {
-              const els = document.querySelectorAll('pre.mermaid');
+              els.forEach(el => el.setAttribute('data-processed', 'true'));
               if (els.length) mermaid.run({ nodes: els });
-            });
+            }
+            // Render immediately — by the time this module loads, DOM is ready
+            renderMermaid();
+            // Also handle Starlight view transitions (client-side navigation)
+            document.addEventListener('astro:page-load', renderMermaid);
           `,
         },
       ],
@@ -107,7 +104,7 @@ export default defineConfig({
   ],
 
   markdown: {
-    remarkPlugins: [remarkMermaid],
+    remarkPlugins: [remarkMermaid, remarkStripMdLinks],
   },
 });
 
@@ -142,4 +139,33 @@ function escapeHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/**
+ * Remark plugin: rewrites relative .md/.mdx links to trailing-slash URLs.
+ * Keeps raw markdown links working on GitHub while producing correct URLs
+ * for the built Starlight site.
+ */
+function remarkStripMdLinks() {
+  return (tree) => {
+    visitLinks(tree);
+  };
+}
+
+function visitLinks(node) {
+  if (node.type === "link" && node.url) {
+    // Only process relative links (not http://, mailto:, etc.)
+    if (!/^[a-z]+:/i.test(node.url)) {
+      const [path, fragment] = node.url.split("#");
+      if (path.endsWith(".md") || path.endsWith(".mdx")) {
+        const stripped = path.replace(/\.mdx?$/, "/");
+        node.url = fragment ? `${stripped}#${fragment}` : stripped;
+      }
+    }
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      visitLinks(child);
+    }
+  }
 }

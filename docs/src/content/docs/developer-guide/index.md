@@ -12,7 +12,7 @@ This section is for contributors and developers who want to modify, extend, or u
 |------|-------------|
 | [Contributing](contributing.md) | Fork-and-branch workflow, commit conventions, PR requirements, and the full mise task reference |
 | [Architecture](architecture.md) | System architecture with Mermaid diagrams, module boundaries, request and auth flows |
-| [ADR Index](adr-index.md) | All 7 Architecture Decision Records with summaries and rationale |
+| [ADR Index](adr-index.md) | All 13 Architecture Decision Records with summaries and rationale |
 | [CI/CD Pipeline](ci-cd.md) | The 6-job CI pipeline, additional workflows, release process, and Dependabot config |
 | [Code Quality](code-quality.md) | Ruff, pyright, pytest, Terraform quality gates, git hooks, and the 12-tool security scanning stack |
 
@@ -50,8 +50,8 @@ After setup, your environment includes:
 
 ```
 ai-gateway/
-  adr/                    # Architecture Decision Records (001-007)
-  docs/                   # Documentation source (Zensical/MkDocs)
+  adr/                    # Architecture Decision Records (001-013)
+  docs/                   # Documentation source (Astro Starlight)
   infrastructure/         # Terraform root module + 4 child modules
     modules/
       auth/               # Cognito, JWT listener
@@ -70,5 +70,5 @@ ai-gateway/
   pyproject.toml          # Python project metadata + dev dependencies
   ruff.toml               # Linter/formatter configuration
   pyrightconfig.json      # Type checker configuration
-  zensical.toml           # Documentation site configuration
+  docs/astro.config.mjs   # Documentation site configuration
 ```
