@@ -155,21 +155,102 @@ This is how agents like Continue.dev and LangChain access Anthropic models throu
 
 ## Rate Limiting
 
-The gateway enforces rate limiting via AWS WAF v2:
+The gateway enforces rate limiting at two layers:
+
+### WAF Layer (IP-based)
 
 | Rule | Limit |
 |---|---|
 | **Per-IP rate limit** | 2,000 requests per 5-minute window per IP address |
 | **AWS Managed Rules** | AWS Common Rule Set, IP reputation list |
 
-When rate-limited, the gateway returns:
+When WAF rate-limits a request, the gateway returns HTTP 403 with an `x-amzn-waf-action` response header.
 
-- **HTTP 403** with an `x-amzn-waf-action` response header
+### Team Layer (RPM + Daily Tokens)
 
-:::tip[Rate limit tuning]
-The 2,000 requests/5-min limit is configured in the WAF Terraform module. Contact the gateway admin if your workload requires a higher threshold.
+Per-team rate limits are enforced via DynamoDB atomic counters (C.1). Each team's tier defines two limits:
+
+| Tier | RPM | Daily Tokens |
+|---|---|---|
+| sandbox | 20 | 100,000 |
+| standard | 100 | 1,000,000 |
+| premium | 500 | 10,000,000 |
+| enterprise | unlimited | unlimited |
+
+When a team exceeds its limit, the response includes:
+
+```json
+{
+  "allowed": false,
+  "reason": "RPM limit exceeded (101/100 requests per minute)",
+  "retry_after_seconds": 42
+}
+```
+
+:::tip[Graceful degradation]
+If DynamoDB is unreachable, requests are allowed through. Rate limiting never blocks requests due to infrastructure failures.
 :::
 
+
+---
+
+## Admin API Endpoints
+
+The admin API runs on a separate API Gateway with Cognito authorization (see [ADR-014](/developer-guide/adr-index)). Enable it with `enable_admin_api = true`.
+
+All admin endpoints require a JWT with the admin scope. Obtain one via:
+
+```bash
+curl -X POST "${COGNITO_TOKEN_ENDPOINT}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=https://gateway.internal/admin"
+```
+
+### Usage API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/usage/{team}` | Current period usage, budget utilization, per-model breakdown |
+| `GET` | `/usage/{team}/history` | Monthly usage history |
+
+### Pricing Admin
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/pricing` | List all pricing entries (DynamoDB overrides + static defaults) |
+| `GET` | `/pricing/{provider}/{model}` | Get pricing for a specific model |
+| `PUT` | `/pricing/{provider}/{model}` | Create or update a pricing override |
+| `DELETE` | `/pricing/{provider}/{model}` | Remove override, revert to static default |
+
+### Teams
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/teams` | List registered teams |
+| `POST` | `/teams` | Register a new team |
+| `GET` | `/teams/{id}` | Get team details |
+| `PUT` | `/teams/{id}` | Update team configuration |
+| `DELETE` | `/teams/{id}` | Deregister a team |
+
+### Budgets
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/budgets` | List all budgets |
+| `POST` | `/budgets` | Create a budget |
+| `GET` | `/budgets/{id}` | Get budget and current usage |
+| `PUT` | `/budgets/{id}` | Update a budget |
+| `DELETE` | `/budgets/{id}` | Delete a budget |
+
+### Routing Config
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/routing` | List routing configurations |
+| `POST` | `/routing` | Create a routing rule |
+| `GET` | `/routing/{id}` | Get routing rule details |
+| `PUT` | `/routing/{id}` | Update a routing rule |
+| `DELETE` | `/routing/{id}` | Delete a routing rule |
 
 ---
 

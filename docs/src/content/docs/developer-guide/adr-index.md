@@ -27,6 +27,7 @@ ADRs are stored in the `adr/` directory at the repository root.
 | [011](../../adr/011-bedrock-guardrails-integration.md) | Bedrock Guardrails Integration | Accepted | Terraform module for Amazon Bedrock Guardrails with configurable content filtering, PII blocking, topic denial, and word filtering policies. |
 | [012](../../adr/012-response-cache-strategy.md) | Response Cache Strategy | Accepted | ElastiCache Redis cluster in VPC private subnets for exact-match response caching via Portkey Gateway. |
 | [013](../../adr/013-identity-center-saml-federation.md) | Identity Center SAML/OIDC Federation | Proposed | SAML 2.0 and OIDC federation with the Cognito User Pool, plus a Pre-Token-Generation V2 Lambda for IdP group-to-claim mapping. |
+| [014](../../adr/014-two-plane-architecture-split.md) | Two-Plane Architecture Split | Accepted | ALB stays on the inference path; admin APIs (teams, budgets, routing, scanner, pricing, usage) move behind API Gateway with a Cognito authorizer. Eliminates duplicated JWT validation across handlers. |
 
 ## Creating a New ADR
 
