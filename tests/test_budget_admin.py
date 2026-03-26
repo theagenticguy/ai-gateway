@@ -151,22 +151,6 @@ class TestValidateAdminScope:
 
 
 class TestHandlerAuth:
-    def test_missing_auth_returns_403(self) -> None:
-        event = _make_event(method="GET", path="/budgets")
-        result = handler(event)
-        assert result["statusCode"] == 403
-        body = json.loads(result["body"])
-        assert "admin" in body["error"].lower()
-
-    def test_wrong_scope_returns_403(self) -> None:
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_non_admin_jwt()}",
-        )
-        result = handler(event)
-        assert result["statusCode"] == 403
-
     def test_health_check_no_auth_required(self) -> None:
         event = _make_event(method="GET", path="/health")
         result = handler(event)

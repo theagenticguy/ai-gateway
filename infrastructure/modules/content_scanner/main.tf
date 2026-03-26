@@ -95,6 +95,17 @@ resource "aws_dynamodb_table" "config" {
 }
 
 # -----------------------------------------------------------------------------
+# AppConfig Lambda extension layer (AWS-managed)
+# -----------------------------------------------------------------------------
+
+data "aws_lambda_layer_version" "appconfig" {
+  count                   = var.enable_content_scanner && var.appconfig_path != "" ? 1 : 0
+  layer_name              = "AWS-AppConfig-Extension"
+  compatible_runtime      = "python3.13"
+  compatible_architecture = "x86_64"
+}
+
+# -----------------------------------------------------------------------------
 # Lambda Function
 # -----------------------------------------------------------------------------
 
@@ -115,12 +126,23 @@ resource "aws_lambda_function" "content_scanner" {
   memory_size      = 256
   kms_key_arn      = aws_kms_key.lambda_env[0].arn
 
+  layers = var.appconfig_path != "" ? [
+    data.aws_lambda_layer_version.appconfig[0].arn
+  ] : []
+
   environment {
-    variables = {
-      CONFIG_TABLE_NAME      = aws_dynamodb_table.config[0].name
-      DEFAULT_PII_MODE       = var.default_pii_mode
-      DEFAULT_INJECTION_MODE = var.default_injection_mode
-    }
+    variables = merge(
+      {
+        CONFIG_TABLE_NAME      = aws_dynamodb_table.config[0].name
+        DEFAULT_PII_MODE       = var.default_pii_mode
+        DEFAULT_INJECTION_MODE = var.default_injection_mode
+      },
+      var.appconfig_path != "" ? {
+        APPCONFIG_PATH                                = var.appconfig_path
+        AWS_APPCONFIG_EXTENSION_PREFETCH_LIST         = var.appconfig_path
+        AWS_APPCONFIG_EXTENSION_POLL_INTERVAL_SECONDS = "45"
+      } : {}
+    )
   }
 
   logging_config {

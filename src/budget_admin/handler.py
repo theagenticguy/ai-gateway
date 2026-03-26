@@ -1,8 +1,9 @@
 """Budget Admin API — Lambda Function URL handler.
 
 Provides a REST API for managing budgets and querying usage data.
-Parses the HTTP method and path from the Lambda Function URL event,
-validates admin scope in the JWT, and routes to the appropriate function.
+Parses the HTTP method and path from the Lambda Function URL event
+and routes to the appropriate function.  Admin scope validation is
+handled by the API Gateway Cognito authorizer.
 
 Endpoints:
     GET    /budgets              — List all budgets (paginated)
@@ -22,7 +23,6 @@ import os
 import re
 from typing import Any
 
-from budget_admin.auth import validate_admin_scope
 from budget_admin.routes import (
     create_budget,
     delete_budget,
@@ -100,13 +100,6 @@ def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
 def _get_query_params(event: dict[str, Any]) -> dict[str, str]:
     """Extract query string parameters from the event."""
     return event.get("queryStringParameters") or {}
-
-
-def _get_authorization(event: dict[str, Any]) -> str:
-    """Extract the Authorization header from the event."""
-    headers = event.get("headers", {})
-    # Lambda Function URL headers are lowercased
-    return headers.get("authorization", headers.get("Authorization", ""))
 
 
 def _get_http_method(event: dict[str, Any]) -> str:
@@ -195,11 +188,6 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     if path == "/health" and method == "GET":
         return _json_response(200, {"status": "healthy"})
 
-    authorization = _get_authorization(event)
-    claims = validate_admin_scope(authorization)
-    if claims is None:
-        return _error_response(403, "Forbidden: valid admin scope required")
-
-    logger.info("Admin request: %s %s (sub=%s)", method, path, claims.get("sub", "unknown"))
+    logger.info("Admin request: %s %s", method, path)
 
     return _dispatch(method, path, event)

@@ -180,6 +180,10 @@ module "compute" {
   # Cache
   cache_enabled = var.enable_cache
   redis_url     = var.enable_cache ? module.cache.redis_connection_url : ""
+
+  # Webhook URLs for pre-request hooks
+  budget_enforcement_webhook_url = var.enable_budgets ? module.budgets[0].function_url : ""
+  content_scanner_webhook_url    = var.enable_content_scanner ? module.content_scanner.function_url : ""
 }
 
 # -----------------------------------------------------------------------------
@@ -216,6 +220,23 @@ module "content_scanner" {
   enable_content_scanner = var.enable_content_scanner
   default_pii_mode       = var.content_scanner_default_pii_mode
   default_injection_mode = var.content_scanner_default_injection_mode
+
+  # AppConfig feature flag path (hot-path toggle)
+  appconfig_path = var.enable_appconfig ? module.appconfig.appconfig_resource_path : ""
+}
+
+# =============================================================================
+# AppConfig — Feature flags for content scanner and future toggles
+# =============================================================================
+
+module "appconfig" {
+  source = "./modules/appconfig"
+
+  enable_appconfig   = var.enable_appconfig
+  project_name       = var.project_name
+  environment        = var.environment
+  rollback_alarm_arn = "" # TODO: Wire CloudWatch alarm for scanner errors
+  tags               = {}
 }
 
 # Guardrails (Bedrock content safety filtering)

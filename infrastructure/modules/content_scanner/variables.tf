@@ -46,6 +46,12 @@ variable "default_injection_mode" {
   }
 }
 
+variable "appconfig_path" {
+  description = "AppConfig path for Lambda extension (e.g., /applications/ai-gateway/environments/prod/configurations/scanner-config)"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Additional tags to apply to all resources"
   type        = map(string)

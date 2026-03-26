@@ -268,6 +268,40 @@ locals {
   # Proportionally allocate CPU/memory between gateway and otel sidecar
   gateway_cpu    = var.gateway_cpu - 256
   gateway_memory = var.gateway_memory - 256
+
+  # Build before_request_hooks array based on which webhook URLs are provided
+  before_request_hooks = concat(
+    var.budget_enforcement_webhook_url != "" ? [
+      {
+        type = "guardrail"
+        id   = "budget-enforcement"
+        deny = true
+        checks = [{
+          id = "budget_check"
+          "default.webhook" = {
+            webhookURL = var.budget_enforcement_webhook_url
+          }
+        }]
+      }
+    ] : [],
+    var.content_scanner_webhook_url != "" ? [
+      {
+        type = "guardrail"
+        id   = "content-scanner"
+        deny = true
+        checks = [{
+          id = "content_scan"
+          "default.webhook" = {
+            webhookURL = var.content_scanner_webhook_url
+          }
+        }]
+      }
+    ] : []
+  )
+
+  portkey_config = length(local.before_request_hooks) > 0 ? {
+    before_request_hooks = local.before_request_hooks
+  } : null
 }
 
 module "ecs_cluster" {
@@ -345,6 +379,12 @@ module "ecs_service" {
         var.cache_enabled ? [
           { name = "CACHE_STORE", value = "redis" },
           { name = "REDIS_URL", value = var.redis_url },
+        ] : [],
+        local.portkey_config != null ? [
+          {
+            name  = "PORTKEY_CONFIG"
+            value = base64encode(jsonencode(local.portkey_config))
+          }
         ] : []
       )
 

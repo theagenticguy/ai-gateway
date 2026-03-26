@@ -27,13 +27,14 @@ This module is composed of 4 local sub-modules:
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.37.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.38.0 |
 
 ## Modules
 
 | Name | Source | Version |
 |------|--------|---------|
 | <a name="module_admin_api"></a> [admin\_api](#module\_admin\_api) | ./modules/admin_api | n/a |
+| <a name="module_appconfig"></a> [appconfig](#module\_appconfig) | ./modules/appconfig | n/a |
 | <a name="module_audit_log"></a> [audit\_log](#module\_audit\_log) | ./modules/audit_log | n/a |
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
@@ -74,6 +75,7 @@ This module is composed of 4 local sub-modules:
 | <a name="input_content_scanner_default_injection_mode"></a> [content\_scanner\_default\_injection\_mode](#input\_content\_scanner\_default\_injection\_mode) | Default injection scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_enable_admin_api"></a> [enable\_admin\_api](#input\_enable\_admin\_api) | Enable the API Gateway admin plane (also enables team\_registration and routing modules) | `bool` | `false` | no |
+| <a name="input_enable_appconfig"></a> [enable\_appconfig](#input\_enable\_appconfig) | Enable AWS AppConfig for feature flag management (scanner toggle) | `bool` | `false` | no |
 | <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |

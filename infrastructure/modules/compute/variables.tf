@@ -105,3 +105,15 @@ variable "redis_url" {
   type        = string
   default     = ""
 }
+
+variable "budget_enforcement_webhook_url" {
+  description = "Function URL for the budget enforcement Lambda (Portkey webhook hook)"
+  type        = string
+  default     = ""
+}
+
+variable "content_scanner_webhook_url" {
+  description = "Function URL for the content scanner Lambda (Portkey webhook hook)"
+  type        = string
+  default     = ""
+}
