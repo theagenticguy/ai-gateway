@@ -272,7 +272,7 @@ class TestBuiltinConfigs:
             json.dumps({"strategy": {"mode": "fallback"}, "targets": [{"provider": "bedrock"}]})
         )
         with patch("routing_config.handler.CONFIGS_DIR", str(tmp_path)):
-            import routing_config.handler as mod  # noqa: PLC0415
+            import routing_config.handler as mod
 
             mod._BUILTIN_CONFIGS = None
             configs = _load_builtin_configs()

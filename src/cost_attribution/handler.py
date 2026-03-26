@@ -7,6 +7,7 @@ import gzip
 import json
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -40,10 +41,22 @@ METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "AIGateway")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
 SNS_TOPIC_ARN = os.environ.get("BUDGET_ALERTS_SNS_TOPIC_ARN", "")
+AUDIT_FIREHOSE_STREAM = os.environ.get("AUDIT_FIREHOSE_STREAM", "")
 
 cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 sns = boto3.client("sns", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+
+# Lazy-init Firehose client
+_firehose_client = None
+
+
+def _get_firehose():
+    """Return a cached Firehose client (created on first call)."""
+    global _firehose_client  # noqa: PLW0603
+    if _firehose_client is None:
+        _firehose_client = boto3.client("firehose", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    return _firehose_client
 
 
 # ── JWT claim extraction ─────────────────────────────────────────────────────
@@ -124,6 +137,14 @@ def _extract_metrics(log_event: dict[str, Any]) -> MetricResult | None:
         record.usage.cache_creation_input_tokens,
     )
 
+    # Detect cache hit from gateway log (best-effort, defaults to False)
+    cache_status = raw.get("cacheStatus") or raw.get("cache_status") or ""
+    cache_hit = str(cache_status).upper() == "HIT"
+    if not cache_hit:
+        resp_cache = raw.get("response", {})
+        if isinstance(resp_cache, dict):
+            cache_hit = str(resp_cache.get("cache", "")).upper() == "HIT"
+
     return MetricResult(
         provider=provider,
         model=model,
@@ -134,6 +155,7 @@ def _extract_metrics(log_event: dict[str, Any]) -> MetricResult | None:
         cache_read_input_tokens=record.usage.cache_read_input_tokens,
         cache_creation_input_tokens=record.usage.cache_creation_input_tokens,
         cache_savings_usd=cache_savings,
+        cache_hit=cache_hit,
         team=team,
         user=user,
     )
@@ -172,6 +194,21 @@ def _publish_metrics(metrics: list[MetricResult]) -> None:
                     "Unit": "None",
                 },
             ]
+        )
+
+        # Per-team cache metrics
+        team_dims = [{"Name": "Team", "Value": m.team}]
+        if m.cache_hit:
+            metric_data.append(
+                {"MetricName": "CacheHitsByTeam", "Dimensions": team_dims, "Value": 1.0, "Unit": "Count"}
+            )
+        else:
+            metric_data.append(
+                {"MetricName": "CacheMissesByTeam", "Dimensions": team_dims, "Value": 1.0, "Unit": "Count"}
+            )
+        # Always publish cache savings per team (0 if no cache hit)
+        metric_data.append(
+            {"MetricName": "CacheSavingsByTeam", "Dimensions": team_dims, "Value": m.cache_savings_usd, "Unit": "None"}
         )
     for i in range(0, len(metric_data), 1000):
         cloudwatch.put_metric_data(Namespace=METRIC_NAMESPACE, MetricData=metric_data[i : i + 1000])
@@ -448,6 +485,46 @@ def _publish_alert(
     logger.info("Published budget alert for team=%s threshold=%d%%", team, threshold)
 
 
+# ── Audit record publishing (Kinesis Firehose) ───────────────────────────────
+
+
+def _publish_audit_records(metrics: list[MetricResult]) -> None:
+    """Publish audit records to Kinesis Firehose (best-effort)."""
+    if not AUDIT_FIREHOSE_STREAM or not metrics:
+        return
+
+    firehose = _get_firehose()
+    records = []
+    for m in metrics:
+        record = {
+            "team": m.team,
+            "user_id": m.user,
+            "model": m.model,
+            "provider": m.provider,
+            "prompt_tokens": m.prompt_tokens,
+            "completion_tokens": m.completion_tokens,
+            "total_tokens": m.total_tokens,
+            "cost_usd": m.cost_usd,
+            "cache_read_tokens": m.cache_read_input_tokens,
+            "cache_savings_usd": m.cache_savings_usd,
+            "latency_ms": 0,  # Not available in current log format
+            "status": "success",
+            "correlation_id": str(uuid.uuid4()),  # Generate if not in log
+            "request_timestamp": datetime.now(tz=UTC).isoformat(),
+        }
+        records.append({"Data": json.dumps(record).encode("utf-8")})
+
+    # Firehose put_record_batch: max 500 records per call
+    for i in range(0, len(records), 500):
+        batch = records[i : i + 500]
+        firehose.put_record_batch(
+            DeliveryStreamName=AUDIT_FIREHOSE_STREAM,
+            Records=batch,
+        )
+
+    logger.info("Published %d audit records to Firehose", len(records))
+
+
 # ── Lambda entry point ───────────────────────────────────────────────────────
 
 
@@ -494,6 +571,12 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
                 logger.info("Published %d budget alerts", alerts_count)
         except Exception:
             logger.warning("Failed to check/publish budget alerts", exc_info=True)
+
+        # Best-effort audit log publishing
+        try:
+            _publish_audit_records(extracted)
+        except Exception:
+            logger.warning("Failed to publish audit records to Firehose", exc_info=True)
 
     return HandlerResponse(
         statusCode=200,

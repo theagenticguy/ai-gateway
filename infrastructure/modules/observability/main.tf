@@ -115,6 +115,7 @@ locals {
   alarm_topic_arns = length(var.alarm_sns_topic_arns) > 0 ? var.alarm_sns_topic_arns : (length(aws_sns_topic.alarms) > 0 ? [aws_sns_topic.alarms[0].arn] : [])
 
   providers_list = ["bedrock", "openai", "anthropic", "google"]
+  teams_list     = var.teams_list
 
   # ---------------------------------------------------------------------------
   # Row 1 — Overview (y=0): total requests, total cost, active teams, error rate
@@ -416,6 +417,49 @@ locals {
   }
 
   # ---------------------------------------------------------------------------
+  # Row 7 — Cache by Team (y=36): hits/misses by team, savings by team
+  # ---------------------------------------------------------------------------
+
+  row7_cache_by_team = {
+    type   = "metric"
+    x      = 0
+    y      = 36
+    width  = local.w12
+    height = local.h6
+    properties = {
+      metrics = flatten([
+        for t in local.teams_list : [
+          [local.ns, "CacheHitsByTeam", "Team", t],
+          [local.ns, "CacheMissesByTeam", "Team", t],
+        ]
+      ])
+      period = local.period
+      stat   = "Sum"
+      region = local.region
+      title  = "Cache Hits / Misses by Team"
+      view   = "timeSeries"
+    }
+  }
+
+  row7_cache_savings_by_team = {
+    type   = "metric"
+    x      = 12
+    y      = 36
+    width  = local.w12
+    height = local.h6
+    properties = {
+      metrics = [
+        for t in local.teams_list : [local.ns, "CacheSavingsByTeam", "Team", t]
+      ]
+      period = 3600
+      stat   = "Sum"
+      region = local.region
+      title  = "Cache Savings by Team (USD)"
+      view   = "bar"
+    }
+  }
+
+  # ---------------------------------------------------------------------------
   # Assemble all widgets
   # ---------------------------------------------------------------------------
 
@@ -449,6 +493,8 @@ locals {
     local.row6_cache_hit_rate,
     local.row6_cache_tokens_saved,
     local.row6_cache_cost_savings,
+    local.row7_cache_by_team,
+    local.row7_cache_savings_by_team,
   ]
   cache_widgets = [for w in local.cache_widget_candidates : w if var.enable_cache_widgets]
 }

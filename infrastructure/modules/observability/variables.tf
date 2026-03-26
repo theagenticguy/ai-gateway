@@ -31,6 +31,16 @@ variable "enable_cache_widgets" {
 }
 
 # ---------------------------------------------------------------------------
+# Team list for dashboard widgets
+# ---------------------------------------------------------------------------
+
+variable "teams_list" {
+  description = "List of team names for per-team cache dashboard widgets"
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
 # SNS / Notifications
 # ---------------------------------------------------------------------------
 

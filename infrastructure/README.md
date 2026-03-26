@@ -33,6 +33,8 @@ This module is composed of 4 local sub-modules:
 
 | Name | Source | Version |
 |------|--------|---------|
+| <a name="module_admin_api"></a> [admin\_api](#module\_admin\_api) | ./modules/admin_api | n/a |
+| <a name="module_audit_log"></a> [audit\_log](#module\_audit\_log) | ./modules/audit_log | n/a |
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
 | <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
@@ -44,6 +46,8 @@ This module is composed of 4 local sub-modules:
 | <a name="module_guardrails"></a> [guardrails](#module\_guardrails) | ./modules/guardrails | n/a |
 | <a name="module_networking"></a> [networking](#module\_networking) | ./modules/networking | n/a |
 | <a name="module_observability"></a> [observability](#module\_observability) | ./modules/observability | n/a |
+| <a name="module_routing"></a> [routing](#module\_routing) | ./modules/routing | n/a |
+| <a name="module_team_registration"></a> [team\_registration](#module\_team\_registration) | ./modules/team_registration | n/a |
 
 ## Resources
 
@@ -69,6 +73,8 @@ This module is composed of 4 local sub-modules:
 | <a name="input_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#input\_cognito\_user\_pool\_id) | Cognito User Pool ID for JWT validation. Leave empty to disable JWT auth. | `string` | `""` | no |
 | <a name="input_content_scanner_default_injection_mode"></a> [content\_scanner\_default\_injection\_mode](#input\_content\_scanner\_default\_injection\_mode) | Default injection scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
+| <a name="input_enable_admin_api"></a> [enable\_admin\_api](#input\_enable\_admin\_api) | Enable the API Gateway admin plane (also enables team\_registration and routing modules) | `bool` | `false` | no |
+| <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
 | <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
