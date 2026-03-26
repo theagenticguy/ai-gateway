@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -108,4 +108,28 @@ class ScanResponse(BaseModel):
     request_id: str = ""
     content: str = Field(default="", description="Original or redacted content")
     detections: list[PiiDetection | InjectionDetection] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ── AppConfig ────────────────────────────────────────────────────────────────
+
+
+class ScannerAppConfig(BaseModel):
+    """Feature-flag payload from AppConfig for the content scanner."""
+
+    enabled: bool = True
+    team_overrides: dict[str, bool] = Field(
+        default_factory=dict,
+        description="Per-team enable/disable overrides (team_id -> enabled)",
+    )
+
+
+# ── Portkey response ─────────────────────────────────────────────────────────
+
+
+class PluginHandlerResponse(BaseModel):
+    """Portkey webhook plugin response envelope."""
+
+    verdict: bool
+    data: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None

@@ -5,6 +5,9 @@ containing the content to scan, team ID, model, and request ID.
 
 Scan failures are treated as *allow* — a broken scanner must never block
 legitimate traffic.
+
+Response format follows the Portkey PluginHandlerResponse contract so the
+scanner can be wired as a ``default.webhook`` hook.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import urllib.request
 from typing import Any
 
 import boto3
@@ -21,6 +25,7 @@ from content_scanner.models import (
     InjectionDetection,
     PiiDetection,
     ScanMode,
+    ScannerAppConfig,
     ScanRequest,
     ScanResponse,
     TeamScanConfig,
@@ -51,6 +56,7 @@ if not logger.handlers:
 _CONFIG_TABLE = os.environ.get("CONFIG_TABLE_NAME", "")
 _DEFAULT_PII_MODE = ScanMode(os.environ.get("DEFAULT_PII_MODE", "detect"))
 _DEFAULT_INJECTION_MODE = ScanMode(os.environ.get("DEFAULT_INJECTION_MODE", "detect"))
+APPCONFIG_PATH = os.environ.get("APPCONFIG_PATH", "")
 
 _dynamodb = None
 
@@ -82,14 +88,64 @@ def _load_team_config(team_id: str) -> TeamScanConfig:
     )
 
 
+def _load_appconfig() -> ScannerAppConfig:
+    """Read scanner feature flags from the AppConfig Lambda extension (localhost:2772).
+
+    The extension is configured via the ``AWS_APPCONFIG_EXTENSION_PREFETCH_LIST``
+    environment variable and keeps a local cache with a 45-second poll interval.
+    On any failure the scanner defaults to **enabled** (fail-open).
+    """
+    if not APPCONFIG_PATH:
+        return ScannerAppConfig()  # default: enabled=True
+    try:
+        # URL is localhost:2772 (AppConfig Lambda extension) — not user-controlled
+        url = f"http://localhost:2772{APPCONFIG_PATH}"  # nosemgrep
+        req = urllib.request.Request(url)  # noqa: S310
+        with urllib.request.urlopen(req, timeout=1) as resp:  # noqa: S310  # nosemgrep
+            data = json.loads(resp.read())
+            return ScannerAppConfig.model_validate(data)
+    except Exception:
+        logger.warning("Failed to read AppConfig, defaulting to enabled", exc_info=True)
+        return ScannerAppConfig()  # fail-open
+
+
+# ── Portkey response format ──────────────────────────────────────────────────
+
+
+def _build_portkey_response(verdict: bool, scan_response: ScanResponse) -> dict[str, Any]:
+    """Build a Portkey ``PluginHandlerResponse``-shaped Lambda response.
+
+    *verdict* is the Portkey boolean: ``True`` = allow the request through,
+    ``False`` = block/intercept.  The detailed scanner verdict string, detections,
+    and optional transformed data live inside ``data``.
+    """
+    data: dict[str, Any] = {
+        "request_id": scan_response.request_id,
+        "verdict_reason": scan_response.verdict,
+        "detections": [d.model_dump(mode="json") for d in scan_response.detections] if scan_response.detections else [],
+    }
+    if scan_response.content and scan_response.verdict == "redact":
+        data["transformedData"] = {"request": {"json": {"messages": [{"content": scan_response.content}]}}}
+
+    portkey_body: dict[str, Any] = {"verdict": verdict, "data": data}
+    if scan_response.error:
+        portkey_body["error"] = scan_response.error
+
+    return {
+        "statusCode": 200,  # Always 200 for Portkey
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(portkey_body),
+    }
+
+
 # ── Handler ──────────────────────────────────────────────────────────────────
 
 
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     """Lambda Function URL handler for content scanning.
 
-    Returns a JSON response with HTTP status 200 (allow/redact) or 403 (block).
-    On any internal error, returns 200 allow with a warning logged.
+    Returns a Portkey ``PluginHandlerResponse`` (always HTTP 200).
+    On any internal error the scanner fails open (verdict=True / allow).
     """
     try:
         body = event.get("body", "")
@@ -98,18 +154,30 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         request = ScanRequest.model_validate(body)
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.warning("Invalid request body: %s", exc)
-        return _response(
-            400,
+        return _build_portkey_response(
+            True,
             ScanResponse(verdict="allow", error=f"Invalid request: {exc}"),
         )
 
+    # ── AppConfig kill-switch ─────────────────────────────────────────────
+    app_config = _load_appconfig()
+    if not app_config.enabled:
+        logger.info("Scanner globally disabled via AppConfig")
+        return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+
+    team_enabled = app_config.team_overrides.get(request.team_id)
+    if team_enabled is False:
+        logger.info("Scanner disabled for team %s via AppConfig", request.team_id)
+        return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+
+    # ── Run scans ─────────────────────────────────────────────────────────
     try:
         return _scan(request)
     except Exception:
         # Scan failure = allow (fail-open). Never block on scanner errors.
         logger.exception("Scan failed for request %s, failing open", request.request_id)
-        return _response(
-            200,
+        return _build_portkey_response(
+            True,
             ScanResponse(
                 verdict="allow",
                 request_id=request.request_id,
@@ -163,9 +231,9 @@ def _scan(request: ScanRequest) -> dict[str, Any]:
                 if critical and config.injection_mode != ScanMode.detect:
                     verdict = "block"
 
-    status = 403 if verdict == "block" else 200
-    return _response(
-        status,
+    portkey_verdict = verdict != "block"
+    return _build_portkey_response(
+        portkey_verdict,
         ScanResponse(
             verdict=verdict,  # type: ignore[arg-type]
             request_id=request.request_id,
@@ -173,12 +241,3 @@ def _scan(request: ScanRequest) -> dict[str, Any]:
             detections=all_detections,
         ),
     )
-
-
-def _response(status_code: int, scan_response: ScanResponse) -> dict[str, Any]:
-    """Format a Lambda Function URL response."""
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": scan_response.model_dump_json(),
-    }

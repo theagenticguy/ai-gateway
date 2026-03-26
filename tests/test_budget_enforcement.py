@@ -43,6 +43,7 @@ from budget_enforcement.models import (
     BudgetStatus,
     ModelBudgetError,
     ModelLimit,
+    PluginHandlerResponse,
     TierConfig,
 )
 
@@ -565,7 +566,8 @@ class TestBudgetHandler:
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["allowed"] is True
+        assert body["verdict"] is True
+        assert "error" not in body
 
     @patch("budget_enforcement.handler._get_current_usage")
     @patch("budget_enforcement.handler._get_budget_record")
@@ -577,23 +579,27 @@ class TestBudgetHandler:
         event = _make_function_url_event({"jwt_token": jwt})
         result = handler(event)
 
-        assert result["statusCode"] == 429
+        assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["allowed"] is False
+        assert body["verdict"] is False
+        assert "error" in body
+        assert "exceeded" in body["error"].lower()
 
     def test_invalid_body(self) -> None:
         event = {"body": "not json!!!", "isBase64Encoded": False}
         result = handler(event)
-        assert result["statusCode"] == 400
+        assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["allowed"] is False
+        assert body["verdict"] is False
+        assert body["error"] == "Invalid request body"
 
     def test_missing_jwt_token(self) -> None:
         event = _make_function_url_event({"model": "gpt-4"})
         result = handler(event)
-        assert result["statusCode"] == 400
+        assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["allowed"] is False
+        assert body["verdict"] is False
+        assert "Validation error" in body["error"]
 
     def test_base64_encoded_body(self) -> None:
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
@@ -608,6 +614,8 @@ class TestBudgetHandler:
             mock_usage.return_value = Decimal(0)
             result = handler(event)
         assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert body["verdict"] is True
 
     @patch("budget_enforcement.handler._get_model_usage")
     @patch("budget_enforcement.handler._get_current_usage")
@@ -631,13 +639,12 @@ class TestBudgetHandler:
         event = _make_function_url_event({"jwt_token": jwt, "model": "claude-opus-4"})
         result = handler(event)
 
-        assert result["statusCode"] == 429
+        assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["allowed"] is False
-        assert body["error"]["type"] == "model_budget_exceeded"
-        assert body["error"]["model"] == "claude-opus-4"
-        assert float(body["error"]["limit_usd"]) == 200.0
-        assert float(body["error"]["current_usd"]) == 215.50
+        assert body["verdict"] is False
+        assert "error" in body
+        assert "Model budget exceeded" in body["error"]
+        assert "budget_status" in body["data"]
 
 
 # ── Seconds until period reset ───────────────────────────────────────────────
@@ -693,18 +700,57 @@ class TestBudgetModels:
         assert status.warn_threshold_pct == 80.0
         assert status.hard_limit_pct == 100.0
 
+    def test_plugin_handler_response_allow(self) -> None:
+        resp = PluginHandlerResponse(verdict=True, data={"budget_status": {"team": "t"}})
+        dumped = resp.model_dump(exclude_none=True, mode="json")
+        assert dumped["verdict"] is True
+        assert dumped["data"]["budget_status"]["team"] == "t"
+        assert "error" not in dumped
+
+    def test_plugin_handler_response_deny(self) -> None:
+        resp = PluginHandlerResponse(verdict=False, error="Budget exceeded")
+        dumped = resp.model_dump(exclude_none=True, mode="json")
+        assert dumped["verdict"] is False
+        assert dumped["error"] == "Budget exceeded"
+
 
 # ── Build response ───────────────────────────────────────────────────────────
 
 
 class TestBuildResponse:
-    def test_format(self) -> None:
+    def test_allowed_format(self) -> None:
         resp = BudgetCheckResponse(allowed=True)
         result = _build_response(resp)
         assert result["statusCode"] == 200
         assert result["headers"]["Content-Type"] == "application/json"
         body = json.loads(result["body"])
-        assert body["allowed"] is True
+        assert body["verdict"] is True
+        assert body["data"] == {}
+        assert "error" not in body
+
+    def test_denied_format(self) -> None:
+        resp = BudgetCheckResponse(
+            allowed=False,
+            status_code=429,
+            reason="Monthly budget exceeded (110.0% of $1000)",
+            budget_status=BudgetStatus(team="t", user="u"),
+            retry_after_seconds=3600,
+        )
+        result = _build_response(resp)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert body["verdict"] is False
+        assert body["error"] == "Monthly budget exceeded (110.0% of $1000)"
+        assert body["data"]["budget_status"]["team"] == "t"
+        assert body["data"]["retry_after_seconds"] == 3600
+
+    def test_always_200_even_for_400_status(self) -> None:
+        resp = BudgetCheckResponse(allowed=False, status_code=400, reason="Invalid request body")
+        result = _build_response(resp)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert body["verdict"] is False
+        assert body["error"] == "Invalid request body"
 
 
 # ── Property-based tests ─────────────────────────────────────────────────────
@@ -747,11 +793,13 @@ class TestPropertyBased:
     )
     @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_handler_never_crashes_on_random_body(self, body_text: str) -> None:
-        """Handler should return a valid response for any body input."""
+        """Handler should return a valid Portkey response for any body input."""
         event = {"body": body_text, "isBase64Encoded": False}
         result = handler(event)
-        assert "statusCode" in result
-        assert result["statusCode"] in (200, 400, 429)
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert "verdict" in body
+        assert isinstance(body["verdict"], bool)
 
     @given(
         rpm=st.integers(min_value=0, max_value=100000),

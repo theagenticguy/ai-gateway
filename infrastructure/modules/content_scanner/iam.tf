@@ -74,6 +74,15 @@ resource "aws_iam_role_policy" "lambda" {
         Action   = ["kms:Decrypt"]
         Resource = var.enable_content_scanner ? aws_kms_key.lambda_env[0].arn : "*"
       },
+      {
+        Sid    = "AppConfigRead"
+        Effect = "Allow"
+        Action = [
+          "appconfig:StartConfigurationSession",
+          "appconfig:GetLatestConfiguration",
+        ]
+        Resource = "*"
+      },
     ]
   })
 }

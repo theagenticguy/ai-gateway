@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -66,3 +67,11 @@ class BudgetCheckResponse(BaseModel):
         default=None,
         description="Seconds until the budget period resets (included when blocked)",
     )
+
+
+class PluginHandlerResponse(BaseModel):
+    """Portkey webhook plugin response format."""
+
+    verdict: bool
+    data: dict[str, Any] = {}
+    error: str | None = None

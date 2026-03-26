@@ -394,11 +394,28 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
 
 
 def _build_response(result: BudgetCheckResponse) -> dict[str, Any]:
-    """Format the Lambda Function URL response."""
-    status = result.status_code
-    body = result.model_dump(exclude_none=True, mode="json")
+    """Format the Lambda Function URL response as a Portkey PluginHandlerResponse.
+
+    Always returns HTTP 200 — the ``verdict`` field controls allow/deny.
+    If the Lambda returns 4xx, Portkey treats it as a hook failure, not a deny.
+    """
+    verdict = result.allowed
+    data: dict[str, Any] = {}
+    if result.budget_status:
+        data["budget_status"] = result.budget_status.model_dump(mode="json")
+    if result.retry_after_seconds:
+        data["retry_after_seconds"] = result.retry_after_seconds
+    error = result.reason if not result.allowed else None
+
+    portkey_response: dict[str, Any] = {
+        "verdict": verdict,
+        "data": data,
+    }
+    if error:
+        portkey_response["error"] = error
+
     return {
-        "statusCode": status,
+        "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
+        "body": json.dumps(portkey_response),
     }
