@@ -108,7 +108,12 @@ This module is composed of 4 local sub-modules:
 
 | Name | Description |
 |------|-------------|
+| <a name="output_admin_api_execution_arn"></a> [admin\_api\_execution\_arn](#output\_admin\_api\_execution\_arn) | Admin API Gateway execution ARN (for Lambda permissions) |
+| <a name="output_admin_api_url"></a> [admin\_api\_url](#output\_admin\_api\_url) | Admin API Gateway invoke URL |
 | <a name="output_alb_dns_name"></a> [alb\_dns\_name](#output\_alb\_dns\_name) | DNS name of the Application Load Balancer |
+| <a name="output_audit_log_bucket"></a> [audit\_log\_bucket](#output\_audit\_log\_bucket) | Audit log S3 bucket name |
+| <a name="output_audit_log_firehose_stream"></a> [audit\_log\_firehose\_stream](#output\_audit\_log\_firehose\_stream) | Audit log Firehose delivery stream name |
+| <a name="output_audit_log_glue_database"></a> [audit\_log\_glue\_database](#output\_audit\_log\_glue\_database) | Glue catalog database for audit log queries |
 | <a name="output_budgets_kms_key_arn"></a> [budgets\_kms\_key\_arn](#output\_budgets\_kms\_key\_arn) | ARN of the KMS key used for budget table encryption |
 | <a name="output_budgets_lambda_policy_arn"></a> [budgets\_lambda\_policy\_arn](#output\_budgets\_lambda\_policy\_arn) | ARN of the IAM policy for Lambda access to budget tables |
 | <a name="output_budgets_table_arn"></a> [budgets\_table\_arn](#output\_budgets\_table\_arn) | ARN of the budgets DynamoDB table |
@@ -128,8 +133,12 @@ This module is composed of 4 local sub-modules:
 | <a name="output_guardrail_arn"></a> [guardrail\_arn](#output\_guardrail\_arn) | Bedrock Guardrail ARN |
 | <a name="output_guardrail_id"></a> [guardrail\_id](#output\_guardrail\_id) | Bedrock Guardrail ID |
 | <a name="output_hosted_ui_url"></a> [hosted\_ui\_url](#output\_hosted\_ui\_url) | Cognito Hosted UI URL for SSO login (empty if user auth is disabled) |
+| <a name="output_routing_config_function_url"></a> [routing\_config\_function\_url](#output\_routing\_config\_function\_url) | Lambda Function URL for routing config management |
+| <a name="output_routing_configs_table_name"></a> [routing\_configs\_table\_name](#output\_routing\_configs\_table\_name) | Name of the routing configs DynamoDB table |
 | <a name="output_team_client_ids"></a> [team\_client\_ids](#output\_team\_client\_ids) | Map of team name to Cognito app client ID (empty if no client\_configs) |
 | <a name="output_team_client_secrets"></a> [team\_client\_secrets](#output\_team\_client\_secrets) | Map of team name to Cognito app client secret (empty if no client\_configs) |
+| <a name="output_team_registration_function_url"></a> [team\_registration\_function\_url](#output\_team\_registration\_function\_url) | Lambda Function URL for team registration |
+| <a name="output_teams_table_name"></a> [teams\_table\_name](#output\_teams\_table\_name) | Name of the teams DynamoDB table |
 | <a name="output_usage_table_arn"></a> [usage\_table\_arn](#output\_usage\_table\_arn) | ARN of the usage DynamoDB table |
 | <a name="output_usage_table_name"></a> [usage\_table\_name](#output\_usage\_table\_name) | Name of the usage DynamoDB table |
 | <a name="output_user_client_id"></a> [user\_client\_id](#output\_user\_client\_id) | Cognito User SSO client ID (empty if user auth is disabled) |
