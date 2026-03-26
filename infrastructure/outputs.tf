@@ -154,3 +154,64 @@ output "chargeback_lambda_arn" {
   description = "ARN of the chargeback report Lambda function"
   value       = length(module.chargeback) > 0 ? module.chargeback[0].lambda_arn : null
 }
+
+# -----------------------------------------------------------------------------
+# Admin API Outputs
+# -----------------------------------------------------------------------------
+
+output "admin_api_url" {
+  description = "Admin API Gateway invoke URL"
+  value       = var.enable_admin_api ? module.admin_api[0].api_url : ""
+}
+
+output "admin_api_execution_arn" {
+  description = "Admin API Gateway execution ARN (for Lambda permissions)"
+  value       = var.enable_admin_api ? module.admin_api[0].api_execution_arn : ""
+}
+
+# -----------------------------------------------------------------------------
+# Team Registration Outputs
+# -----------------------------------------------------------------------------
+
+output "teams_table_name" {
+  description = "Name of the teams DynamoDB table"
+  value       = length(module.team_registration) > 0 ? module.team_registration[0].teams_table_name : null
+}
+
+output "team_registration_function_url" {
+  description = "Lambda Function URL for team registration"
+  value       = length(module.team_registration) > 0 ? module.team_registration[0].function_url : null
+}
+
+# -----------------------------------------------------------------------------
+# Routing Config Outputs
+# -----------------------------------------------------------------------------
+
+output "routing_configs_table_name" {
+  description = "Name of the routing configs DynamoDB table"
+  value       = length(module.routing) > 0 ? module.routing[0].routing_configs_table_name : null
+}
+
+output "routing_config_function_url" {
+  description = "Lambda Function URL for routing config management"
+  value       = length(module.routing) > 0 ? module.routing[0].function_url : null
+}
+
+# -----------------------------------------------------------------------------
+# Audit Log Outputs
+# -----------------------------------------------------------------------------
+
+output "audit_log_bucket" {
+  description = "Audit log S3 bucket name"
+  value       = var.enable_audit_log ? module.audit_log[0].s3_bucket_name : ""
+}
+
+output "audit_log_firehose_stream" {
+  description = "Audit log Firehose delivery stream name"
+  value       = var.enable_audit_log ? module.audit_log[0].firehose_stream_name : ""
+}
+
+output "audit_log_glue_database" {
+  description = "Glue catalog database for audit log queries"
+  value       = var.enable_audit_log ? module.audit_log[0].glue_database_name : ""
+}
