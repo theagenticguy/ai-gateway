@@ -98,9 +98,10 @@ def _load_appconfig() -> ScannerAppConfig:
     if not APPCONFIG_PATH:
         return ScannerAppConfig()  # default: enabled=True
     try:
-        url = f"http://localhost:2772{APPCONFIG_PATH}"
+        # URL is localhost:2772 (AppConfig Lambda extension) — not user-controlled
+        url = f"http://localhost:2772{APPCONFIG_PATH}"  # nosemgrep
         req = urllib.request.Request(url)  # noqa: S310
-        with urllib.request.urlopen(req, timeout=1) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=1) as resp:  # noqa: S310  # nosemgrep
             data = json.loads(resp.read())
             return ScannerAppConfig.model_validate(data)
     except Exception:
