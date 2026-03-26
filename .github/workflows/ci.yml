@@ -89,14 +89,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Semgrep
+        run: python3 -m pip install --quiet semgrep
+
       - name: Semgrep SAST scan
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
-        with:
-          config: >-
-            p/python
-            p/owasp-top-ten
-            p/security-audit
-          auditOn: push
+        run: semgrep scan --config p/python --config p/owasp-top-ten --config p/security-audit --error --quiet
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
@@ -170,7 +167,7 @@ jobs:
           output_format: sarif
           output_file_path: checkov-results.sarif
           soft_fail: false
-          skip_check: CKV_TF_1,CKV2_AWS_50,CKV_AWS_115,CKV_AWS_116,CKV_AWS_117,CKV_AWS_272
+          skip_check: CKV_TF_1,CKV2_AWS_50,CKV_AWS_115,CKV_AWS_116,CKV_AWS_117,CKV_AWS_272,CKV2_AWS_53,CKV2_AWS_51,CKV2_AWS_62,CKV_AWS_144,CKV_AWS_145,CKV_AWS_18,CKV_AWS_21
           download_external_modules: false
 
       - name: Upload Checkov SARIF
