@@ -195,7 +195,7 @@ def check_rate_limit(
         try:
             current_daily_tokens = _increment_daily_token_counter(team, estimated_tokens)
         except (ClientError, Exception):
-            logger.warning(
+            logger.warning(  # nosemgrep: python-logger-credential-disclosure
                 "DynamoDB error during daily token check (team=%s), allowing request",
                 team,
                 exc_info=True,
@@ -207,7 +207,7 @@ def check_rate_limit(
             )
 
         if current_daily_tokens > tokens_per_day_limit:
-            logger.info(
+            logger.info(  # nosemgrep: python-logger-credential-disclosure
                 "Daily token limit exceeded for team=%s (%d > %d)",
                 team,
                 current_daily_tokens,
