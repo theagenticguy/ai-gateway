@@ -1,0 +1,10 @@
+skip-check:
+  # Admin API Gateway — request validation handled by Lambda Pydantic models
+  - CKV2_AWS_53  # API gateway request validation (covered by Lambda handler + Pydantic)
+  - CKV2_AWS_51  # API gateway client certificate (not needed for Cognito-authed admin APIs)
+  # Audit log S3 bucket — append-only log destination, intentionally minimal
+  - CKV2_AWS_62  # S3 event notifications not needed for audit pipeline
+  - CKV_AWS_18   # Access logging on the log bucket itself is circular
+  - CKV_AWS_144  # Cross-region replication not required for audit logs
+  - CKV_AWS_21   # Versioning disabled — audit logs are append-only
+  - CKV_AWS_145  # Using SSE-S3 (AES256) to keep module self-contained

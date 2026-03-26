@@ -33,6 +33,8 @@ This module is composed of 4 local sub-modules:
 
 | Name | Source | Version |
 |------|--------|---------|
+| <a name="module_admin_api"></a> [admin\_api](#module\_admin\_api) | ./modules/admin_api | n/a |
+| <a name="module_audit_log"></a> [audit\_log](#module\_audit\_log) | ./modules/audit_log | n/a |
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
 | <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
@@ -44,6 +46,8 @@ This module is composed of 4 local sub-modules:
 | <a name="module_guardrails"></a> [guardrails](#module\_guardrails) | ./modules/guardrails | n/a |
 | <a name="module_networking"></a> [networking](#module\_networking) | ./modules/networking | n/a |
 | <a name="module_observability"></a> [observability](#module\_observability) | ./modules/observability | n/a |
+| <a name="module_routing"></a> [routing](#module\_routing) | ./modules/routing | n/a |
+| <a name="module_team_registration"></a> [team\_registration](#module\_team\_registration) | ./modules/team_registration | n/a |
 
 ## Resources
 
@@ -69,6 +73,8 @@ This module is composed of 4 local sub-modules:
 | <a name="input_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#input\_cognito\_user\_pool\_id) | Cognito User Pool ID for JWT validation. Leave empty to disable JWT auth. | `string` | `""` | no |
 | <a name="input_content_scanner_default_injection_mode"></a> [content\_scanner\_default\_injection\_mode](#input\_content\_scanner\_default\_injection\_mode) | Default injection scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
+| <a name="input_enable_admin_api"></a> [enable\_admin\_api](#input\_enable\_admin\_api) | Enable the API Gateway admin plane (also enables team\_registration and routing modules) | `bool` | `false` | no |
+| <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
 | <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
@@ -102,7 +108,12 @@ This module is composed of 4 local sub-modules:
 
 | Name | Description |
 |------|-------------|
+| <a name="output_admin_api_execution_arn"></a> [admin\_api\_execution\_arn](#output\_admin\_api\_execution\_arn) | Admin API Gateway execution ARN (for Lambda permissions) |
+| <a name="output_admin_api_url"></a> [admin\_api\_url](#output\_admin\_api\_url) | Admin API Gateway invoke URL |
 | <a name="output_alb_dns_name"></a> [alb\_dns\_name](#output\_alb\_dns\_name) | DNS name of the Application Load Balancer |
+| <a name="output_audit_log_bucket"></a> [audit\_log\_bucket](#output\_audit\_log\_bucket) | Audit log S3 bucket name |
+| <a name="output_audit_log_firehose_stream"></a> [audit\_log\_firehose\_stream](#output\_audit\_log\_firehose\_stream) | Audit log Firehose delivery stream name |
+| <a name="output_audit_log_glue_database"></a> [audit\_log\_glue\_database](#output\_audit\_log\_glue\_database) | Glue catalog database for audit log queries |
 | <a name="output_budgets_kms_key_arn"></a> [budgets\_kms\_key\_arn](#output\_budgets\_kms\_key\_arn) | ARN of the KMS key used for budget table encryption |
 | <a name="output_budgets_lambda_policy_arn"></a> [budgets\_lambda\_policy\_arn](#output\_budgets\_lambda\_policy\_arn) | ARN of the IAM policy for Lambda access to budget tables |
 | <a name="output_budgets_table_arn"></a> [budgets\_table\_arn](#output\_budgets\_table\_arn) | ARN of the budgets DynamoDB table |
@@ -122,8 +133,12 @@ This module is composed of 4 local sub-modules:
 | <a name="output_guardrail_arn"></a> [guardrail\_arn](#output\_guardrail\_arn) | Bedrock Guardrail ARN |
 | <a name="output_guardrail_id"></a> [guardrail\_id](#output\_guardrail\_id) | Bedrock Guardrail ID |
 | <a name="output_hosted_ui_url"></a> [hosted\_ui\_url](#output\_hosted\_ui\_url) | Cognito Hosted UI URL for SSO login (empty if user auth is disabled) |
+| <a name="output_routing_config_function_url"></a> [routing\_config\_function\_url](#output\_routing\_config\_function\_url) | Lambda Function URL for routing config management |
+| <a name="output_routing_configs_table_name"></a> [routing\_configs\_table\_name](#output\_routing\_configs\_table\_name) | Name of the routing configs DynamoDB table |
 | <a name="output_team_client_ids"></a> [team\_client\_ids](#output\_team\_client\_ids) | Map of team name to Cognito app client ID (empty if no client\_configs) |
 | <a name="output_team_client_secrets"></a> [team\_client\_secrets](#output\_team\_client\_secrets) | Map of team name to Cognito app client secret (empty if no client\_configs) |
+| <a name="output_team_registration_function_url"></a> [team\_registration\_function\_url](#output\_team\_registration\_function\_url) | Lambda Function URL for team registration |
+| <a name="output_teams_table_name"></a> [teams\_table\_name](#output\_teams\_table\_name) | Name of the teams DynamoDB table |
 | <a name="output_usage_table_arn"></a> [usage\_table\_arn](#output\_usage\_table\_arn) | ARN of the usage DynamoDB table |
 | <a name="output_usage_table_name"></a> [usage\_table\_name](#output\_usage\_table\_name) | Name of the usage DynamoDB table |
 | <a name="output_user_client_id"></a> [user\_client\_id](#output\_user\_client\_id) | Cognito User SSO client ID (empty if user auth is disabled) |

@@ -96,6 +96,7 @@ class MetricResult(BaseModel):
     cache_read_input_tokens: int = Field(default=0, ge=0)
     cache_creation_input_tokens: int = Field(default=0, ge=0)
     cache_savings_usd: float = Field(default=0.0, ge=0.0)
+    cache_hit: bool = Field(default=False, description="Whether this request was served from cache")
     team: str = Field(default="unknown")
     user: str = Field(default="unknown")
 

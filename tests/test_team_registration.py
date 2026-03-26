@@ -155,10 +155,19 @@ class TestAuth:
         assert result is not None
         assert "Missing required scope" in result
 
-    def test_handler_returns_403_for_non_admin(self) -> None:
+    def test_handler_delegates_auth_to_api_gateway(self) -> None:
+        """Auth is now enforced at the API Gateway Cognito authorizer (ADR-014).
+
+        The handler no longer checks scopes itself — a non-admin JWT that
+        reaches the handler means API Gateway already authorized the request.
+        """
         event = _make_event("GET", "/teams", token=NON_ADMIN_JWT)
-        result = handler(event)
-        assert result["statusCode"] == 403
+        with patch("team_registration.routes.dynamodb") as mock_dynamodb:
+            mock_table = MagicMock()
+            mock_table.scan.return_value = {"Items": []}
+            mock_dynamodb.Table.return_value = mock_table
+            result = handler(event)
+            assert result["statusCode"] == 200
 
 
 # ── Registration tests ───────────────────────────────────────────────────────
@@ -559,7 +568,7 @@ class TestModels:
         assert req.description == ""
 
     def test_register_team_request_validation(self) -> None:
-        from pydantic import ValidationError  # noqa: PLC0415
+        from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
             RegisterTeamRequest(team_name="", contact_email="a@b.com")

@@ -93,6 +93,58 @@ module "clients" {
 }
 
 # -----------------------------------------------------------------------------
+# Admin API (API Gateway REST API with Cognito authorizer for admin endpoints)
+# -----------------------------------------------------------------------------
+
+module "admin_api" {
+  source = "./modules/admin_api"
+  count  = var.enable_admin_api ? 1 : 0
+
+  project_name          = var.project_name
+  environment           = var.environment
+  enable_admin_api      = var.enable_admin_api
+  cognito_user_pool_arn = module.auth.cognito_user_pool_arn
+}
+
+# -----------------------------------------------------------------------------
+# Team Registration (Lambda + DynamoDB for self-service team onboarding)
+# -----------------------------------------------------------------------------
+
+module "team_registration" {
+  source = "./modules/team_registration"
+  count  = var.enable_admin_api ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  enable_team_registration = true
+
+  cognito_user_pool_id   = module.auth.cognito_user_pool_id
+  cognito_user_pool_arn  = module.auth.cognito_user_pool_arn
+  cognito_token_endpoint = module.auth.cognito_token_endpoint
+
+  # Budget tables (from budgets module, if enabled)
+  budgets_table_name = var.enable_budgets ? module.budgets[0].budgets_table_name : "gateway-budgets"
+  budgets_table_arn  = var.enable_budgets ? module.budgets[0].budgets_table_arn : ""
+  usage_table_name   = var.enable_budgets ? module.budgets[0].usage_table_name : "gateway-usage"
+  usage_table_arn    = var.enable_budgets ? module.budgets[0].usage_table_arn : ""
+}
+
+# -----------------------------------------------------------------------------
+# Routing (Lambda + DynamoDB for dynamic routing config management)
+# -----------------------------------------------------------------------------
+
+module "routing" {
+  source = "./modules/routing"
+  count  = var.enable_admin_api ? 1 : 0
+
+  project_name       = var.project_name
+  environment        = var.environment
+  enable_routing_api = true
+}
+
+# -----------------------------------------------------------------------------
 # Compute (needs VPC subnets, ALB SG + target group, log group names)
 # -----------------------------------------------------------------------------
 
@@ -230,4 +282,18 @@ module "chargeback" {
   budgets_table_name = module.budgets[0].budgets_table_name
   budgets_table_arn  = module.budgets[0].budgets_table_arn
   sns_topic_arn      = module.observability.alarm_topic_arns[0]
+}
+
+# -----------------------------------------------------------------------------
+# Audit Log (Firehose -> S3 Parquet pipeline for compliance audit trail)
+# -----------------------------------------------------------------------------
+
+module "audit_log" {
+  source = "./modules/audit_log"
+  count  = var.enable_audit_log ? 1 : 0
+
+  project_name     = var.project_name
+  environment      = var.environment
+  aws_region       = var.aws_region
+  enable_audit_log = var.enable_audit_log
 }

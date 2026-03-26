@@ -157,7 +157,7 @@ class TestLogRecord:
 
 class TestTokenPrice:
     def test_immutable(self) -> None:
-        import pytest  # noqa: PLC0415
+        import pytest
 
         price = TokenPrice(input_per_1k=0.01, output_per_1k=0.03)
         with pytest.raises(Exception):  # noqa: B017, PT011
@@ -223,7 +223,7 @@ class TestModelLimit:
         assert ml.daily_tokens == 100000
 
     def test_model_limit_frozen(self) -> None:
-        import pytest  # noqa: PLC0415
+        import pytest
 
         ml = ModelLimit(monthly_usd=Decimal(200))
         with pytest.raises(Exception):  # noqa: B017, PT011
@@ -729,3 +729,197 @@ class TestHandler:
         log_events = [{"id": str(i), "message": m} for i, m in enumerate(messages)]
         result = handler(_make_event(log_events))
         assert result["statusCode"] in (200, 400, 500)
+
+
+# ── Audit log publishing ─────────────────────────────────────────────────────
+
+
+class TestAuditLogPublishing:
+    """Tests for _publish_audit_records (Kinesis Firehose audit trail)."""
+
+    @patch("cost_attribution.handler._get_firehose")
+    @patch("cost_attribution.handler.AUDIT_FIREHOSE_STREAM", "my-audit-stream")
+    def test_sends_records_to_firehose_when_stream_set(self, mock_get_fh: Any) -> None:
+        """_publish_audit_records sends records to Firehose when AUDIT_FIREHOSE_STREAM is set."""
+        from cost_attribution.handler import _publish_audit_records
+
+        mock_firehose = MagicMock()
+        mock_get_fh.return_value = mock_firehose
+
+        metrics = [_metric(provider="openai", model="gpt-4", cost_usd=0.5, team="team-a", user="u1")]
+        _publish_audit_records(metrics)
+
+        mock_firehose.put_record_batch.assert_called_once()
+        call_kwargs = mock_firehose.put_record_batch.call_args[1]
+        assert call_kwargs["DeliveryStreamName"] == "my-audit-stream"
+        assert len(call_kwargs["Records"]) == 1
+        # Verify record payload
+        record_data = json.loads(call_kwargs["Records"][0]["Data"])
+        assert record_data["team"] == "team-a"
+        assert record_data["user_id"] == "u1"
+        assert record_data["model"] == "gpt-4"
+        assert record_data["provider"] == "openai"
+        assert record_data["cost_usd"] == 0.5
+
+    @patch("cost_attribution.handler._get_firehose")
+    @patch("cost_attribution.handler.AUDIT_FIREHOSE_STREAM", "")
+    def test_noop_when_stream_empty(self, mock_get_fh: Any) -> None:
+        """_publish_audit_records is a no-op when AUDIT_FIREHOSE_STREAM is empty."""
+        from cost_attribution.handler import _publish_audit_records
+
+        _publish_audit_records([_metric()])
+        mock_get_fh.assert_not_called()
+
+    @patch("cost_attribution.handler._get_firehose")
+    @patch("cost_attribution.handler.AUDIT_FIREHOSE_STREAM", "my-audit-stream")
+    def test_noop_when_metrics_empty(self, mock_get_fh: Any) -> None:
+        """_publish_audit_records is a no-op when metrics list is empty."""
+        from cost_attribution.handler import _publish_audit_records
+
+        _publish_audit_records([])
+        mock_get_fh.assert_not_called()
+
+    @patch("cost_attribution.handler._get_firehose")
+    @patch("cost_attribution.handler.AUDIT_FIREHOSE_STREAM", "my-audit-stream")
+    def test_batches_at_500_per_call(self, mock_get_fh: Any) -> None:
+        """Records are batched at 500 per put_record_batch call."""
+        from cost_attribution.handler import _publish_audit_records
+
+        mock_firehose = MagicMock()
+        mock_get_fh.return_value = mock_firehose
+
+        # 1200 metrics -> 3 batches: 500, 500, 200
+        metrics = [_metric(team=f"team-{i}") for i in range(1200)]
+        _publish_audit_records(metrics)
+
+        assert mock_firehose.put_record_batch.call_count == 3
+        batch_sizes = [len(call[1]["Records"]) for call in mock_firehose.put_record_batch.call_args_list]
+        assert batch_sizes == [500, 500, 200]
+
+    @patch("cost_attribution.handler._publish_audit_records")
+    @patch("cost_attribution.handler.check_and_publish_alerts")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_firehose_error_is_best_effort(
+        self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_audit: Any
+    ) -> None:
+        """Firehose errors are caught in handler() -- the warning is logged but handler still returns 200."""
+        mock_alerts.return_value = 0
+        mock_audit.side_effect = Exception("Firehose delivery failure")
+
+        log_events = [
+            {
+                "id": "1",
+                "message": json.dumps(
+                    {
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                        "model": "gpt-4",
+                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                    }
+                ),
+            }
+        ]
+        result = handler(_make_event(log_events))
+        assert result["statusCode"] == 200
+        assert result["processed"] == 1
+
+
+# ── Per-team cache metrics ────────────────────────────────────────────────────
+
+
+class TestPerTeamCacheMetrics:
+    """Tests for per-team cache hit/miss/savings CloudWatch metrics in _publish_metrics."""
+
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_cache_hit_publishes_hits_by_team(self, mock_cw: Any) -> None:
+        """When cache_hit=True, CacheHitsByTeam metric is published with Team dimension."""
+        from cost_attribution.handler import _publish_metrics
+
+        m = MetricResult(
+            provider="anthropic",
+            model="claude-sonnet-4",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            cost_usd=0.01,
+            cache_hit=True,
+            team="platform",
+            user="u1",
+        )
+        _publish_metrics([m])
+
+        # Extract all metric data points from the put_metric_data call(s)
+        all_metric_data: list[dict[str, Any]] = []
+        for call in mock_cw.put_metric_data.call_args_list:
+            all_metric_data.extend(call[1]["MetricData"])
+
+        # Find CacheHitsByTeam
+        hits_by_team = [md for md in all_metric_data if md["MetricName"] == "CacheHitsByTeam"]
+        assert len(hits_by_team) == 1
+        assert hits_by_team[0]["Dimensions"] == [{"Name": "Team", "Value": "platform"}]
+        assert hits_by_team[0]["Value"] == 1.0
+
+        # CacheMissesByTeam should NOT be present
+        misses_by_team = [md for md in all_metric_data if md["MetricName"] == "CacheMissesByTeam"]
+        assert len(misses_by_team) == 0
+
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_cache_miss_publishes_misses_by_team(self, mock_cw: Any) -> None:
+        """When cache_hit=False, CacheMissesByTeam metric is published with Team dimension."""
+        from cost_attribution.handler import _publish_metrics
+
+        m = MetricResult(
+            provider="openai",
+            model="gpt-4",
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30,
+            cost_usd=0.01,
+            cache_hit=False,
+            team="infra",
+            user="u2",
+        )
+        _publish_metrics([m])
+
+        all_metric_data: list[dict[str, Any]] = []
+        for call in mock_cw.put_metric_data.call_args_list:
+            all_metric_data.extend(call[1]["MetricData"])
+
+        # Find CacheMissesByTeam
+        misses_by_team = [md for md in all_metric_data if md["MetricName"] == "CacheMissesByTeam"]
+        assert len(misses_by_team) == 1
+        assert misses_by_team[0]["Dimensions"] == [{"Name": "Team", "Value": "infra"}]
+        assert misses_by_team[0]["Value"] == 1.0
+
+        # CacheHitsByTeam should NOT be present
+        hits_by_team = [md for md in all_metric_data if md["MetricName"] == "CacheHitsByTeam"]
+        assert len(hits_by_team) == 0
+
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_cache_savings_by_team_always_published(self, mock_cw: Any) -> None:
+        """CacheSavingsByTeam metric is always published with cache_savings_usd value."""
+        from cost_attribution.handler import _publish_metrics
+
+        m = MetricResult(
+            provider="anthropic",
+            model="claude-sonnet-4",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            cost_usd=0.01,
+            cache_savings_usd=0.005,
+            cache_hit=True,
+            team="data-eng",
+            user="u3",
+        )
+        _publish_metrics([m])
+
+        all_metric_data: list[dict[str, Any]] = []
+        for call in mock_cw.put_metric_data.call_args_list:
+            all_metric_data.extend(call[1]["MetricData"])
+
+        savings_by_team = [md for md in all_metric_data if md["MetricName"] == "CacheSavingsByTeam"]
+        assert len(savings_by_team) == 1
+        assert savings_by_team[0]["Dimensions"] == [{"Name": "Team", "Value": "data-eng"}]
+        assert savings_by_team[0]["Value"] == 0.005
+        assert savings_by_team[0]["Unit"] == "None"

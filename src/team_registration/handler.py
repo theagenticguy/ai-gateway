@@ -8,7 +8,8 @@ Provides CRUD operations for team management:
 - ``POST   /teams/{id}/rotate``  — Rotate client credentials
 - ``DELETE  /teams/{id}``        — Deactivate team (revokes all tokens)
 
-Admin scope (``https://gateway.internal/admin``) is required for all operations.
+Admin scope (``https://gateway.internal/admin``) is enforced by the API Gateway
+Cognito authorizer; the handler no longer validates JWTs directly.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from team_registration.auth import validate_admin_scope
 from team_registration.routes import (
     deactivate_team,
     get_team,
@@ -72,11 +72,6 @@ def _dispatch(event: dict[str, Any]) -> dict[str, Any]:
 
     # Normalize path: strip trailing slash, default to /teams
     path = path.rstrip("/") or "/teams"
-
-    # Auth check
-    auth_error = validate_admin_scope(event)
-    if auth_error:
-        return _response(403, {"error": auth_error})
 
     result, status = _route(method, path, event)
     return _response(status, result)

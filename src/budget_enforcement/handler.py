@@ -37,6 +37,7 @@ from budget_enforcement.models import (
     ModelLimit,
     TierConfig,
 )
+from rate_limiter.handler import check_rate_limit
 
 logger = logging.getLogger("budget_enforcement")
 logger.setLevel(logging.INFO)
@@ -213,9 +214,11 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
 
     1. Decode JWT and extract identity claims.
     2. Look up the team's budget record in DynamoDB (fall back to tier defaults).
-    3. Compare current spend against the budget.
-    4. Check model-level budgets if applicable.
-    5. Return allow/deny decision.
+    3. Resolve tier config (rate limits + budget defaults).
+    4. Check rate limits (RPM + daily tokens).
+    5. Compare current spend against the budget.
+    6. Check model-level budgets if applicable.
+    7. Return allow/deny decision.
     """
     claims = decode_jwt_payload(request.jwt_token)
     team = extract_team(claims)
@@ -232,6 +235,13 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
 
     model_limits: dict[str, ModelLimit] = {}
 
+    # Resolve tier config (needed for rate limits and budget defaults)
+    tier_config = TIER_DEFAULTS.get(tenant_tier)
+    if tier_config is None:
+        tier_config = TIER_DEFAULTS.get(
+            "standard", TierConfig(rpm=100, tokens_per_day=500000, monthly_usd=Decimal(100))
+        )
+
     if budget_item:
         try:
             monthly_budget = Decimal(str(budget_item.get("monthly_budget_usd", "1000")))
@@ -240,17 +250,32 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
         warn_pct = float(budget_item.get("warn_threshold_pct", 80))
         hard_pct = float(budget_item.get("hard_limit_pct", 100))
         model_limits = _parse_model_limits(budget_item)
+        # Override tier defaults with budget-item-level rate limits if present
+        tier_config = TierConfig(
+            rpm=int(budget_item.get("rpm", tier_config.rpm)),
+            tokens_per_day=int(budget_item.get("tokens_per_day", tier_config.tokens_per_day)),
+            monthly_usd=monthly_budget,
+        )
     else:
         # E.4: Fall back to tier defaults with full TierConfig
-        tier_config = TIER_DEFAULTS.get(tenant_tier)
-        if tier_config is None:
-            # Unknown tier -> fall back to first available or standard-like defaults
-            tier_config = TIER_DEFAULTS.get(
-                "standard", TierConfig(rpm=100, tokens_per_day=500000, monthly_usd=Decimal(100))
-            )
         monthly_budget = tier_config.monthly_usd
         warn_pct = 80.0
         hard_pct = 100.0
+
+    # Rate limit check (RPM + daily tokens)
+    rate_result = check_rate_limit(
+        team=team,
+        rpm_limit=tier_config.rpm,
+        tokens_per_day_limit=tier_config.tokens_per_day,
+        estimated_tokens=request.estimated_tokens,
+    )
+    if not rate_result.allowed:
+        return BudgetCheckResponse(
+            allowed=False,
+            status_code=429,
+            reason=rate_result.reason,
+            retry_after_seconds=rate_result.retry_after_seconds,
+        )
 
     # Fetch current spend (DynamoDB failure -> graceful allow)
     try:
