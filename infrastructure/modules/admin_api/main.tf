@@ -75,6 +75,7 @@ resource "aws_api_gateway_resource" "teams_proxy" {
   path_part   = "{proxy+}"
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "teams_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -85,6 +86,7 @@ resource "aws_api_gateway_method" "teams_any" {
   authorization_scopes = [var.required_scope]
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "teams_proxy_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -142,6 +144,7 @@ resource "aws_api_gateway_resource" "budgets_proxy" {
   path_part   = "{proxy+}"
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "budgets_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -152,6 +155,7 @@ resource "aws_api_gateway_method" "budgets_any" {
   authorization_scopes = [var.required_scope]
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "budgets_proxy_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -209,6 +213,7 @@ resource "aws_api_gateway_resource" "routing_proxy" {
   path_part   = "{proxy+}"
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "routing_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -219,6 +224,7 @@ resource "aws_api_gateway_method" "routing_any" {
   authorization_scopes = [var.required_scope]
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "routing_proxy_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -276,6 +282,7 @@ resource "aws_api_gateway_resource" "scanner_proxy" {
   path_part   = "{proxy+}"
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "scanner_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -286,6 +293,7 @@ resource "aws_api_gateway_method" "scanner_any" {
   authorization_scopes = [var.required_scope]
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "scanner_proxy_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -343,6 +351,7 @@ resource "aws_api_gateway_resource" "pricing_proxy" {
   path_part   = "{proxy+}"
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "pricing_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id
@@ -353,6 +362,7 @@ resource "aws_api_gateway_method" "pricing_any" {
   authorization_scopes = [var.required_scope]
 }
 
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
 resource "aws_api_gateway_method" "pricing_proxy_any" {
   count                = var.enable_admin_api ? 1 : 0
   rest_api_id          = aws_api_gateway_rest_api.admin[0].id

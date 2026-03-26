@@ -21,6 +21,7 @@ terraform {
 #checkov:skip=CKV_AWS_144:Cross-region replication not required for audit logs
 #checkov:skip=CKV2_AWS_62:Event notifications not required for audit pipeline
 #checkov:skip=CKV_AWS_21:Versioning disabled — audit logs are append-only
+#checkov:skip=CKV_AWS_18:Access logging not required for audit logs bucket (it IS the log destination)
 resource "aws_s3_bucket" "audit" {
   count = var.enable_audit_log ? 1 : 0
 
