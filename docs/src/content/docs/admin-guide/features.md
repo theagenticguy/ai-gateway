@@ -259,6 +259,165 @@ Caching works best for deterministic requests (temperature=0). For creative/rand
 
 ---
 
+---
+
+## C-Series Features
+
+The **C-series features** add metering, governance, and self-service capabilities on top of the B-series platform. All C-series endpoints run on the Admin API Gateway plane (see [ADR-014](/developer-guide/adr-index)) and are enabled with `enable_admin_api = true`.
+
+| Feature | Module | Toggle Variable | Status |
+|---|---|---|---|
+| C.1 RPM & Token Rate Limiting | `rate_limiter/` | `enable_admin_api` | Opt-in |
+| C.2 Usage Self-Service API | `usage_api/` | `enable_admin_api` | Opt-in |
+| C.3 Dynamic Pricing Admin | `pricing_admin/` | `enable_admin_api` | Opt-in |
+| C.4 Audit Log Pipeline | `modules/audit_log/` | `enable_audit_log` | Opt-in |
+| C.5 Per-Team Cache Metrics | `cost_attribution/` | `enable_cost_attribution` | Opt-in |
+
+---
+
+### C.1 RPM & Token Rate Limiting
+
+#### What It Adds
+
+Per-team rate limiting with two dimensions: requests per minute (RPM) and daily token consumption. Limits are defined per tenant tier in `TierConfig` and enforced via DynamoDB atomic counters.
+
+#### How It Works
+
+| Dimension | DynamoDB Key | Window | TTL |
+|---|---|---|---|
+| RPM | `RATE#RPM#{team}` / `MINUTE#{bucket}` | 1-minute sliding window | 120 seconds |
+| Daily tokens | `RATE#TOKENS#{team}` / `DAY#{YYYY-MM-DD}` | Calendar day (UTC) | End of day + 1 hour |
+
+Each request atomically increments the counter. When a limit is exceeded, the gateway returns a `429`-equivalent response with a `retry_after_seconds` hint.
+
+#### Graceful Degradation
+
+If DynamoDB is unreachable, the request is *allowed* and a warning is logged. This prevents rate limiting infrastructure from becoming a single point of failure on the inference path.
+
+#### Tier Defaults
+
+| Tier | RPM | Daily Tokens |
+|---|---|---|
+| sandbox | 20 | 100,000 |
+| standard | 100 | 1,000,000 |
+| premium | 500 | 10,000,000 |
+| enterprise | -1 (unlimited) | -1 (unlimited) |
+
+---
+
+### C.2 Usage Self-Service API
+
+#### What It Adds
+
+A read-only API that lets teams query their own usage without waiting for monthly chargeback reports.
+
+#### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/usage/{team}` | Current period usage, budget utilization, and per-model breakdown |
+| `GET` | `/usage/{team}/history` | Historical usage by month |
+
+#### Response Fields
+
+| Field | Description |
+|---|---|
+| `current_period` | Token counts, cost, and request count for the current billing period |
+| `models` | Per-model breakdown (tokens, cost, request count) |
+| `budget_utilization_pct` | Percentage of monthly budget consumed |
+| `history` | Array of past periods with the same structure |
+
+---
+
+### C.3 Dynamic Pricing Admin
+
+#### What It Adds
+
+Runtime pricing overrides stored in DynamoDB with a static fallback table. Operators can update model pricing without redeploying the Lambda.
+
+#### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/pricing` | List all pricing entries (DynamoDB overrides merged with static defaults) |
+| `GET` | `/pricing/{provider}/{model}` | Get pricing for a specific model |
+| `PUT` | `/pricing/{provider}/{model}` | Create or update a pricing override |
+| `DELETE` | `/pricing/{provider}/{model}` | Remove a DynamoDB override (reverts to static default) |
+
+#### Resolution Order
+
+1. DynamoDB override (if present)
+2. Static `PRICING_TABLE` in `pricing.py`
+
+The `source` field in responses indicates whether a price came from `"dynamodb"` or `"static"`.
+
+---
+
+### C.4 Audit Log Pipeline
+
+#### What It Adds
+
+A structured audit trail for all gateway requests, stored as Parquet files in S3 for Athena queries.
+
+#### Resources Created
+
+| Resource | Purpose |
+|---|---|
+| Kinesis Firehose | Ingests audit events, buffers, and converts to Parquet |
+| S3 bucket | Stores Parquet files with Hive-style partitioning (`year=/month=/day=`) |
+| Glue Catalog | Database + table for Athena SQL queries |
+| CloudWatch Log Group | Firehose delivery error logs |
+
+#### How to Enable
+
+```hcl
+enable_audit_log = true
+```
+
+#### Audit Record Schema
+
+| Column | Type | Description |
+|---|---|---|
+| `team` | string | Requesting team |
+| `user_id` | string | User identity from JWT |
+| `model` | string | Target model |
+| `provider` | string | Target provider |
+| `prompt_tokens` | int | Input token count |
+| `completion_tokens` | int | Output token count |
+| `total_tokens` | int | Total tokens |
+| `cost_usd` | double | Estimated cost |
+| `cache_read_tokens` | int | Tokens served from cache |
+| `cache_savings_usd` | double | Cost saved by cache hits |
+| `latency_ms` | int | End-to-end latency |
+| `status` | string | Request outcome |
+| `correlation_id` | string | Request correlation ID |
+| `request_timestamp` | string | ISO 8601 timestamp |
+
+#### Lifecycle
+
+- 0–90 days: S3 Standard
+- 90–365 days: S3 Standard-IA
+- 365+ days: Expired
+
+---
+
+### C.5 Per-Team Cache Metrics
+
+#### What It Adds
+
+Extends the cost attribution pipeline (B.3) to publish cache hit/miss metrics with a `Team` dimension, in addition to the existing `Provider` and `Model` dimensions.
+
+#### New CloudWatch Metrics
+
+| Metric | Dimensions | Description |
+|---|---|---|
+| `AIGateway/CacheHitRate` | Team, Provider, Model | Percentage of requests served from cache |
+| `AIGateway/CacheSavingsUsd` | Team | Estimated cost savings from cache hits |
+
+Use these metrics to identify teams with low cache hit rates and tune their request patterns (e.g., lowering temperature for deterministic calls).
+
+---
+
 ## Feature Compatibility Matrix
 
 All B-series features can be enabled independently. The following matrix shows which features complement each other and any dependencies:

@@ -66,6 +66,49 @@ flowchart LR
     GW --> AZR
 ```
 
+## Two-Plane Architecture
+
+The gateway splits traffic into two planes ([ADR-014](/developer-guide/adr-index)):
+
+| Plane | Transport | Auth | Endpoints | Traffic Pattern |
+|---|---|---|---|---|
+| **Inference** | ALB | ALB-native JWT | `/v1/chat/completions`, `/v1/messages` | High-volume, latency-sensitive |
+| **Admin** | API Gateway REST API | Cognito Authorizer | `/teams`, `/budgets`, `/routing`, `/scanner`, `/pricing`, `/usage` | Low-volume, correctness-sensitive |
+
+The ALB handles inference requests with zero per-request cost. Admin APIs run behind API Gateway with a shared Cognito authorizer, which eliminates per-handler JWT validation code and provides built-in throttling, access logging, and CloudWatch metrics.
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        Agent[AI Agent]
+        Admin[Admin / Operator]
+    end
+
+    subgraph Inference Plane
+        ALB[ALB<br>JWT Validation]
+        GW[Portkey Gateway]
+    end
+
+    subgraph Admin Plane
+        APIGW[API Gateway<br>Cognito Auth]
+        L1[teams Lambda]
+        L2[budgets Lambda]
+        L3[routing Lambda]
+        L4[scanner Lambda]
+        L5[pricing Lambda]
+        L6[usage Lambda]
+    end
+
+    Agent -->|/v1/messages| ALB --> GW
+    Admin -->|/teams, /budgets, ...| APIGW
+    APIGW --> L1
+    APIGW --> L2
+    APIGW --> L3
+    APIGW --> L4
+    APIGW --> L5
+    APIGW --> L6
+```
+
 ## Design Principles
 
 **Lightweight** -- The gateway adds minimal overhead. Portkey OSS is a ~62 MB container that proxies requests with sub-millisecond added latency. No database, no state, no complex middleware.
@@ -132,6 +175,8 @@ flowchart TD
 | **networking** | VPC, subnets (2 public + 2 private), NAT Gateway, VPC endpoints, ALB, WAF | `vpc_id`, `private_subnets`, `alb_arn`, `alb_dns_name`, `alb_security_group_id`, `alb_target_group_gateway_arn` |
 | **auth** | Cognito User Pool, resource server, M2M client, domain, JWT listener rule | `cognito_user_pool_id`, `cognito_user_pool_arn`, `cognito_client_id`, `cognito_token_endpoint` |
 | **compute** | ECR, ECS cluster, ECS service, task definition (gateway + OTel sidecar), IAM roles, Secrets Manager entries, auto-scaling policies | `ecs_cluster_name`, `ecs_service_name`, `ecr_repository_url` |
+| **admin_api** | API Gateway REST API, Cognito authorizer, per-path Lambda integrations (teams, budgets, routing, scanner, pricing, usage), CloudWatch access logging | `api_url`, `api_execution_arn` |
+| **audit_log** | Kinesis Firehose (Parquet conversion), S3 bucket (Hive-partitioned), Glue catalog (database + table), IAM roles | `s3_bucket_name`, `firehose_stream_name`, `glue_database_name` |
 
 ### Why This Order
 
@@ -218,3 +263,4 @@ AWS Bedrock traffic can use a VPC endpoint, making Bedrock calls immune to NAT G
 | Single NAT + VPC endpoints | [ADR-003](adr-index.md) | Saves ~$32/month with acceptable HA trade-off for non-Bedrock outbound |
 | 3-phase security pipeline | [ADR-004](adr-index.md) | Pre-build (hadolint + checkov), post-build (trivy + syft), post-scan (cosign) |
 | AWS provider >= 6.22 | [ADR-007](adr-index.md) | Required for the `validate_token` (JWT validation) listener action on ALB |
+| Two-plane architecture | [ADR-014](adr-index.md) | ALB for inference, API Gateway + Cognito for admin APIs — eliminates per-handler JWT code |
