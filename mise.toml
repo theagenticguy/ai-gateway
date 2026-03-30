@@ -3,22 +3,22 @@
 
 [tools]
 python = "3.13"
-"pipx:checkov" = "latest"
+"pipx:checkov" = "3.2.513"
 
 # Security tools via aqua backend
 "aqua:aquasecurity/trivy" = "0.69.2"
 "aqua:hadolint/hadolint" = "2.14.0"
 "aqua:evilmartians/lefthook" = "2.1.4"
-"aqua:zricethezav/gitleaks" = "latest"
-"aqua:rhysd/actionlint" = "latest"
+"aqua:zricethezav/gitleaks" = "8.30.1"
+"aqua:rhysd/actionlint" = "1.7.11"
 
 # Release
-"aqua:orhun/git-cliff" = "latest"
+"aqua:orhun/git-cliff" = "2.12.0"
 
 # IaC
-"aqua:hashicorp/terraform" = "1.10.5"
-"aqua:gruntwork-io/terragrunt" = "latest"
-"aqua:terraform-docs/terraform-docs" = "latest"
+"aqua:hashicorp/terraform" = "1.14.8"
+"aqua:gruntwork-io/terragrunt" = "0.99.5"
+"aqua:terraform-docs/terraform-docs" = "0.21.0"
 
 [env]
 _.python.venv = { path = ".venv", create = true }

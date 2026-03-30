@@ -20,7 +20,6 @@ concurrency:
 env:
   AWS_REGION: us-east-1
   IMAGE_NAME: ai-gateway
-  PORTKEY_VERSION: "1.15.2"
   PYTHON_VERSION: "3.13"
 
 # ── Default permissions (least-privilege) ────────────────────
@@ -119,7 +118,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4
         with:
-          terraform_version: "1.10.5"
+          terraform_version: "1.14.8"
 
       - name: Terraform fmt check
         run: terraform fmt -check -recursive -diff infrastructure/
@@ -134,7 +133,7 @@ jobs:
 
       - name: Install terraform-docs
         run: |
-          curl -sSLo terraform-docs.tar.gz https://terraform-docs.io/dl/v0.19.0/terraform-docs-v0.19.0-linux-amd64.tar.gz
+          curl -sSLo terraform-docs.tar.gz https://terraform-docs.io/dl/v0.21.0/terraform-docs-v0.21.0-linux-amd64.tar.gz
           tar -xzf terraform-docs.tar.gz
           chmod +x terraform-docs
           sudo mv terraform-docs /usr/local/bin/
@@ -147,7 +146,7 @@ jobs:
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6
         with:
-          tflint_version: latest
+          tflint_version: "0.61.0"
 
       - name: Init TFLint
         run: tflint --init
@@ -189,6 +188,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load pinned versions
+        run: cat versions.env >> "$GITHUB_ENV"
 
       - name: Pull Portkey gateway image
         run: docker pull portkeyai/gateway:${{ env.PORTKEY_VERSION }}

@@ -21,7 +21,6 @@ permissions:
 env:
   AWS_REGION: us-east-1
   IMAGE_NAME: ai-gateway
-  PORTKEY_VERSION: "1.15.2"
 
 jobs:
   release:
@@ -32,6 +31,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0   # Full history for changelog generation
+
+      - name: Load pinned versions
+        run: cat versions.env >> "$GITHUB_ENV"
 
       - name: Extract version from tag
         id: version

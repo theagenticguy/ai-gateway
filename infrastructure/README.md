@@ -20,7 +20,7 @@ This module is composed of 4 local sub-modules:
 
 | Name | Version |
 |------|---------|
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.9 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.14 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.22 |
 
 ## Providers
@@ -100,7 +100,7 @@ This module is composed of 4 local sub-modules:
 | <a name="input_latency_evaluation_minutes"></a> [latency\_evaluation\_minutes](#input\_latency\_evaluation\_minutes) | Number of 1-minute evaluation periods for the latency alarm | `number` | `5` | no |
 | <a name="input_logout_urls"></a> [logout\_urls](#input\_logout\_urls) | List of allowed logout URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/logout"<br/>]</pre> | no |
 | <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
-| <a name="input_portkey_image"></a> [portkey\_image](#input\_portkey\_image) | Docker image for the Portkey AI Gateway | `string` | `"portkeyai/gateway:1.15.2"` | no |
+| <a name="input_portkey_image"></a> [portkey\_image](#input\_portkey\_image) | Docker image for the Portkey AI Gateway (canonical version in versions.env) | `string` | `"portkeyai/gateway:1.15.2"` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
 | <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
 | <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are Portkey-compatible routing JSON. | `map(string)` | `{}` | no |
