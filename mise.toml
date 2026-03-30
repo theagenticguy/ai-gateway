@@ -60,11 +60,11 @@ run = "uv run pyright src/"
 
 [tasks.security]
 description = "Run all security scans"
-depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile", "security:fs"]
+depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile", "security:fs", "security:deps"]
 
 [tasks."security:sast"]
 description = "SAST scan with semgrep"
-run = "uvx semgrep scan --config p/python --config p/owasp-top-ten --config p/security-audit ."
+run = "uvx semgrep scan --config auto --config p/python --config p/owasp-top-ten --config p/security-audit ."
 
 [tasks."security:secrets"]
 description = "Secret detection with gitleaks"
@@ -85,6 +85,10 @@ run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
 [tasks."security:fs"]
 description = "Filesystem vulnerability scan with trivy"
 run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+
+[tasks."security:deps"]
+description = "Audit Python dependencies for known vulnerabilities"
+run = "uv export --no-hashes > /tmp/requirements.txt && uvx pip-audit -r /tmp/requirements.txt --strict --desc"
 
 # ──────────────────────────────────────────────
 # Terraform tasks
