@@ -27,7 +27,7 @@ variable "vpc_cidr" {
 }
 
 variable "portkey_image" {
-  description = "Docker image for the Portkey AI Gateway"
+  description = "Docker image for the Portkey AI Gateway (canonical version in versions.env)"
   type        = string
   default     = "portkeyai/gateway:1.15.2"
 }

@@ -69,6 +69,42 @@ mise run security:iac  # Run Checkov IaC scan
 
 Include `terraform plan` output in your PR description for infrastructure changes.
 
+## Version Management
+
+All pinned image versions live in `versions.env` at the repo root. CI workflows and Terragrunt read from this file automatically.
+
+### Updating the Portkey Gateway Version
+
+1. Update `PORTKEY_VERSION` in `versions.env`
+2. Update the default in `infrastructure/variables.tf` to match
+3. Open a PR — CI will pull and scan the new image
+
+### Updating Dev Tool Versions
+
+Tool versions are pinned in `mise.toml`. To upgrade:
+
+```bash
+mise ls                   # See current versions
+# Edit mise.toml with new version
+mise install              # Install the updated version
+mise run ci:validate      # Verify everything works
+```
+
+### Release Process
+
+This project uses [commitizen](https://commitizen-tools.github.io/commitizen/) for changelog generation and semver tagging. Version bumps are auto-detected from commit prefixes (`feat` → minor, `fix` → patch, `BREAKING CHANGE` → major):
+
+```bash
+mise run release:bump         # Auto-detect bump type from commits
+mise run release:bump-patch   # Force patch: 0.1.0 → 0.1.1
+mise run release:bump-minor   # Force minor: 0.1.0 → 0.2.0
+mise run release:bump-major   # Force major: 0.1.0 → 1.0.0
+mise run release:changelog    # Preview unreleased changes (dry-run)
+git push origin main --tags   # Triggers release workflow
+```
+
+The release workflow (`release.yml`) builds, signs, and publishes the container image to ECR with an SBOM.
+
 ## Security
 
 - Run `mise run security` before submitting PRs that touch application code

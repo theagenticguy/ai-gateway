@@ -1,10 +1,10 @@
 terraform {
-  required_version = ">= 1.9"
+  required_version = "~> 1.14"
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 6.22"
+      version = "~> 6.22"
     }
   }
 }
@@ -415,7 +415,7 @@ module "ecs_service" {
 
     otel-collector = {
       essential = true
-      image     = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+      image     = "public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0"
       cpu       = 256
       memory    = 256
 
