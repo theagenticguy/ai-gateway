@@ -31,9 +31,3 @@ rule "terraform_unused_declarations" {
 rule "terraform_standard_module_structure" {
   enabled = false
 }
-
-# required_version is consolidated in root versions.tf only.
-# Child modules are internal and never used standalone.
-rule "terraform_required_version" {
-  enabled = false
-}
