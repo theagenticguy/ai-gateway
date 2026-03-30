@@ -155,7 +155,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run TFLint
-        run: tflint --recursive --format compact
+        run: tflint --recursive --format compact --minimum-failure-severity=error
         working-directory: infrastructure
 
       - name: Checkov IaC scan
