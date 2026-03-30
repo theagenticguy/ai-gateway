@@ -146,7 +146,7 @@ jobs:
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6
         with:
-          tflint_version: "0.61.0"
+          tflint_version: "v0.61.0"
 
       - name: Init TFLint
         run: tflint --init
