@@ -92,12 +92,14 @@ mise run ci:validate      # Verify everything works
 
 ### Release Process
 
-This project uses [git-cliff](https://git-cliff.org/) for changelog generation and semver tagging:
+This project uses [commitizen](https://commitizen-tools.github.io/commitizen/) for changelog generation and semver tagging. Version bumps are auto-detected from commit prefixes (`feat` → minor, `fix` → patch, `BREAKING CHANGE` → major):
 
 ```bash
-mise run release:bump-patch   # 0.1.0 → 0.1.1
-mise run release:bump-minor   # 0.1.0 → 0.2.0
-mise run release:bump-major   # 0.1.0 → 1.0.0
+mise run release:bump         # Auto-detect bump type from commits
+mise run release:bump-patch   # Force patch: 0.1.0 → 0.1.1
+mise run release:bump-minor   # Force minor: 0.1.0 → 0.2.0
+mise run release:bump-major   # Force major: 0.1.0 → 1.0.0
+mise run release:changelog    # Preview unreleased changes (dry-run)
 git push origin main --tags   # Triggers release workflow
 ```
 

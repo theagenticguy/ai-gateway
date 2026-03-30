@@ -12,9 +12,6 @@ python = "3.13"
 "aqua:zricethezav/gitleaks" = "8.30.1"
 "aqua:rhysd/actionlint" = "1.7.11"
 
-# Release
-"aqua:orhun/git-cliff" = "2.12.0"
-
 # IaC
 "aqua:hashicorp/terraform" = "1.14.8"
 "aqua:gruntwork-io/terragrunt" = "0.99.5"
@@ -154,54 +151,41 @@ depends = ["lint", "typecheck", "security", "tf:validate", "ci:lint"]
 # Release tasks
 # ──────────────────────────────────────────────
 
-[tasks."release:bump-patch"]
-description = "Bump patch version, generate changelog, commit, and tag"
+[tasks."release:bump"]
+description = "Auto-bump version based on commit history, generate changelog, and tag"
 run = """
 set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git-cliff --tag "v${NEW}" -o CHANGELOG.md
-git add pyproject.toml CHANGELOG.md
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+uv run cz bump --changelog --no-verify
+echo "Version bumped. Run 'git push origin main --tags' to release."
+"""
+
+[tasks."release:bump-patch"]
+description = "Force a patch version bump with changelog"
+run = """
+set -euo pipefail
+uv run cz bump --increment PATCH --changelog --no-verify
+echo "Patch bump complete. Run 'git push origin main --tags' to release."
 """
 
 [tasks."release:bump-minor"]
-description = "Bump minor version, generate changelog, commit, and tag"
+description = "Force a minor version bump with changelog"
 run = """
 set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="${MAJOR}.$((MINOR + 1)).0"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git-cliff --tag "v${NEW}" -o CHANGELOG.md
-git add pyproject.toml CHANGELOG.md
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+uv run cz bump --increment MINOR --changelog --no-verify
+echo "Minor bump complete. Run 'git push origin main --tags' to release."
 """
 
 [tasks."release:bump-major"]
-description = "Bump major version, generate changelog, commit, and tag"
+description = "Force a major version bump with changelog"
 run = """
 set -euo pipefail
-CURRENT=$(grep '^version' pyproject.toml | sed 's/.*"\\(.*\\)"/\\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-NEW="$((MAJOR + 1)).0.0"
-sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-git-cliff --tag "v${NEW}" -o CHANGELOG.md
-git add pyproject.toml CHANGELOG.md
-git commit -m "release: v${NEW}"
-git tag "v${NEW}"
-echo "Bumped ${CURRENT} → ${NEW}. Run 'git push origin main --tags' to release."
+uv run cz bump --increment MAJOR --changelog --no-verify
+echo "Major bump complete. Run 'git push origin main --tags' to release."
 """
 
 [tasks."release:changelog"]
 description = "Preview changelog for unreleased changes (dry-run)"
-run = "git-cliff --unreleased"
+run = "uv run cz changelog --dry-run"
 
 # ──────────────────────────────────────────────
 # Bot tasks

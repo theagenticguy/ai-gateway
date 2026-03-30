@@ -18,6 +18,7 @@ dev = [
     "hypothesis>=6.151.9",
     "atheris>=3.0.0",
     "pytest-cov>=7.0.0",
+    "commitizen>=4.13.9",
 ]
 
 [tool.pytest.ini_options]
@@ -33,3 +34,12 @@ omit = ["tests/*"]
 [tool.coverage.report]
 show_missing = true
 fail_under = 0
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+version_files = [
+    "pyproject.toml:version",
+]
+update_changelog_on_bump = true
