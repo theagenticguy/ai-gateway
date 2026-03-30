@@ -37,7 +37,7 @@ pre-push:
     test:
       run: uv run pytest tests/ -x -q
     sast:
-      run: uvx semgrep scan --config p/python --config p/owasp-top-ten --quiet .
+      run: uvx semgrep scan --config auto --config p/python --config p/owasp-top-ten --config p/security-audit --exclude 'infrastructure/' --quiet .
     iac:
       glob: "infrastructure/**/*.tf"
       run: uvx checkov -d infrastructure/ --framework terraform --compact --quiet
