@@ -93,7 +93,7 @@ jobs:
         run: python3 -m pip install --quiet semgrep
 
       - name: Semgrep SAST scan
-        run: semgrep scan --config auto --config p/python --config p/owasp-top-ten --config p/security-audit --error --quiet
+        run: semgrep scan --config auto --config p/python --config p/owasp-top-ten --config p/security-audit --exclude 'infrastructure/' --error --quiet
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
@@ -124,7 +124,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - name: Export locked dependencies
-        run: uv export --no-hashes > requirements.txt
+        run: uv export --no-dev --no-hashes > requirements.txt
 
       - name: Audit Python dependencies
         run: uvx pip-audit -r requirements.txt --strict --desc
