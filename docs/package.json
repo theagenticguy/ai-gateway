@@ -24,6 +24,9 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "sharp"
-    ]
+    ],
+    "overrides": {
+      "lodash-es": ">=4.18.0"
+    }
   }
 }
