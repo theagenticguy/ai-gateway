@@ -176,6 +176,10 @@ The gateway uses Cognito machine-to-machine (M2M) authentication with ALB-native
 
 This approach adds zero additional cost and zero additional latency compared to API Gateway-based JWT validation. See [ADR-005](adr/005-alb-jwt-validation-over-api-gateway.md) and [ADR-007](adr/007-terraform-provider-upgrade-for-jwt.md) for details.
 
+## Why Not LiteLLM?
+
+We evaluated LiteLLM and rejected it in [ADR-001](adr/001-portkey-oss-over-litellm.md). At evaluation time (March 2026), LiteLLM had 14 known CVEs including critical RCE and active SSRF exploitation, systemic memory leaks, and brittle database migrations. Days after our decision, [NetSPI disclosed a supply-chain compromise](https://www.netspi.com/blog/executive-blog/ai-ml-pentesting/litellm-supply-chain-compromise/) affecting LiteLLM (March 25, 2026), further validating this choice. This project uses Portkey OSS exclusively — LiteLLM is not a dependency at any layer.
+
 ## ADRs
 
 Architectural Decision Records are in the `adr/` directory.
