@@ -44,6 +44,9 @@ This project runs automated security scans on every push and pull request:
 | Supply chain | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
 | Dependencies | [Dependency Review](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check |
 | Updates | [Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated dependency updates (Python, Terraform, Actions) |
+| SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
+| Lockfile Scan | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning against the OSV vulnerability database |
+| ECR Scanning | [Amazon Inspector](https://aws.amazon.com/inspector/) | Continuous container image scanning (re-evaluates on new CVEs) |
 
 All GitHub Actions are pinned to SHA hashes to prevent supply chain attacks.
 

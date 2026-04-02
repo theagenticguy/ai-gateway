@@ -1,0 +1,120 @@
+# ──────────────────────────────────────────────────────────────
+# Rescan — Event-driven vulnerability re-scanning
+# ──────────────────────────────────────────────────────────────
+# Runs nightly + on manual trigger to rescan the latest SBOM
+# and container image against updated vulnerability databases.
+# Catches newly disclosed CVEs in already-deployed artifacts.
+# ──────────────────────────────────────────────────────────────
+name: Rescan on Advisory
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Daily at 06:00 UTC
+  workflow_dispatch:       # Manual trigger for immediate rescan
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  AWS_REGION: us-east-1
+  IMAGE_NAME: ai-gateway
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  rescan-sbom:
+    name: SBOM Rescan (Grype + OSV-Scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Download latest SBOM artifact
+        uses: dawidd6/action-download-artifact@80620a5d27ce0ae443f0c904f0b83fbc960e4cd0 # v6
+        with:
+          name: sbom-cyclonedx
+          workflow: ci.yml
+          branch: main
+          search_artifacts: true
+        continue-on-error: true
+        id: download-sbom
+
+      # Fallback: generate fresh SBOM if no artifact found
+      - name: Load pinned versions
+        if: steps.download-sbom.outcome == 'failure'
+        run: cat versions.env >> "$GITHUB_ENV"
+
+      - name: Generate SBOM fallback
+        if: steps.download-sbom.outcome == 'failure'
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      # ── Grype: scan SBOM against latest vuln DB ────────────
+      - name: Install Grype
+        uses: anchore/scan-action/download-grype@2c0e03e7a590c8e587ab2e5c0cce41c913768b0b # v6
+
+      - name: Grype SBOM scan
+        run: |
+          grype sbom.cyclonedx.json \
+            --fail-on high \
+            --output sarif \
+            --file grype-results.sarif
+        continue-on-error: true
+
+      - name: Upload Grype SARIF
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        if: always()
+        with:
+          sarif_file: grype-results.sarif
+          category: grype-rescan
+
+      # ── OSV-Scanner: check lockfiles against OSV database ──
+      - name: OSV-Scanner lockfile scan
+        uses: google/osv-scanner-action/osv-scanner-action@f238e0ef48a5244b0e05d554d41d3a8c4a89a898 # v2
+        with:
+          scan-args: |-
+            --lockfile=uv.lock
+            --lockfile=docs/pnpm-lock.yaml
+            --format=sarif
+            --output=osv-results.sarif
+        continue-on-error: true
+
+      - name: Upload OSV-Scanner SARIF
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        if: always()
+        with:
+          sarif_file: osv-results.sarif
+          category: osv-scanner-rescan
+
+  rescan-image:
+    name: Container Image Rescan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load pinned versions
+        run: cat versions.env >> "$GITHUB_ENV"
+
+      - name: Pull latest Portkey image
+        run: docker pull portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+
+      - name: Trivy rescan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: portkeyai/gateway:${{ env.PORTKEY_VERSION }}
+          format: sarif
+          output: trivy-rescan-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        if: always()
+        with:
+          sarif_file: trivy-rescan-results.sarif
+          category: trivy-rescan

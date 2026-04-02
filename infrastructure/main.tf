@@ -318,3 +318,15 @@ module "audit_log" {
   aws_region       = var.aws_region
   enable_audit_log = var.enable_audit_log
 }
+
+# -----------------------------------------------------------------------------
+# Inspector (Amazon Inspector enhanced ECR scanning — continuous CVE monitoring)
+# -----------------------------------------------------------------------------
+
+module "inspector" {
+  source = "./modules/inspector"
+
+  project_name     = var.project_name
+  environment      = var.environment
+  enable_inspector = var.enable_inspector
+}

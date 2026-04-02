@@ -45,6 +45,7 @@ This module is composed of 4 local sub-modules:
 | <a name="module_content_scanner"></a> [content\_scanner](#module\_content\_scanner) | ./modules/content_scanner | n/a |
 | <a name="module_cost_attribution"></a> [cost\_attribution](#module\_cost\_attribution) | ./modules/cost_attribution | n/a |
 | <a name="module_guardrails"></a> [guardrails](#module\_guardrails) | ./modules/guardrails | n/a |
+| <a name="module_inspector"></a> [inspector](#module\_inspector) | ./modules/inspector | n/a |
 | <a name="module_networking"></a> [networking](#module\_networking) | ./modules/networking | n/a |
 | <a name="module_observability"></a> [observability](#module\_observability) | ./modules/observability | n/a |
 | <a name="module_routing"></a> [routing](#module\_routing) | ./modules/routing | n/a |
@@ -83,6 +84,7 @@ This module is composed of 4 local sub-modules:
 | <a name="input_enable_content_scanner"></a> [enable\_content\_scanner](#input\_enable\_content\_scanner) | Whether to deploy the content scanner Lambda (PII redaction + injection detection) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to enable Bedrock Guardrails for content safety filtering | `bool` | `false` | no |
+| <a name="input_enable_inspector"></a> [enable\_inspector](#input\_enable\_inspector) | Whether to enable Amazon Inspector enhanced scanning for ECR repositories | `bool` | `false` | no |
 | <a name="input_enable_jwt_auth"></a> [enable\_jwt\_auth](#input\_enable\_jwt\_auth) | Whether to enable ALB JWT validation. Requires certificate\_arn and cognito\_user\_pool\_id. | `bool` | `false` | no |
 | <a name="input_enable_provider_fallback"></a> [enable\_provider\_fallback](#input\_enable\_provider\_fallback) | Whether to enable provider fallback routing. When true, routing configs are injected into the gateway container as environment variables. | `bool` | `false` | no |
 | <a name="input_enable_user_auth"></a> [enable\_user\_auth](#input\_enable\_user\_auth) | Whether to enable user-facing SSO authentication (authorization\_code flow) | `bool` | `false` | no |
