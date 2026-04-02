@@ -7,8 +7,8 @@ python = "3.13"
 
 # Security tools via aqua backend
 "aqua:aquasecurity/trivy" = "0.69.2"
-"aqua:anchore/grype" = "0.90.0"
-"aqua:google/osv-scanner" = "2.0.1"
+"aqua:anchore/grype" = "0.109.1"
+"aqua:google/osv-scanner" = "2.3.3"
 "aqua:hadolint/hadolint" = "2.14.0"
 "aqua:evilmartians/lefthook" = "2.1.4"
 "aqua:zricethezav/gitleaks" = "8.30.1"
