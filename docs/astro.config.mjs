@@ -1,6 +1,7 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
+import mermaid from "astro-mermaid";
 import starlightPageActions from "starlight-page-actions";
 import starlightLlmsTxt from "starlight-llms-txt";
 
@@ -9,6 +10,7 @@ export default defineConfig({
   base: "/ai-gateway",
 
   integrations: [
+    mermaid(),
     starlight({
       title: "AI Gateway",
       description:
@@ -37,26 +39,6 @@ export default defineConfig({
       },
 
       customCss: ["./src/styles/custom.css"],
-
-      head: [
-        {
-          tag: "script",
-          attrs: { type: "module", defer: true },
-          content: `
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({ startOnLoad: false, theme: 'dark' });
-            function renderMermaid() {
-              const els = document.querySelectorAll('pre.mermaid:not([data-processed])');
-              els.forEach(el => el.setAttribute('data-processed', 'true'));
-              if (els.length) mermaid.run({ nodes: els });
-            }
-            // Render immediately — by the time this module loads, DOM is ready
-            renderMermaid();
-            // Also handle Starlight view transitions (client-side navigation)
-            document.addEventListener('astro:page-load', renderMermaid);
-          `,
-        },
-      ],
 
       sidebar: [
         { label: "Home", slug: "index" },
@@ -104,42 +86,9 @@ export default defineConfig({
   ],
 
   markdown: {
-    remarkPlugins: [remarkMermaid, remarkStripMdLinks],
+    remarkPlugins: [remarkStripMdLinks],
   },
 });
-
-/**
- * Remark plugin: converts ```mermaid code blocks to raw <pre class="mermaid">
- * elements BEFORE Expressive Code processes them, so Mermaid can render
- * them client-side.
- */
-function remarkMermaid() {
-  return (tree) => {
-    walkTree(tree);
-  };
-}
-
-function walkTree(node) {
-  if (node.type === "code" && node.lang === "mermaid") {
-    // Convert to raw HTML so Expressive Code skips it
-    node.type = "html";
-    node.value = `<pre class="mermaid">\n${escapeHtml(node.value)}\n</pre>`;
-    delete node.lang;
-    delete node.meta;
-  }
-  if (node.children) {
-    for (const child of node.children) {
-      walkTree(child);
-    }
-  }
-}
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
 
 /**
  * Remark plugin: rewrites relative .md/.mdx links to trailing-slash URLs.
