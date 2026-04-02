@@ -13,7 +13,7 @@ You are working in a Starlight documentation site (`docs/` directory).
 - Astro + Starlight
 - AI-friendly docs via starlight-page-actions and starlight-llms-txt
 - Search defaults to Pagefind
-- Mermaid diagrams rendered client-side via CDN
+- Mermaid diagrams via `astro-mermaid` integration (must come before starlight in integrations)
 
 ## Content conventions
 - Use clear H2/H3 headings
