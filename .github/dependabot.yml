@@ -99,3 +99,22 @@ updates:
         update-types:
           - minor
           - patch
+
+  # ── Docker (container images) ──────────────────────────────
+  - package-ecosystem: docker
+    directory: /infrastructure/modules/compute
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+    assignees:
+      - theagenticguy
+    reviewers:
+      - theagenticguy
+    commit-message:
+      prefix: "deps(docker):"
+    labels:
+      - dependencies
+      - docker

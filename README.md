@@ -125,24 +125,28 @@ The project implements a multi-layered security scanning pipeline across develop
 
 | Layer | Tool | What It Covers |
 |-------|------|----------------|
-| SAST | [semgrep](https://semgrep.dev/) | Python code analysis (OWASP Top 10, security audit rules) |
-| Secrets | [gitleaks](https://gitleaks.io/) | Prevents secrets from entering the repository |
-| IaC | [checkov](https://www.checkov.io/) | Terraform security and compliance (2,500+ policies) |
-| Dockerfile | [hadolint](https://github.com/hadolint/hadolint) | Dockerfile best practices with ShellCheck integration |
-| Container | [trivy](https://trivy.dev/) | Vulnerability scanning of container images (HIGH + CRITICAL) |
-| SBOM | [syft](https://github.com/anchore/syft) | CycloneDX software bill of materials generation |
-| Signing | [cosign](https://github.com/sigstore/cosign) | Keyless image signing via Sigstore OIDC |
-| Code analysis | [CodeQL](https://codeql.github.com/) | GitHub-native semantic code analysis (via SARIF upload) |
-| Scorecard | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
-| Dependency Review | [dependency-review-action](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check (denies GPL-3.0, AGPL-3.0) |
-| Dependabot | [GitHub Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated dependency updates for Python, Terraform, and GitHub Actions |
-| TFLint | [tflint](https://github.com/terraform-linters/tflint) | Terraform linting with AWS ruleset |
+| SAST | [Semgrep](https://semgrep.dev/) | Python code analysis (OWASP Top 10, security audit rules) via container |
+| SAST | [Bandit](https://bandit.readthedocs.io/) | Python-specific security linter with SARIF upload |
+| SAST | [CodeQL](https://codeql.github.com/) | GitHub-native semantic code analysis (security-extended + quality) |
+| Secrets | [Gitleaks](https://gitleaks.io/) | Prevents secrets from entering the repository (SARIF upload) |
+| IaC | [Checkov](https://www.checkov.io/) | Terraform security and compliance (2,500+ policies) |
+| IaC | [TFLint](https://github.com/terraform-linters/tflint) | Terraform linting with AWS ruleset |
+| Dockerfile | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfile best practices with ShellCheck integration |
+| Container | [Trivy](https://trivy.dev/) | Vulnerability scanning of container images (HIGH + CRITICAL) |
+| Filesystem | [Trivy](https://trivy.dev/) | Repository filesystem scan for misconfigurations and vulnerabilities |
+| Dependencies | [pip-audit](https://github.com/pypa/pip-audit) | Python dependency vulnerability audit |
+| Dependencies | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning (uv.lock + pnpm-lock.yaml) against OSV database |
+| Dependencies | [Dependency Review](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check (denies GPL-3.0, AGPL-3.0) |
+| Dependencies | [Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated updates for Python, npm, Terraform, Actions, and Docker |
+| Licenses | [pip-licenses](https://github.com/raimon49/pip-licenses) | License compliance reporting (JSON + Markdown) |
+| SBOM | [Syft](https://github.com/anchore/syft) | CycloneDX + SPDX software bill of materials generation |
+| Signing | [Cosign](https://github.com/sigstore/cosign) | Keyless image signing via Sigstore OIDC |
+| Supply chain | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
 | SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
-| Lockfile Scan | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning against the OSV vulnerability database |
 | ECR Scanning | [Amazon Inspector](https://aws.amazon.com/inspector/) | Continuous container image scanning in ECR (re-evaluates on new CVEs) |
 | Provenance | [GitHub Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) | SLSA build provenance for released container images |
 
-In CI, scanning follows a 3-phase pipeline: **pre-build** (hadolint + checkov), **post-build** (trivy + syft), and **post-scan** (cosign signing). A nightly **rescan** workflow re-evaluates the latest SBOM and container image against updated vulnerability databases using Grype and OSV-Scanner, catching newly disclosed CVEs in already-deployed artifacts. Amazon Inspector provides continuous ECR scanning in production. See [ADR-004](adr/004-security-pipeline-composition.md) for the full rationale.
+All GitHub Actions are pinned to SHA hashes. Dependabot monitors 5 ecosystems (Python, npm, Terraform, Actions, Docker) weekly. In CI, scanning follows a layered pipeline: **SAST** (Semgrep + Bandit + Gitleaks), **dependency audit** (pip-audit + OSV-Scanner + Trivy FS), **IaC** (Checkov + TFLint), **container** (Hadolint + Trivy + SBOM), and **compliance** (license check). A nightly **rescan** workflow re-evaluates the latest SBOM and container image against updated vulnerability databases using Grype, OSV-Scanner, and Trivy. Amazon Inspector provides continuous ECR scanning in production. See [ADR-004](adr/004-security-pipeline-composition.md) for the full rationale.
 
 ## Infrastructure
 
