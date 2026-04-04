@@ -1,0 +1,180 @@
+# ──────────────────────────────────────────────────────────────
+# Portkey Release Scanner — Daily upstream release monitoring
+# ──────────────────────────────────────────────────────────────
+# Checks Docker Hub daily for new portkeyai/gateway releases.
+# When a new version is found, pulls the image, runs a security
+# scan (Trivy), and opens a PR to update versions.env with the
+# new version and digest-pinned reference.
+# ──────────────────────────────────────────────────────────────
+name: Portkey Release Scanner
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # Daily at 07:00 UTC (after nightly rescan)
+  workflow_dispatch:       # Manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  check-release:
+    name: Check for New Portkey Release
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      new_digest: ${{ steps.check.outputs.new_digest }}
+      current_version: ${{ steps.check.outputs.current_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Load current pinned version
+        run: cat versions.env >> "$GITHUB_ENV"
+
+      - name: Check Docker Hub for latest release
+        id: check
+        run: |
+          echo "current_version=${PORTKEY_VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Fetch tags from Docker Hub, sorted by last_updated
+          LATEST=$(curl -sf "https://hub.docker.com/v2/repositories/portkeyai/gateway/tags/?page_size=25&ordering=last_updated" \
+            | jq -r '[.results[] | select(.name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(.name | split(".") | map(tonumber)) | last | .name')
+
+          if [[ -z "$LATEST" || "$LATEST" == "null" ]]; then
+            echo "::warning::Could not determine latest Portkey version from Docker Hub"
+            exit 0
+          fi
+
+          echo "Latest upstream: ${LATEST}, Current pinned: ${PORTKEY_VERSION}"
+
+          if [[ "$LATEST" == "$PORTKEY_VERSION" ]]; then
+            echo "Already on latest version"
+            exit 0
+          fi
+
+          # Get the multi-arch manifest digest for the new version
+          DIGEST=$(curl -sf "https://hub.docker.com/v2/repositories/portkeyai/gateway/tags/${LATEST}" \
+            | jq -r '.digest')
+
+          if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
+            echo "::error::Could not resolve digest for portkeyai/gateway:${LATEST}"
+            exit 1
+          fi
+
+          echo "new_version=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "new_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "::notice::New Portkey release found: ${LATEST} (${DIGEST})"
+
+  scan-and-pr:
+    name: Scan & Open PR
+    needs: check-release
+    if: needs.check-release.outputs.new_version != ''
+    runs-on: ubuntu-latest
+    env:
+      NEW_VERSION: ${{ needs.check-release.outputs.new_version }}
+      NEW_DIGEST: ${{ needs.check-release.outputs.new_digest }}
+      CURRENT_VERSION: ${{ needs.check-release.outputs.current_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Pull new Portkey image
+        run: docker pull portkeyai/gateway@${NEW_DIGEST}
+
+      # ── Security scan before proposing upgrade ──────────────
+      - name: Trivy vulnerability scan
+        id: trivy
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: portkeyai/gateway@${{ env.NEW_DIGEST }}
+          format: sarif
+          output: trivy-upgrade.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-upgrade.sarif
+          category: trivy-portkey-upgrade
+
+      - name: Count vulnerabilities
+        id: vuln-count
+        run: |
+          if [[ -f trivy-upgrade.sarif ]]; then
+            CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-upgrade.sarif 2>/dev/null || echo 0)
+            HIGH=$(jq '[.runs[].results[] | select(.level == "warning")] | length' trivy-upgrade.sarif 2>/dev/null || echo 0)
+            echo "critical=${CRITICAL}" >> "$GITHUB_OUTPUT"
+            echo "high=${HIGH}" >> "$GITHUB_OUTPUT"
+          else
+            echo "critical=unknown" >> "$GITHUB_OUTPUT"
+            echo "high=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: portkeyai/gateway@${{ env.NEW_DIGEST }}
+          format: cyclonedx-json
+          output-file: sbom-upgrade.cyclonedx.json
+
+      - name: Grype SBOM scan
+        id: grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype sbom-upgrade.cyclonedx.json \
+            --fail-on critical \
+            --output table \
+            --file grype-report.txt 2>&1 || true
+          echo "Grype scan complete"
+        continue-on-error: true
+
+      # ── Update versions.env and open PR ─────────────────────
+      - name: Update versions.env
+        run: |
+          cat > versions.env <<ENVEOF
+          PORTKEY_VERSION=${NEW_VERSION}
+          PORTKEY_DIGEST=${NEW_DIGEST}
+          ENVEOF
+          # Remove leading whitespace from heredoc
+          sed -i 's/^[[:space:]]*//' versions.env
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          branch: deps/portkey-${{ env.NEW_VERSION }}
+          commit-message: "deps(portkey): bump portkeyai/gateway ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}"
+          title: "deps(portkey): bump portkeyai/gateway ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}"
+          body: |
+            ## Portkey Gateway Upgrade
+
+            Automated upgrade detected by the daily release scanner.
+
+            | | |
+            |---|---|
+            | **Current** | `${{ env.CURRENT_VERSION }}` |
+            | **New** | `${{ env.NEW_VERSION }}` |
+            | **Digest** | `${{ env.NEW_DIGEST }}` |
+            | **Release notes** | [Portkey-AI/gateway v${{ env.NEW_VERSION }}](https://github.com/Portkey-AI/gateway/releases/tag/v${{ env.NEW_VERSION }}) |
+
+            ### Security Scan Results
+
+            | Scanner | CRITICAL | HIGH |
+            |---|---|---|
+            | Trivy | ${{ steps.vuln-count.outputs.critical }} | ${{ steps.vuln-count.outputs.high }} |
+
+            > Full SARIF results uploaded to the [Security tab](/${{ github.repository }}/security/code-scanning).
+            > Grype SBOM scan also ran — check workflow logs for details.
+
+            ### Checklist
+            - [ ] Review release notes for breaking changes
+            - [ ] Verify scan results are acceptable
+            - [ ] Run integration tests if applicable
+          labels: dependencies,automated
+          assignees: theagenticguy
+          reviewers: theagenticguy
