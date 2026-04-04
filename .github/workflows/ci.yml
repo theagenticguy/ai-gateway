@@ -76,8 +76,68 @@ jobs:
   # ────────────────────────────────────────────────────────────
   # 2. SAST — Static Application Security Testing
   # ────────────────────────────────────────────────────────────
-  security-sast:
-    name: SAST
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    container:
+      image: semgrep/semgrep:1.76.0@sha256:1cbeb7b17cdcf5527b0638b5a9042d0ac06432b517416508534266ae8979b670
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Semgrep SAST scan
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --exclude 'infrastructure/' \
+            --sarif \
+            --output semgrep.sarif \
+            --error
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  bandit:
+    name: Bandit SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Bandit scan
+        run: uv run bandit -r src/ -f sarif -o bandit.sarif --exit-zero
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  gitleaks:
+    name: Secret Detection
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,53 +148,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Semgrep
-        run: python3 -m pip install --quiet semgrep==1.157.0
-
-      - name: Semgrep SAST scan
-        run: |
-          semgrep scan \
-            --config auto --config p/python --config p/owasp-top-ten --config p/security-audit \
-            --exclude 'infrastructure/' \
-            --error \
-            --sarif-output=semgrep-results.sarif
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-
-      - name: Upload Semgrep SARIF
-        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
-        if: always()
-        with:
-          sarif_file: semgrep-results.sarif
-          category: semgrep
-
       - name: Gitleaks secret detection
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE_KEY }}
+          GITLEAKS_ENABLE_SARIF: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+        continue-on-error: true
 
   # ────────────────────────────────────────────────────────────
-  # 2b. Dependency Audit — pip-audit for Python supply chain
+  # 2b. Dependency Audit — pip-audit + OSV-Scanner
   # ────────────────────────────────────────────────────────────
   security-deps:
     name: Dependency Audit
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
@@ -144,6 +183,89 @@ jobs:
 
       - name: Audit Python dependencies
         run: uvx pip-audit -r requirements.txt --strict --desc
+
+      - name: OSV-Scanner lockfile scan
+        id: osv
+        uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=sarif
+            --output=results.sarif
+            --lockfile=uv.lock
+            --lockfile=docs/pnpm-lock.yaml
+
+      - name: Upload OSV-Scanner SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        with:
+          sarif_file: results.sarif
+          category: osv-scanner
+        continue-on-error: true
+
+  # ────────────────────────────────────────────────────────────
+  # 2c. Filesystem Security — Trivy repo scan
+  # ────────────────────────────────────────────────────────────
+  security-fs:
+    name: Filesystem Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: fs
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-fs.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # ────────────────────────────────────────────────────────────
+  # 2d. License Compliance — pip-licenses
+  # ────────────────────────────────────────────────────────────
+  licenses:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: License check
+        run: uv run --with pip-licenses==4.4.0 pip-licenses
+
+      - name: Generate reports
+        run: |
+          uv run --with pip-licenses==4.4.0 pip-licenses --format=json --output-file=license-report.json
+          uv run --with pip-licenses==4.4.0 pip-licenses --format=markdown --output-file=license-report.md
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: license-reports
+          path: |
+            license-report.json
+            license-report.md
+          retention-days: 7
 
   # ────────────────────────────────────────────────────────────
   # 3. IaC Security — Terraform / Infrastructure

@@ -56,6 +56,7 @@ dependencies:
   dependencies-lists:
     - "https://github.com/theagenticguy/ai-gateway/blob/main/uv.lock"
   sbom:
-    - sbom-created: false
+    - sbom-created: true
+      sbom-url: "https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml"
   env-dependencies-policy:
     policy-url: "https://github.com/theagenticguy/ai-gateway/blob/main/.github/dependabot.yml"
