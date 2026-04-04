@@ -127,7 +127,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Bandit scan
-        run: uvx bandit -r src/ -f sarif -o bandit.sarif --exit-zero
+        run: uvx --with 'bandit[sarif]' bandit -r src/ -f sarif -o bandit.sarif --exit-zero
 
       - name: Upload SARIF
         if: always()
