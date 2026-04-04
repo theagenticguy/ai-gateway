@@ -50,7 +50,7 @@ This project runs automated security scans on every push and pull request:
 | Provenance | [GitHub Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) | SLSA build provenance for container images |
 
 All GitHub Actions are pinned to SHA hashes to prevent supply chain attacks.
-Container base images are pinned by digest to prevent tag repointing attacks.
+Container base images used in CI workflows are pinned by digest to prevent tag repointing attacks.
 
 ## Dependency Management
 
