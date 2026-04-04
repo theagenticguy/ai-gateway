@@ -47,12 +47,14 @@ This project runs automated security scans on every push and pull request:
 | SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
 | Lockfile Scan | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning against the OSV vulnerability database |
 | ECR Scanning | [Amazon Inspector](https://aws.amazon.com/inspector/) | Continuous container image scanning (re-evaluates on new CVEs) |
+| Provenance | [GitHub Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) | SLSA build provenance for container images |
 
 All GitHub Actions are pinned to SHA hashes to prevent supply chain attacks.
+Container base images used in CI workflows are pinned by digest to prevent tag repointing attacks.
 
 ## Dependency Management
 
 - Dependencies are managed via `uv` with a locked `uv.lock` file
 - Terraform providers are version-constrained in `versions.tf` and all child modules
-- Dependabot monitors Python (pip), Terraform, and GitHub Actions dependencies weekly
+- Dependabot monitors Python (pip), Terraform, GitHub Actions, and npm (docs/) dependencies weekly
 - The Dependency Review action blocks PRs introducing HIGH+ severity vulnerabilities or GPL-3.0/AGPL-3.0 licenses

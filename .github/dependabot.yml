@@ -76,21 +76,26 @@ updates:
           - minor
           - patch
 
-  # ── Docker (container images) ──────────────────────────────
-  - package-ecosystem: docker
-    directory: /infrastructure/modules/compute
+  # ── npm / pnpm (docs/) ──────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /docs
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     assignees:
       - theagenticguy
     reviewers:
       - theagenticguy
     commit-message:
-      prefix: "deps(docker):"
+      prefix: "deps(npm):"
     labels:
       - dependencies
-      - docker
+      - javascript
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
