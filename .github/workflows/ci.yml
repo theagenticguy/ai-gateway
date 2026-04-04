@@ -88,6 +88,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@42375524ee3024772bfc2bd2c14f10c145f78771 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Semgrep
         run: python3 -m pip install --quiet semgrep==1.157.0
 
