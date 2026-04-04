@@ -140,6 +140,7 @@ The project implements a multi-layered security scanning pipeline across develop
 | SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
 | Lockfile Scan | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning against the OSV vulnerability database |
 | ECR Scanning | [Amazon Inspector](https://aws.amazon.com/inspector/) | Continuous container image scanning in ECR (re-evaluates on new CVEs) |
+| Provenance | [GitHub Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) | SLSA build provenance for released container images |
 
 In CI, scanning follows a 3-phase pipeline: **pre-build** (hadolint + checkov), **post-build** (trivy + syft), and **post-scan** (cosign signing). A nightly **rescan** workflow re-evaluates the latest SBOM and container image against updated vulnerability databases using Grype and OSV-Scanner, catching newly disclosed CVEs in already-deployed artifacts. Amazon Inspector provides continuous ECR scanning in production. See [ADR-004](adr/004-security-pipeline-composition.md) for the full rationale.
 

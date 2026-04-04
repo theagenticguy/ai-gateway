@@ -27,6 +27,7 @@ jobs:
       contents: write          # Create releases, upload assets
       id-token: write          # OIDC for AWS + cosign keyless signing
       packages: write          # Push container images (if using GHCR)
+      attestations: write      # SLSA build provenance attestations
       security-events: write   # Upload SARIF
     steps:
       - name: Checkout repository
@@ -64,11 +65,11 @@ jobs:
         run: |
           IMAGE_URI="${ECR_REGISTRY}/${IMAGE_NAME}"
 
-          docker pull portkeyai/gateway:${PORTKEY_VERSION}
+          docker pull portkeyai/gateway@${PORTKEY_DIGEST}
 
-          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:${VERSION}"
-          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:${GITHUB_SHA}"
-          docker tag portkeyai/gateway:${PORTKEY_VERSION} "${IMAGE_URI}:latest"
+          docker tag portkeyai/gateway@${PORTKEY_DIGEST} "${IMAGE_URI}:${VERSION}"
+          docker tag portkeyai/gateway@${PORTKEY_DIGEST} "${IMAGE_URI}:${GITHUB_SHA}"
+          docker tag portkeyai/gateway@${PORTKEY_DIGEST} "${IMAGE_URI}:latest"
 
           docker push "${IMAGE_URI}:${VERSION}"
           docker push "${IMAGE_URI}:${GITHUB_SHA}"
@@ -155,3 +156,11 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── SLSA Provenance ─────────────────────────────────────
+      - name: Generate SLSA build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: false
