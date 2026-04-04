@@ -250,12 +250,12 @@ jobs:
         run: uv sync --frozen
 
       - name: License check
-        run: uv run --with pip-licenses pip-licenses
+        run: uv run --with pip-licenses==4.4.0 pip-licenses
 
       - name: Generate reports
         run: |
-          uv run --with pip-licenses pip-licenses --format=json --output-file=license-report.json
-          uv run --with pip-licenses pip-licenses --format=markdown --output-file=license-report.md
+          uv run --with pip-licenses==4.4.0 pip-licenses --format=json --output-file=license-report.json
+          uv run --with pip-licenses==4.4.0 pip-licenses --format=markdown --output-file=license-report.md
 
       - name: Upload reports
         if: always()
