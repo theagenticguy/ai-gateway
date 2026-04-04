@@ -106,6 +106,7 @@ jobs:
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        continue-on-error: true
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -132,6 +133,7 @@ jobs:
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        continue-on-error: true
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -227,6 +229,7 @@ jobs:
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
+        continue-on-error: true
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -305,9 +308,11 @@ jobs:
           sudo mv terraform-docs /usr/local/bin/
 
       - name: Check terraform-docs is up to date
+        id: tf-docs
         run: |
           terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/
-          git diff --exit-code infrastructure/README.md || (echo "terraform-docs is out of date. Run 'mise run tf:docs'" && exit 1)
+          git diff --exit-code infrastructure/README.md || (echo "::error::terraform-docs is out of date. Run 'mise run tf:docs'" && exit 1)
+        continue-on-error: true
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6
@@ -325,6 +330,7 @@ jobs:
         working-directory: infrastructure
 
       - name: Checkov IaC scan
+        if: always()
         uses: bridgecrewio/checkov-action@0ce65fae06c148e349f955c3c35ad049c11e838c # v12
         with:
           directory: infrastructure/
@@ -338,9 +344,16 @@ jobs:
       - name: Upload Checkov SARIF
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
         if: always()
+        continue-on-error: true
         with:
           sarif_file: checkov-results.sarif
           category: checkov
+
+      - name: Fail if terraform-docs is stale
+        if: steps.tf-docs.outcome == 'failure'
+        run: |
+          echo "::error::terraform-docs is out of date. Run 'mise run tf:docs'"
+          exit 1
 
   # ────────────────────────────────────────────────────────────
   # 4. Container Security — Image scan, Dockerfile lint, SBOM
@@ -372,6 +385,7 @@ jobs:
       - name: Upload Hadolint SARIF
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
         if: hashFiles('**/Dockerfile') != '' && always()
+        continue-on-error: true
         with:
           sarif_file: hadolint-results.sarif
           category: hadolint
@@ -389,6 +403,7 @@ jobs:
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
           category: trivy
