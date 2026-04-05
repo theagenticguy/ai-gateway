@@ -1,0 +1,23 @@
+# The Dockerfile uses multi-stage git clone (not COPY from build context),
+# so this file primarily keeps the build context small and prevents
+# accidental leaks of sensitive files.
+.git
+.github
+infrastructure
+docs
+tests
+src
+node_modules
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.cache
+.venv
+*.md
+*.toml
+.env*
+.vscode
+.idea
+coverage.xml
+*.sarif

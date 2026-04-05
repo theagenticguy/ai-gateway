@@ -356,7 +356,7 @@ jobs:
           exit 1
 
   # ────────────────────────────────────────────────────────────
-  # 4. Container Security — Image scan, Dockerfile lint, SBOM
+  # 4. Container Security — Build, scan, Dockerfile lint, SBOM
   # ────────────────────────────────────────────────────────────
   security-container:
     name: Container Security
@@ -371,12 +371,24 @@ jobs:
       - name: Load pinned versions
         run: cat versions.env >> "$GITHUB_ENV"
 
-      - name: Pull Portkey gateway image
-        run: docker pull portkeyai/gateway@${{ env.PORTKEY_DIGEST }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Build custom gateway image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          build-args: |
+            PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
+            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Hadolint Dockerfile lint
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
-        if: hashFiles('**/Dockerfile') != ''
         with:
           recursive: true
           format: sarif
@@ -384,7 +396,7 @@ jobs:
 
       - name: Upload Hadolint SARIF
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
-        if: hashFiles('**/Dockerfile') != '' && always()
+        if: always()
         continue-on-error: true
         with:
           sarif_file: hadolint-results.sarif
@@ -393,7 +405,7 @@ jobs:
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
-          image-ref: portkeyai/gateway@${{ env.PORTKEY_DIGEST }}
+          image-ref: ${{ env.IMAGE_NAME }}:ci
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
@@ -411,7 +423,7 @@ jobs:
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          image: portkeyai/gateway@${{ env.PORTKEY_DIGEST }}
+          image: ${{ env.IMAGE_NAME }}:ci
           format: cyclonedx-json
           output-file: sbom.cyclonedx.json
 
