@@ -56,16 +56,14 @@ jobs:
           output-file: sbom.cyclonedx.json
 
       # ── Grype: scan SBOM against latest vuln DB ────────────
-      - name: Install Grype
-        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-
       - name: Grype SBOM scan
         id: grype
-        run: |
-          grype sbom.cyclonedx.json \
-            --fail-on high \
-            --output sarif \
-            --file grype-results.sarif
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: sbom.cyclonedx.json
+          fail-build: "true"
+          severity-cutoff: high
+          output-format: sarif
         continue-on-error: true
 
       - name: Upload Grype SARIF
@@ -73,7 +71,7 @@ jobs:
         if: always()
         continue-on-error: true
         with:
-          sarif_file: grype-results.sarif
+          sarif_file: ${{ steps.grype.outputs.sarif }}
           category: grype-rescan
 
       # ── OSV-Scanner: check lockfiles against OSV database ──
