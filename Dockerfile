@@ -11,9 +11,10 @@
 ARG PORTKEY_VERSION=1.15.2
 ARG PORTKEY_TARBALL_SHA256
 ARG NODE_VERSION=24
+ARG NODE_ALPINE_DIGEST=sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b
 
 # ── Stage 1: Fetch + verify source ──────────────────────────
-FROM node:${NODE_VERSION}-alpine AS source
+FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS source
 ARG PORTKEY_VERSION
 ARG PORTKEY_TARBALL_SHA256
 RUN set -eu \
@@ -27,18 +28,27 @@ RUN set -eu \
     && rm -f /tmp/portkey.tar.gz
 
 # ── Stage 2: Build ───────────────────────────────────────────
-FROM node:${NODE_VERSION}-alpine AS build
+FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS build
 WORKDIR /app
 COPY --from=source /src/package*.json ./
 COPY --from=source /src/patches ./patches/
-RUN npm ci
+# Patch vulnerable transitive deps via npm overrides
+# picomatch 2.3.2  ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
+# yaml      2.8.3  ← CVE-2026-33532 (MEDIUM)
+RUN node -e " \
+  const fs = require('fs'); \
+  const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
+  pkg.overrides = { ...pkg.overrides, picomatch: '2.3.2', yaml: '2.8.3' }; \
+  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
+    && npm install --package-lock-only \
+    && npm ci
 COPY --from=source /src .
 RUN npm run build \
     && rm -rf node_modules \
     && npm ci --omit=dev
 
 # ── Stage 3: Runtime ─────────────────────────────────────────
-FROM node:${NODE_VERSION}-alpine
+FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST}
 
 LABEL org.opencontainers.image.title="AI Gateway" \
       org.opencontainers.image.description="Hardened Portkey AI Gateway" \
