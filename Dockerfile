@@ -40,7 +40,7 @@ RUN node -e " \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
   pkg.overrides = { ...pkg.overrides, picomatch: '2.3.2', yaml: '2.8.3' }; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
-    && npm install --package-lock-only \
+    && npm install --package-lock-only --ignore-scripts \
     && npm ci
 COPY --from=source /src .
 RUN npm run build \
