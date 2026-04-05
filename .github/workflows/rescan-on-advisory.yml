@@ -61,6 +61,7 @@ jobs:
           tags: ai-gateway:sbom-fallback
           build-args: |
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
+            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
 
       - name: Generate SBOM fallback
         if: steps.download-sbom.outcome == 'failure'
@@ -143,6 +144,7 @@ jobs:
           tags: ai-gateway:rescan
           build-args: |
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
+            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
 
       - name: Trivy rescan
         id: trivy

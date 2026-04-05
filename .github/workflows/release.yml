@@ -81,6 +81,7 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
           build-args: |
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
+            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

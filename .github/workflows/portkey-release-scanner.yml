@@ -72,6 +72,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
+      - name: Compute tarball SHA256
+        id: tarball
+        run: |
+          wget -qO /tmp/portkey.tar.gz \
+            "https://github.com/Portkey-AI/gateway/archive/refs/tags/v${NEW_VERSION}.tar.gz"
+          SHA=$(sha256sum /tmp/portkey.tar.gz | cut -d' ' -f1)
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/portkey.tar.gz
+
       - name: Build custom image with new version
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -81,6 +90,7 @@ jobs:
           tags: ai-gateway:upgrade-scan
           build-args: |
             PORTKEY_VERSION=${{ env.NEW_VERSION }}
+            PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
 
       # ── Security scan before proposing upgrade ──────────────
       - name: Trivy vulnerability scan
@@ -136,7 +146,11 @@ jobs:
       # ── Update versions.env and open PR ─────────────────────
       - name: Update versions.env
         run: |
-          echo "PORTKEY_VERSION=${NEW_VERSION}" > versions.env
+          cat > versions.env <<EOF
+          PORTKEY_VERSION=${NEW_VERSION}
+          PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
+          EOF
+          sed -i 's/^[[:space:]]*//' versions.env
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0

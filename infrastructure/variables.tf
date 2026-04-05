@@ -27,11 +27,11 @@ variable "vpc_cidr" {
 }
 
 variable "portkey_image" {
-  description = "Docker image URI for the AI Gateway (custom-built from Portkey OSS, pushed to ECR by release workflow)"
+  description = "Docker image URI for the AI Gateway (custom-built from Portkey OSS, pushed to ECR + GHCR by release workflow)"
   type        = string
   # Overridden at apply time with the ECR URI from the release workflow.
-  # This default is a fallback for local development only.
-  default = "ai-gateway:latest"
+  # GHCR fallback ensures a resolvable default for plan/validate.
+  default = "ghcr.io/theagenticguy/ai-gateway:latest"
 }
 
 variable "gateway_desired_count" {

@@ -9,14 +9,22 @@
 # - HEALTHCHECK for orchestrator liveness probes
 # ──────────────────────────────────────────────────────────────
 ARG PORTKEY_VERSION=1.15.2
+ARG PORTKEY_TARBALL_SHA256
 ARG NODE_VERSION=24
 
-# ── Stage 1: Fetch source ────────────────────────────────────
+# ── Stage 1: Fetch + verify source ──────────────────────────
 FROM node:${NODE_VERSION}-alpine AS source
 ARG PORTKEY_VERSION
-RUN apk add --no-cache git \
-    && git clone --depth 1 --branch "v${PORTKEY_VERSION}" \
-       https://github.com/Portkey-AI/gateway.git /src
+ARG PORTKEY_TARBALL_SHA256
+RUN set -eu \
+    && wget -qO /tmp/portkey.tar.gz \
+       "https://github.com/Portkey-AI/gateway/archive/refs/tags/v${PORTKEY_VERSION}.tar.gz" \
+    && if [ -n "${PORTKEY_TARBALL_SHA256:-}" ]; then \
+         echo "${PORTKEY_TARBALL_SHA256}  /tmp/portkey.tar.gz" | sha256sum -c -; \
+       fi \
+    && mkdir -p /src \
+    && tar -xzf /tmp/portkey.tar.gz --strip-components=1 -C /src \
+    && rm -f /tmp/portkey.tar.gz
 
 # ── Stage 2: Build ───────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine AS build
