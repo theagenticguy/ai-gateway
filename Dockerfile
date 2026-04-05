@@ -14,7 +14,7 @@ ARG NODE_VERSION=24
 # ── Stage 1: Fetch source ────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine AS source
 ARG PORTKEY_VERSION
-RUN apk add --no-cache git=2.47.3-r0 \
+RUN apk add --no-cache git \
     && git clone --depth 1 --branch "v${PORTKEY_VERSION}" \
        https://github.com/Portkey-AI/gateway.git /src
 
@@ -38,7 +38,7 @@ LABEL org.opencontainers.image.title="AI Gateway" \
       org.opencontainers.image.base.name="node:${NODE_VERSION}-alpine"
 
 RUN apk upgrade --no-cache \
-    && apk add --no-cache tini=0.19.0-r3 wget=1.25.0-r0
+    && apk add --no-cache tini wget
 
 WORKDIR /app
 COPY --from=build /app/build ./build/

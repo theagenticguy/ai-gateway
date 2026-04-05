@@ -1,6 +1,7 @@
 # .hadolint.yaml -- Hadolint configuration
 ignored:
   - DL3008  # Pin versions in apt-get install (handled by base image choice)
+  - DL3018  # Pin versions in apk add — we run apk upgrade first; pinning defeats patching
 trustedRegistries:
   - docker.io
   - public.ecr.aws
