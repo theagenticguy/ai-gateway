@@ -2,6 +2,7 @@
 ignored:
   - DL3008  # Pin versions in apt-get install (handled by base image choice)
 trustedRegistries:
+  - docker.io
   - public.ecr.aws
   - cgr.dev
   - gcr.io/distroless

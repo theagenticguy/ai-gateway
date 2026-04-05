@@ -1,10 +1,9 @@
 # ──────────────────────────────────────────────────────────────
 # Portkey Release Scanner — Daily upstream release monitoring
 # ──────────────────────────────────────────────────────────────
-# Checks Docker Hub daily for new portkeyai/gateway releases.
-# When a new version is found, pulls the image, runs a security
-# scan (Trivy), and opens a PR to update versions.env with the
-# new version and digest-pinned reference.
+# Checks GitHub Releases daily for new Portkey-AI/gateway versions.
+# When a new version is found, builds our custom hardened image,
+# runs security scans, and opens a PR to update versions.env.
 # ──────────────────────────────────────────────────────────────
 name: Portkey Release Scanner
 
@@ -24,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.check.outputs.new_version }}
-      new_digest: ${{ steps.check.outputs.new_digest }}
       current_version: ${{ steps.check.outputs.current_version }}
     steps:
       - name: Checkout repository
@@ -33,17 +31,19 @@ jobs:
       - name: Load current pinned version
         run: cat versions.env >> "$GITHUB_ENV"
 
-      - name: Check Docker Hub for latest release
+      - name: Check GitHub for latest release
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "current_version=${PORTKEY_VERSION}" >> "$GITHUB_OUTPUT"
 
-          # Fetch tags from Docker Hub, sorted by last_updated
-          LATEST=$(curl -sf "https://hub.docker.com/v2/repositories/portkeyai/gateway/tags/?page_size=25&ordering=last_updated" \
-            | jq -r '[.results[] | select(.name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(.name | split(".") | map(tonumber)) | last | .name')
+          # Fetch latest release from GitHub (excludes prereleases)
+          LATEST=$(gh api repos/Portkey-AI/gateway/releases/latest --jq '.tag_name' 2>/dev/null || true)
+          LATEST="${LATEST#v}"  # Strip v prefix
 
-          if [[ -z "$LATEST" || "$LATEST" == "null" ]]; then
-            echo "::warning::Could not determine latest Portkey version from Docker Hub"
+          if [[ -z "$LATEST" ]]; then
+            echo "::warning::Could not determine latest Portkey version from GitHub"
             exit 0
           fi
 
@@ -54,18 +54,8 @@ jobs:
             exit 0
           fi
 
-          # Get the multi-arch manifest digest for the new version
-          DIGEST=$(curl -sf "https://hub.docker.com/v2/repositories/portkeyai/gateway/tags/${LATEST}" \
-            | jq -r '.digest')
-
-          if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
-            echo "::error::Could not resolve digest for portkeyai/gateway:${LATEST}"
-            exit 1
-          fi
-
           echo "new_version=${LATEST}" >> "$GITHUB_OUTPUT"
-          echo "new_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "::notice::New Portkey release found: ${LATEST} (${DIGEST})"
+          echo "::notice::New Portkey release found: ${LATEST}"
 
   scan-and-pr:
     name: Scan & Open PR
@@ -74,21 +64,30 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NEW_VERSION: ${{ needs.check-release.outputs.new_version }}
-      NEW_DIGEST: ${{ needs.check-release.outputs.new_digest }}
       CURRENT_VERSION: ${{ needs.check-release.outputs.current_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Pull new Portkey image
-        run: docker pull portkeyai/gateway@${NEW_DIGEST}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Build custom image with new version
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ai-gateway:upgrade-scan
+          build-args: |
+            PORTKEY_VERSION=${{ env.NEW_VERSION }}
 
       # ── Security scan before proposing upgrade ──────────────
       - name: Trivy vulnerability scan
         id: trivy
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: portkeyai/gateway@${{ env.NEW_DIGEST }}
+          image-ref: ai-gateway:upgrade-scan
           format: sarif
           output: trivy-upgrade.sarif
           severity: CRITICAL,HIGH
@@ -119,7 +118,7 @@ jobs:
       - name: Generate SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          image: portkeyai/gateway@${{ env.NEW_DIGEST }}
+          image: ai-gateway:upgrade-scan
           format: cyclonedx-json
           output-file: sbom-upgrade.cyclonedx.json
 
@@ -137,12 +136,7 @@ jobs:
       # ── Update versions.env and open PR ─────────────────────
       - name: Update versions.env
         run: |
-          cat > versions.env <<ENVEOF
-          PORTKEY_VERSION=${NEW_VERSION}
-          PORTKEY_DIGEST=${NEW_DIGEST}
-          ENVEOF
-          # Remove leading whitespace from heredoc
-          sed -i 's/^[[:space:]]*//' versions.env
+          echo "PORTKEY_VERSION=${NEW_VERSION}" > versions.env
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
@@ -159,8 +153,8 @@ jobs:
             |---|---|
             | **Current** | `${{ env.CURRENT_VERSION }}` |
             | **New** | `${{ env.NEW_VERSION }}` |
-            | **Digest** | `${{ env.NEW_DIGEST }}` |
             | **Release notes** | [Portkey-AI/gateway v${{ env.NEW_VERSION }}](https://github.com/Portkey-AI/gateway/releases/tag/v${{ env.NEW_VERSION }}) |
+            | **Image build** | Custom hardened container (Node.js 24 LTS, non-root, tini) |
 
             ### Security Scan Results
 
