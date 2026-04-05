@@ -194,65 +194,10 @@ If DynamoDB is unreachable, requests are allowed through. Rate limiting never bl
 
 ---
 
-## Admin API Endpoints
+:::note[Admin API]
+For admin endpoints (teams, budgets, pricing, routing, usage), see the [Admin API](/ai-gateway/admin-guide/admin-api/) page. The admin API runs on a separate API Gateway with Cognito authorization.
+:::
 
-The admin API runs on a separate API Gateway with Cognito authorization (see [ADR-014](/developer-guide/adr-index)). Enable it with `enable_admin_api = true`.
-
-All admin endpoints require a JWT with the admin scope. Obtain one via:
-
-```bash
-curl -X POST "${COGNITO_TOKEN_ENDPOINT}" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=https://gateway.internal/admin"
-```
-
-### Usage API
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/usage/{team}` | Current period usage, budget utilization, per-model breakdown |
-| `GET` | `/usage/{team}/history` | Monthly usage history |
-
-### Pricing Admin
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/pricing` | List all pricing entries (DynamoDB overrides + static defaults) |
-| `GET` | `/pricing/{provider}/{model}` | Get pricing for a specific model |
-| `PUT` | `/pricing/{provider}/{model}` | Create or update a pricing override |
-| `DELETE` | `/pricing/{provider}/{model}` | Remove override, revert to static default |
-
-### Teams
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/teams` | List registered teams |
-| `POST` | `/teams` | Register a new team |
-| `GET` | `/teams/{id}` | Get team details |
-| `PUT` | `/teams/{id}` | Update team configuration |
-| `DELETE` | `/teams/{id}` | Deregister a team |
-
-### Budgets
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/budgets` | List all budgets |
-| `POST` | `/budgets` | Create a budget |
-| `GET` | `/budgets/{id}` | Get budget and current usage |
-| `PUT` | `/budgets/{id}` | Update a budget |
-| `DELETE` | `/budgets/{id}` | Delete a budget |
-
-### Routing Config
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/routing` | List routing configurations |
-| `POST` | `/routing` | Create a routing rule |
-| `GET` | `/routing/{id}` | Get routing rule details |
-| `PUT` | `/routing/{id}` | Update a routing rule |
-| `DELETE` | `/routing/{id}` | Delete a routing rule |
-
----
 
 ## Health Check
 

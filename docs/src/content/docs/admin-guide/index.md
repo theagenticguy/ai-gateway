@@ -16,11 +16,13 @@ This guide is for **infrastructure engineers and platform team members** who dep
 | [Environments](environments.md) | Dev vs prod configuration, Terragrunt multi-environment setup, customizations |
 | [Security](security.md) | WAFv2, JWT auth, Cognito, Secrets Manager, network isolation, CI security pipeline |
 | [Monitoring](monitoring.md) | CloudWatch logs/dashboards, OTel collector, saved queries, key metrics |
-| [Features](features.md) | B-series opt-in features: multi-client, fallback routing, cost attribution, guardrails, caching |
+| [Feature Toggles](features.md) | Multi-client, fallback routing, cost attribution, guardrails, caching, rate limiting, audit log, SSO |
+| [Admin API](admin-api.md) | Admin API endpoints for teams, budgets, pricing, routing, and usage |
+| [Upgrading](upgrading.md) | Upgrade Portkey versions, Terraform providers, and enable new feature series |
 
 ## Architecture Overview
 
-The AI Gateway runs Portkey AI Gateway OSS (v1.15.2) on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 4 local modules.
+The AI Gateway runs Portkey AI Gateway OSS (v1.15.2) on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 17 modules.
 
 ```mermaid
 flowchart TB

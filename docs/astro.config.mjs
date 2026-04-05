@@ -63,6 +63,11 @@ export default defineConfig({
           collapsed: true,
           autogenerate: { directory: "reference" },
         },
+        {
+          label: "ADRs",
+          collapsed: true,
+          autogenerate: { directory: "adrs" },
+        },
       ],
 
       plugins: [
@@ -78,7 +83,7 @@ export default defineConfig({
           description:
             "Lightweight LLM inference gateway on AWS — Portkey OSS on ECS Fargate with Cognito M2M auth, multi-provider routing, and dual API format support.",
           promote: ["index*", "getting-started/*"],
-          exclude: ["reference/devtools-research", "reference/infra-stack-research"],
+          exclude: ["reference/devtools-research", "reference/infra-stack-research", "adrs/*"],
         }),
       ],
     }),

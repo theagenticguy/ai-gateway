@@ -1,41 +1,47 @@
 ---
 title: Feature Toggles
-description: "B-series features: multi-client, fallback routing, cost attribution, guardrails, and cache."
+description: "Optional platform features: multi-client isolation, fallback routing, cost attribution, guardrails, caching, rate limiting, audit logging, and SSO."
 sidebar:
   order: 6
 ---
-The AI Gateway includes a set of **B-series features** that extend the base platform with additional capabilities. All B-series features are **disabled by default** and can be enabled independently through toggle variables in your Terraform configuration.
-
-## Overview
-
-| Feature | Module | Toggle Variable | Status |
-|---|---|---|---|
-| B.1 Multi-Client Onboarding | `modules/clients/` | `enable_multi_client` | Opt-in |
-| B.2 Provider Fallback Routing | Portkey config JSONs | `enable_fallback_routing` | Opt-in |
-| B.3 Cost Attribution Pipeline | Lambda + DynamoDB | `enable_cost_attribution` | Opt-in |
-| B.4 Bedrock Guardrails | `modules/guardrails/` | `enable_guardrails` | Opt-in |
-| B.5 ElastiCache Response Cache | `modules/cache/` | `enable_response_cache` | Opt-in |
+The AI Gateway includes optional features that extend the base platform. All features are **disabled by default** and can be enabled independently through toggle variables in your Terraform configuration.
 
 :::note
-B-series features are designed as additive modules. Enabling a feature creates new resources alongside the base infrastructure. Disabling a feature destroys only the resources it created.
+Features are designed as additive modules. Enabling a feature creates new resources alongside the base infrastructure. Disabling a feature destroys only the resources it created.
 :::
 
+## Feature Overview
+
+| Feature | Toggle Variable | Category |
+|---|---|---|
+| [Multi-Client Onboarding](#multi-client-onboarding) | `enable_multi_client` | Access Control |
+| [Provider Fallback Routing](#provider-fallback-routing) | `enable_fallback_routing` | Routing |
+| [Cost Attribution Pipeline](#cost-attribution-pipeline) | `enable_cost_attribution` | Cost Management |
+| [Bedrock Guardrails](#bedrock-guardrails) | `enable_guardrails` | Content Safety |
+| [ElastiCache Response Cache](#elasticache-response-cache) | `enable_response_cache` | Performance |
+| [RPM & Token Rate Limiting](#rpm--token-rate-limiting) | `enable_admin_api` | Metering |
+| [Usage Self-Service API](#usage-self-service-api) | `enable_admin_api` | Metering |
+| [Dynamic Pricing Admin](#dynamic-pricing-admin) | `enable_admin_api` | Metering |
+| [Audit Log Pipeline](#audit-log-pipeline) | `enable_audit_log` | Compliance |
+| [Per-Team Cache Metrics](#per-team-cache-metrics) | `enable_cost_attribution` | Cost Management |
+| [Identity Provider Federation](#identity-provider-federation) | `enable_user_auth` | Identity & SSO |
+| [Pre-Token Group Mapping](#pre-token-group-mapping) | `enable_user_auth` | Identity & SSO |
 
 ---
 
-## B.1 Multi-Client Onboarding
+## Access Control
 
-### What It Adds
+### Multi-Client Onboarding
 
 Per-team Cognito credentials that allow you to issue separate client IDs and secrets to each consuming team or service. Each client can be assigned a subset of OAuth scopes, enabling fine-grained access control.
 
-### Resources Created
+**Resources created:**
 
 - Additional Cognito User Pool clients (one per team)
 - Per-client scope assignments (e.g., team A gets `invoke` only, team B gets `invoke` + `admin`)
 - Optional per-client rate limiting via WAF rules
 
-### How to Enable
+**How to enable:**
 
 ```hcl
 enable_multi_client = true
@@ -50,8 +56,6 @@ client_configurations = {
 }
 ```
 
-### How It Works
-
 Each team receives its own `client_id` and `client_secret` from the Cognito User Pool. They use the standard `client_credentials` grant to obtain tokens scoped to their permissions. The ALB JWT listener validates the `scope` claim, ensuring teams can only access endpoints their scopes allow.
 
 :::tip
@@ -61,13 +65,13 @@ Use the `admin` scope sparingly. Most consuming services only need `invoke` to c
 
 ---
 
-## B.2 Provider Fallback Routing
+## Routing
 
-### What It Adds
+### Provider Fallback Routing
 
 Portkey-native fallback and load-balancing configurations that route requests across multiple LLM providers. If the primary provider fails or is throttled, requests automatically fall back to a secondary provider.
 
-### Routing Strategies
+**Routing strategies:**
 
 | Strategy | Description | Use Case |
 |---|---|---|
@@ -75,7 +79,7 @@ Portkey-native fallback and load-balancing configurations that route requests ac
 | **Load Balance** | Distribute requests across providers by weight | Cost optimization: 70% Bedrock, 30% OpenAI |
 | **Retry** | Retry failed requests on the same or different provider | Transient error recovery |
 
-### How to Enable
+**How to enable:**
 
 ```hcl
 enable_fallback_routing = true
@@ -83,7 +87,7 @@ enable_fallback_routing = true
 
 This deploys Portkey routing configuration files that define fallback chains and load-balancing weights. The configurations are passed to the gateway as environment variables or mounted config files.
 
-### Example Fallback Configuration
+**Example fallback configuration:**
 
 ```json
 {
@@ -103,7 +107,7 @@ This deploys Portkey routing configuration files that define fallback chains and
 }
 ```
 
-### Example Load-Balancing Configuration
+**Example load-balancing configuration:**
 
 ```json
 {
@@ -127,13 +131,13 @@ This deploys Portkey routing configuration files that define fallback chains and
 
 ---
 
-## B.3 Cost Attribution Pipeline
+## Cost Management
 
-### What It Adds
+### Cost Attribution Pipeline
 
 A serverless pipeline that counts tokens, maps them to provider pricing, and publishes cost metrics to CloudWatch. This enables per-team and per-model cost visibility.
 
-### Resources Created
+**Resources created:**
 
 | Resource | Purpose |
 |---|---|
@@ -143,34 +147,39 @@ A serverless pipeline that counts tokens, maps them to provider pricing, and pub
 | CloudWatch custom metrics | `AIGateway/TokensUsed` and `AIGateway/EstimatedCostUsd` |
 | Dashboard widgets | Token usage and cost-by-provider widgets added to the main dashboard |
 
-### How to Enable
+**How to enable:**
 
 ```hcl
 enable_cost_attribution = true
 ```
 
-### How It Works
-
-1. The gateway emits structured JSON logs for every request, including provider, model, and response metadata.
-2. A CloudWatch Logs subscription filter streams these logs to the Lambda function.
-3. The Lambda function extracts token counts from the response, looks up the per-model price in the DynamoDB pricing table, and calculates the estimated cost.
-4. Token counts and cost estimates are published as CloudWatch custom metrics under the `AIGateway` namespace.
-5. The dashboard displays token usage and cost breakdowns by provider and model.
+The gateway emits structured JSON logs for every request. A CloudWatch Logs subscription filter streams these logs to a Lambda function that extracts token counts, looks up per-model pricing in a DynamoDB table, calculates estimated cost, and publishes custom CloudWatch metrics under the `AIGateway` namespace.
 
 :::note
 The pricing table must be populated with current provider rates. Rates change frequently -- consider automating the update process or reviewing monthly.
 :::
 
 
+### Per-Team Cache Metrics
+
+Extends the cost attribution pipeline to publish cache hit/miss metrics with a `Team` dimension, in addition to the existing `Provider` and `Model` dimensions.
+
+| Metric | Dimensions | Description |
+|---|---|---|
+| `AIGateway/CacheHitRate` | Team, Provider, Model | Percentage of requests served from cache |
+| `AIGateway/CacheSavingsUsd` | Team | Estimated cost savings from cache hits |
+
+Use these metrics to identify teams with low cache hit rates and tune their request patterns (e.g., lowering temperature for deterministic calls).
+
 ---
 
-## B.4 Bedrock Guardrails
+## Content Safety
 
-### What It Adds
+### Bedrock Guardrails
 
 Content safety controls powered by Amazon Bedrock Guardrails. These are applied to requests and responses passing through the gateway, blocking harmful content before it reaches end users.
 
-### Resources Created
+**Resources created:**
 
 | Resource | Purpose |
 |---|---|
@@ -178,7 +187,7 @@ Content safety controls powered by Amazon Bedrock Guardrails. These are applied 
 | Guardrail version | Immutable published version for production use |
 | IAM policy | Grants the ECS task role permission to invoke Bedrock Guardrails |
 
-### Guardrail Policies
+**Guardrail policies:**
 
 | Policy Type | Description | Default Behavior |
 |---|---|---|
@@ -187,7 +196,7 @@ Content safety controls powered by Amazon Bedrock Guardrails. These are applied 
 | **Topic Policies** | Blocks requests about restricted topics | Configurable deny-list |
 | **Word Policies** | Blocks specific words or patterns | Configurable word list |
 
-### How to Enable
+**How to enable:**
 
 ```hcl
 enable_guardrails = true
@@ -200,9 +209,7 @@ guardrail_config = {
 }
 ```
 
-### How It Works
-
-When guardrails are enabled, the gateway invokes Bedrock's `ApplyGuardrail` API on both the input (prompt) and output (completion). If either triggers a policy violation, the request is blocked with an explanatory error message. The guardrail evaluation adds latency to each request proportional to the content length.
+When guardrails are enabled, the gateway invokes Bedrock's `ApplyGuardrail` API on both the input (prompt) and output (completion). If either triggers a policy violation, the request is blocked with an explanatory error message.
 
 :::caution
 Bedrock Guardrails are a regional service. Ensure the guardrail is created in the same region as the ECS cluster. Additional Bedrock quotas may need to be requested for high-throughput use.
@@ -211,13 +218,13 @@ Bedrock Guardrails are a regional service. Ensure the guardrail is created in th
 
 ---
 
-## B.5 ElastiCache Response Cache
+## Performance
 
-### What It Adds
+### ElastiCache Response Cache
 
 A Redis-based response cache that stores LLM completions keyed by the request hash. Identical requests return cached responses, reducing latency and provider API costs.
 
-### Resources Created
+**Resources created:**
 
 | Resource | Purpose |
 |---|---|
@@ -225,16 +232,7 @@ A Redis-based response cache that stores LLM completions keyed by the request ha
 | Security group | Allows port 6379 from ECS tasks only |
 | Subnet group | Places Redis in private subnets |
 
-### Configuration
-
-| Setting | Value |
-|---|---|
-| Engine | Redis 7.1 |
-| Encryption in transit | TLS enabled |
-| Eviction policy | `allkeys-lru` (Least Recently Used) |
-| Deployment | ElastiCache Serverless (auto-scaling) |
-
-### How to Enable
+**How to enable:**
 
 ```hcl
 enable_response_cache = true
@@ -248,8 +246,6 @@ When enabled, the gateway container receives additional environment variables:
 | `REDIS_URL` | `rediss://{endpoint}:6379` | TLS-encrypted Redis endpoint |
 | `CACHE_TTL` | `3600` | Default cache TTL in seconds (1 hour) |
 
-### How It Works
-
 Portkey's built-in caching layer hashes the request body (model, messages, parameters) to generate a cache key. On cache hit, the cached response is returned immediately without calling the LLM provider. On cache miss, the provider response is stored in Redis for subsequent requests.
 
 :::tip
@@ -259,29 +255,13 @@ Caching works best for deterministic requests (temperature=0). For creative/rand
 
 ---
 
----
+## Metering & Governance
 
-## C-Series Features
+These features run on the [Admin API](/ai-gateway/admin-guide/admin-api/) plane (see [ADR-014](/ai-gateway/adrs/014-two-plane-architecture-split/)) and are enabled with `enable_admin_api = true`.
 
-The **C-series features** add metering, governance, and self-service capabilities on top of the B-series platform. All C-series endpoints run on the Admin API Gateway plane (see [ADR-014](/developer-guide/adr-index)) and are enabled with `enable_admin_api = true`.
+### RPM & Token Rate Limiting
 
-| Feature | Module | Toggle Variable | Status |
-|---|---|---|---|
-| C.1 RPM & Token Rate Limiting | `rate_limiter/` | `enable_admin_api` | Opt-in |
-| C.2 Usage Self-Service API | `usage_api/` | `enable_admin_api` | Opt-in |
-| C.3 Dynamic Pricing Admin | `pricing_admin/` | `enable_admin_api` | Opt-in |
-| C.4 Audit Log Pipeline | `modules/audit_log/` | `enable_audit_log` | Opt-in |
-| C.5 Per-Team Cache Metrics | `cost_attribution/` | `enable_cost_attribution` | Opt-in |
-
----
-
-### C.1 RPM & Token Rate Limiting
-
-#### What It Adds
-
-Per-team rate limiting with two dimensions: requests per minute (RPM) and daily token consumption. Limits are defined per tenant tier in `TierConfig` and enforced via DynamoDB atomic counters.
-
-#### How It Works
+Per-team rate limiting with two dimensions: requests per minute (RPM) and daily token consumption. Limits are defined per tenant tier and enforced via DynamoDB atomic counters.
 
 | Dimension | DynamoDB Key | Window | TTL |
 |---|---|---|---|
@@ -290,11 +270,7 @@ Per-team rate limiting with two dimensions: requests per minute (RPM) and daily 
 
 Each request atomically increments the counter. When a limit is exceeded, the gateway returns a `429`-equivalent response with a `retry_after_seconds` hint.
 
-#### Graceful Degradation
-
-If DynamoDB is unreachable, the request is *allowed* and a warning is logged. This prevents rate limiting infrastructure from becoming a single point of failure on the inference path.
-
-#### Tier Defaults
+**Tier defaults:**
 
 | Tier | RPM | Daily Tokens |
 |---|---|---|
@@ -303,39 +279,20 @@ If DynamoDB is unreachable, the request is *allowed* and a warning is logged. Th
 | premium | 500 | 10,000,000 |
 | enterprise | -1 (unlimited) | -1 (unlimited) |
 
----
+If DynamoDB is unreachable, the request is *allowed* and a warning is logged. Rate limiting never blocks requests due to infrastructure failures.
 
-### C.2 Usage Self-Service API
-
-#### What It Adds
+### Usage Self-Service API
 
 A read-only API that lets teams query their own usage without waiting for monthly chargeback reports.
-
-#### Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/usage/{team}` | Current period usage, budget utilization, and per-model breakdown |
 | `GET` | `/usage/{team}/history` | Historical usage by month |
 
-#### Response Fields
-
-| Field | Description |
-|---|---|
-| `current_period` | Token counts, cost, and request count for the current billing period |
-| `models` | Per-model breakdown (tokens, cost, request count) |
-| `budget_utilization_pct` | Percentage of monthly budget consumed |
-| `history` | Array of past periods with the same structure |
-
----
-
-### C.3 Dynamic Pricing Admin
-
-#### What It Adds
+### Dynamic Pricing Admin
 
 Runtime pricing overrides stored in DynamoDB with a static fallback table. Operators can update model pricing without redeploying the Lambda.
-
-#### Endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -344,22 +301,17 @@ Runtime pricing overrides stored in DynamoDB with a static fallback table. Opera
 | `PUT` | `/pricing/{provider}/{model}` | Create or update a pricing override |
 | `DELETE` | `/pricing/{provider}/{model}` | Remove a DynamoDB override (reverts to static default) |
 
-#### Resolution Order
-
-1. DynamoDB override (if present)
-2. Static `PRICING_TABLE` in `pricing.py`
-
 The `source` field in responses indicates whether a price came from `"dynamodb"` or `"static"`.
 
 ---
 
-### C.4 Audit Log Pipeline
+## Compliance
 
-#### What It Adds
+### Audit Log Pipeline
 
 A structured audit trail for all gateway requests, stored as Parquet files in S3 for Athena queries.
 
-#### Resources Created
+**Resources created:**
 
 | Resource | Purpose |
 |---|---|
@@ -368,13 +320,13 @@ A structured audit trail for all gateway requests, stored as Parquet files in S3
 | Glue Catalog | Database + table for Athena SQL queries |
 | CloudWatch Log Group | Firehose delivery error logs |
 
-#### How to Enable
+**How to enable:**
 
 ```hcl
 enable_audit_log = true
 ```
 
-#### Audit Record Schema
+**Audit record schema:**
 
 | Column | Type | Description |
 |---|---|---|
@@ -393,45 +345,123 @@ enable_audit_log = true
 | `correlation_id` | string | Request correlation ID |
 | `request_timestamp` | string | ISO 8601 timestamp |
 
-#### Lifecycle
-
-- 0–90 days: S3 Standard
-- 90–365 days: S3 Standard-IA
-- 365+ days: Expired
+**Lifecycle:** 0-90 days S3 Standard, 90-365 days S3 Standard-IA, 365+ days expired.
 
 ---
 
-### C.5 Per-Team Cache Metrics
+## Identity & SSO
 
-#### What It Adds
+### Identity Provider Federation
 
-Extends the cost attribution pipeline (B.3) to publish cache hit/miss metrics with a `Team` dimension, in addition to the existing `Provider` and `Model` dimensions.
+Federation with external identity providers (AWS Identity Center, Okta, Entra ID, or any SAML 2.0 / OIDC-compliant IdP) through the existing Cognito User Pool. Users authenticate with their corporate credentials via the Cognito Hosted UI and receive JWT tokens for gateway access.
 
-#### New CloudWatch Metrics
+**Resources created:**
 
-| Metric | Dimensions | Description |
+| Resource | Purpose |
+|---|---|
+| `aws_cognito_identity_provider` | One per entry in `identity_providers` (SAML or OIDC) |
+| Cognito app client (`user_sso`) | Public client for `authorization_code` flow with PKCE |
+| Cognito Hosted UI domain | Login page served by Cognito |
+| Pre-Token-Generation V2 Lambda | Maps IdP groups to custom gateway claims |
+
+**How to enable:**
+
+```hcl
+enable_user_auth = true
+
+identity_providers = {
+  IdentityCenter = {
+    provider_type     = "SAML"
+    metadata_url      = "https://portal.sso.us-east-1.amazonaws.com/saml/metadata/..."
+    provider_details  = {}
+    attribute_mapping = {}
+  }
+}
+
+callback_urls = ["https://gateway.example.com/callback"]
+logout_urls   = ["https://gateway.example.com/logout"]
+```
+
+The user authenticates via the Cognito Hosted UI, which redirects to the configured IdP. After authentication, Cognito issues an `authorization_code` that the application exchanges for JWT tokens using PKCE. The ALB validates these tokens the same way it validates M2M tokens.
+
+:::tip
+The `user_sso` app client uses PKCE and does not require a client secret. This makes it safe for single-page applications and CLI tools.
+:::
+
+
+You can federate with multiple IdPs simultaneously by adding entries to the `identity_providers` map.
+
+### Pre-Token Group Mapping
+
+A Pre-Token-Generation V2 Lambda that runs during Cognito token issuance and maps IdP group memberships to structured gateway claims. This enables per-team authorization, cost attribution, and tier-based rate limiting without manual user provisioning.
+
+**Custom claims injected:**
+
+| Claim | Purpose |
+|---|---|
+| `custom:team` | Team identifier for routing and cost attribution |
+| `custom:org_unit` | Organizational unit |
+| `custom:cost_center` | Cost center for billing attribution |
+| `custom:tenant_tier` | Authorization tier (e.g., `admin`, `standard`, `sandbox`) |
+
+**How to enable:**
+
+```hcl
+group_mapping = {
+  "aws-ai-gateway-admins" = {
+    team        = "platform"
+    org_unit    = "ai-engineering"
+    cost_center = "CC-1234"
+    tenant_tier = "admin"
+  }
+  "aws-ml-engineers" = {
+    team        = "ml-eng"
+    org_unit    = "ai-engineering"
+    cost_center = "CC-5678"
+    tenant_tier = "standard"
+  }
+}
+```
+
+After a user authenticates via their IdP, Cognito triggers the Pre-Token Lambda before issuing the JWT. The Lambda reads the user's IdP groups, looks up the first matching entry in `group_mapping`, and injects the corresponding claims into the token.
+
+:::caution
+The group mapping is stored as a Lambda environment variable and updated via `terraform apply`. If you add or rename IdP groups, you must update the mapping and redeploy.
+:::
+
+
+### Coexistence with M2M Authentication
+
+User SSO and M2M authentication share the same Cognito User Pool and ALB JWT validation. Both flows produce JWTs that the ALB validates against the same JWKS endpoint.
+
+| Aspect | M2M | User SSO |
 |---|---|---|
-| `AIGateway/CacheHitRate` | Team, Provider, Model | Percentage of requests served from cache |
-| `AIGateway/CacheSavingsUsd` | Team | Estimated cost savings from cache hits |
+| **OAuth grant** | `client_credentials` | `authorization_code` with PKCE |
+| **Credentials** | Client ID + secret | Corporate IdP credentials |
+| **Token contains** | Scopes (`invoke`, `admin`) | Scopes + custom claims (`team`, `tier`) |
+| **Use case** | Service-to-service automation | Developer portals, dashboards, CLI tools |
 
-Use these metrics to identify teams with low cache hit rates and tune their request patterns (e.g., lowering temperature for deterministic calls).
+:::note
+You do not need to choose between M2M and user auth. Both can be active simultaneously. The ALB accepts tokens from either flow.
+:::
+
 
 ---
 
 ## Feature Compatibility Matrix
 
-All B-series features can be enabled independently. The following matrix shows which features complement each other and any dependencies:
+All features can be enabled independently. The following matrix shows interactions for the platform features:
 
-| | B.1 Multi-Client | B.2 Fallback Routing | B.3 Cost Attribution | B.4 Guardrails | B.5 Cache |
+| | Multi-Client | Fallback Routing | Cost Attribution | Guardrails | Cache |
 |---|---|---|---|---|---|
-| **B.1 Multi-Client** | -- | Compatible | Compatible (per-client cost) | Compatible | Compatible |
-| **B.2 Fallback Routing** | Compatible | -- | Compatible (multi-provider cost) | Compatible | Compatible |
-| **B.3 Cost Attribution** | Compatible (per-client cost) | Compatible (multi-provider cost) | -- | Compatible | Compatible (tracks cache savings) |
-| **B.4 Guardrails** | Compatible | Compatible | Compatible | -- | Order-dependent (see note) |
-| **B.5 Cache** | Compatible | Compatible | Compatible (tracks cache savings) | Order-dependent (see note) | -- |
+| **Multi-Client** | -- | Compatible | Compatible (per-client cost) | Compatible | Compatible |
+| **Fallback Routing** | Compatible | -- | Compatible (multi-provider cost) | Compatible | Compatible |
+| **Cost Attribution** | Compatible (per-client cost) | Compatible (multi-provider cost) | -- | Compatible | Compatible (tracks cache savings) |
+| **Guardrails** | Compatible | Compatible | Compatible | -- | Order-dependent (see note) |
+| **Cache** | Compatible | Compatible | Compatible (tracks cache savings) | Order-dependent (see note) | -- |
 
-:::note[B.4 + B.5 Interaction]
-When both guardrails and caching are enabled, cached responses bypass guardrail evaluation on cache hits. This means a response that was approved by guardrails at write time is served directly on subsequent reads. If guardrail policies change after a response is cached, the old (potentially non-compliant) response may still be served until the cache entry expires or is evicted.
+:::note[Guardrails + Cache Interaction]
+When both guardrails and caching are enabled, cached responses bypass guardrail evaluation on cache hits. If guardrail policies change after a response is cached, the old response may still be served until the cache entry expires.
 :::
 
 
@@ -439,8 +469,8 @@ When both guardrails and caching are enabled, cached responses bypass guardrail 
 
 | Use Case | Features | Rationale |
 |---|---|---|
-| **Multi-team platform** | B.1 + B.3 | Per-team credentials with per-team cost visibility |
-| **High-availability gateway** | B.2 + B.5 | Fallback routing for resilience, caching for latency |
-| **Regulated workloads** | B.1 + B.4 + B.3 | Access control, content safety, and cost tracking |
-| **Cost-optimized platform** | B.2 + B.3 + B.5 | Load-balance across providers, track costs, cache responses |
-| **Full platform** | B.1 + B.2 + B.3 + B.4 + B.5 | All features enabled for a complete enterprise deployment |
+| **Multi-team platform** | Multi-Client + Cost Attribution | Per-team credentials with per-team cost visibility |
+| **High-availability gateway** | Fallback Routing + Cache | Fallback routing for resilience, caching for latency |
+| **Regulated workloads** | Multi-Client + Guardrails + Cost Attribution | Access control, content safety, and cost tracking |
+| **Cost-optimized platform** | Fallback Routing + Cost Attribution + Cache | Load-balance across providers, track costs, cache responses |
+| **Full platform** | All features enabled | Complete enterprise deployment |

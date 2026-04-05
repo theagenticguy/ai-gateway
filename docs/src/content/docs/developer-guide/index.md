@@ -12,7 +12,7 @@ This section is for contributors and developers who want to modify, extend, or u
 |------|-------------|
 | [Contributing](contributing.md) | Fork-and-branch workflow, commit conventions, PR requirements, and the full mise task reference |
 | [Architecture](architecture.md) | System architecture with Mermaid diagrams, module boundaries, request and auth flows |
-| [ADR Index](adr-index.md) | All 13 Architecture Decision Records with summaries and rationale |
+| [ADR Index](adr-index.md) | All 14 Architecture Decision Records with summaries and rationale |
 | [CI/CD Pipeline](ci-cd.md) | The 6-job CI pipeline, additional workflows, release process, and Dependabot config |
 | [Code Quality](code-quality.md) | Ruff, pyright, pytest, Terraform quality gates, git hooks, and the 12-tool security scanning stack |
 
@@ -50,14 +50,27 @@ After setup, your environment includes:
 
 ```
 ai-gateway/
-  adr/                    # Architecture Decision Records (001-013)
+  adr/                    # Architecture Decision Records (001-014)
   docs/                   # Documentation source (Astro Starlight)
-  infrastructure/         # Terraform root module + 4 child modules
+  infrastructure/         # Terraform root module + 17 child modules
     modules/
+      admin_api/          # API Gateway REST API for admin endpoints
+      appconfig/          # AppConfig for dynamic configuration
+      audit_log/          # Kinesis Firehose + S3 Parquet audit trail
       auth/               # Cognito, JWT listener
+      budgets/            # Budget management and enforcement
+      cache/              # ElastiCache Redis response cache
+      chargeback/         # Chargeback reporting
+      clients/            # Per-team Cognito app clients
       compute/            # ECS, ECR, IAM, Secrets Manager
+      content_scanner/    # Bedrock Guardrails configuration
+      cost_attribution/   # Token usage and cost metrics pipeline
+      guardrails/         # Bedrock Guardrails resource
+      inspector/          # Amazon Inspector scanning
       networking/         # VPC, ALB, WAF
       observability/      # KMS, CloudWatch log groups, dashboard
+      routing/            # Provider fallback routing configs
+      team_registration/  # Self-service team onboarding
     environments/         # Per-environment tfvars (dev, prod)
   scripts/                # Operational scripts (token retrieval, CW queries)
   .github/
