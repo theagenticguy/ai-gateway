@@ -2,8 +2,10 @@
 # Release — Tag-driven release automation
 # ──────────────────────────────────────────────────────────────
 # Triggered by pushing a tag matching `v*` (e.g. v1.2.0).
-# Builds the container image, signs it, generates an SBOM,
-# and creates a GitHub Release with an auto-generated changelog.
+# Builds the container image, pushes to GHCR (always) and ECR
+# (when AWS credentials are configured), signs it, generates an
+# SBOM, and creates a GitHub Release with an auto-generated
+# changelog.
 # ──────────────────────────────────────────────────────────────
 name: Release
 
@@ -45,17 +47,30 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      # ── AWS + ECR ────────────────────────────────────────────
+      - name: Check ECR availability
+        id: ecr-check
+        run: |
+          if [[ -n "${{ secrets.AWS_DEPLOY_ROLE_ARN }}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DEPLOY_ROLE_ARN not configured — skipping ECR push"
+          fi
+
+      # ── AWS + ECR (optional — for self-hosted deployments) ──
       - name: Configure AWS credentials
+        if: steps.ecr-check.outputs.enabled == 'true'
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        if: steps.ecr-check.outputs.enabled == 'true'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@f2e9fc6c2b355c1890b65e6f6f0e2ac3e6e22f78 # v2
 
+      # ── GHCR (always) ───────────────────────────────────────
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
@@ -63,22 +78,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Build & Push (ECR + GHCR) ───────────────────────────
+      # ── Build & Push ─────────────────────────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
-      - name: Build and push image to ECR + GHCR
+      - name: Compute image tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          TAGS="ghcr.io/${{ github.repository }}:${VERSION}"
+          TAGS="${TAGS},ghcr.io/${{ github.repository }}:latest"
+
+          if [[ "${{ steps.ecr-check.outputs.enabled }}" == "true" ]]; then
+            ECR="${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}"
+            TAGS="${TAGS},${ECR}:${VERSION},${ECR}:${{ github.sha }},${ECR}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
         id: push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
             PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
@@ -88,12 +112,14 @@ jobs:
       - name: Extract image metadata
         id: meta
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           VERSION: ${{ steps.version.outputs.tag }}
         run: |
           echo "digest=${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          echo "image-uri=${ECR_REGISTRY}/${IMAGE_NAME}:${VERSION}" >> "$GITHUB_OUTPUT"
           echo "ghcr-uri=ghcr.io/${{ github.repository }}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${{ steps.ecr-check.outputs.enabled }}" == "true" ]]; then
+            echo "ecr-uri=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}:${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
 
       # ── Cosign ───────────────────────────────────────────────
       - name: Install cosign
@@ -101,24 +127,26 @@ jobs:
 
       - name: Sign images with cosign (keyless)
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           VERSION: ${{ steps.version.outputs.tag }}
         run: |
-          cosign sign --yes "${ECR_REGISTRY}/${IMAGE_NAME}:${VERSION}"
           cosign sign --yes "ghcr.io/${{ github.repository }}:${VERSION}"
+
+          if [[ -n "${{ steps.meta.outputs.ecr-uri }}" ]]; then
+            cosign sign --yes "${{ steps.meta.outputs.ecr-uri }}"
+          fi
 
       # ── SBOM ─────────────────────────────────────────────────
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          image: ${{ steps.meta.outputs.image-uri }}
+          image: ${{ steps.meta.outputs.ghcr-uri }}
           format: cyclonedx-json
           output-file: sbom-${{ steps.version.outputs.tag }}.cyclonedx.json
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          image: ${{ steps.meta.outputs.image-uri }}
+          image: ${{ steps.meta.outputs.ghcr-uri }}
           format: spdx-json
           output-file: sbom-${{ steps.version.outputs.tag }}.spdx.json
 
@@ -142,23 +170,17 @@ jobs:
               echo ""
               echo "${CHANGELOG}"
               echo ""
-              echo "## Container Images"
+              echo "## Container Image"
               echo ""
               echo '```'
-              echo "# Amazon ECR (private)"
-              echo "${{ steps.meta.outputs.image-uri }}"
-              echo ""
-              echo "# GitHub Container Registry (public)"
-              echo "${{ steps.meta.outputs.ghcr-uri }}"
-              echo ""
+              echo "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}"
               echo "Digest: ${{ steps.meta.outputs.digest }}"
               echo '```'
               echo ""
               echo "## Verification"
               echo ""
               echo '```bash'
-              echo "cosign verify ${{ steps.meta.outputs.image-uri }}"
-              echo "cosign verify ${{ steps.meta.outputs.ghcr-uri }}"
+              echo "cosign verify ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}"
               echo '```'
               echo "CHANGELOG_EOF"
             } >> "$GITHUB_OUTPUT"
@@ -183,6 +205,6 @@ jobs:
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_NAME }}
+          subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.meta.outputs.digest }}
           push-to-registry: false
