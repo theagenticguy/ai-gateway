@@ -34,21 +34,23 @@ COPY --from=source /src/package*.json ./
 COPY --from=source /src/patches ./patches/
 # Patch vulnerable deps at build time
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
-#   hono               4.12.10 ← CVE-2025-62610, CVE-2026-22817, CVE-2026-22818, CVE-2026-29045
+#   hono               4.12.11 ← CVE-2025-62610, CVE-2026-22817, CVE-2026-22818, CVE-2026-29045
 #   @hono/node-server  1.19.12 ← CVE-2026-29087 (HIGH)
 # Transitive deps → npm overrides
 #   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
 #   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
 #   minimatch          9.0.9   ← CVE-2026-27904, CVE-2026-27903 (HIGH)
+#   brace-expansion    2.0.3   ← GHSA-f886-m6hf-6m8v (MEDIUM)
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
-  pkg.dependencies.hono = '4.12.10'; \
+  pkg.dependencies.hono = '4.12.11'; \
   pkg.dependencies['@hono/node-server'] = '1.19.12'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
-    minimatch: '9.0.9' \
+    minimatch: '9.0.9', \
+    'brace-expansion': '2.0.3' \
   }; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
     && npm install --package-lock-only --ignore-scripts \
@@ -67,7 +69,8 @@ LABEL org.opencontainers.image.title="AI Gateway" \
       org.opencontainers.image.base.name="node:${NODE_VERSION}-alpine"
 
 RUN apk upgrade --no-cache \
-    && apk add --no-cache tini wget
+    && apk add --no-cache tini wget \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 WORKDIR /app
 COPY --from=build /app/build ./build/
