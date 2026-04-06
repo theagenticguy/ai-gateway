@@ -21,6 +21,8 @@ jobs:
   check-release:
     name: Check for New Portkey Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       new_version: ${{ steps.check.outputs.new_version }}
       current_version: ${{ steps.check.outputs.current_version }}
@@ -62,6 +64,10 @@ jobs:
     needs: check-release
     if: needs.check-release.outputs.new_version != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      security-events: write
     env:
       NEW_VERSION: ${{ needs.check-release.outputs.new_version }}
       CURRENT_VERSION: ${{ needs.check-release.outputs.current_version }}

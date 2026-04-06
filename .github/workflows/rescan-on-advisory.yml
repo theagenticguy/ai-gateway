@@ -26,6 +26,9 @@ jobs:
   rescan-sbom:
     name: SBOM Rescan (Grype + OSV-Scanner)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     outputs:
       findings: ${{ steps.check-findings.outputs.found }}
     steps:
@@ -123,6 +126,9 @@ jobs:
   rescan-image:
     name: Container Image Rescan (Trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     outputs:
       findings: ${{ steps.check-findings.outputs.found }}
     steps:
@@ -181,6 +187,9 @@ jobs:
     needs: [rescan-sbom, rescan-image]
     if: always() && (needs.rescan-sbom.outputs.findings == 'true' || needs.rescan-image.outputs.findings == 'true')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Ensure labels exist
         env:

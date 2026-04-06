@@ -15,7 +15,9 @@ on:
     - cron: "30 7 * * 1"
 
 # Required: only run on the default branch for publishing
-permissions: read-all
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   analysis:
