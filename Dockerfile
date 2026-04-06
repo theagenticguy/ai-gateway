@@ -32,20 +32,22 @@ FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS build
 WORKDIR /app
 COPY --from=source /src/package*.json ./
 COPY --from=source /src/patches ./patches/
-# Patch vulnerable transitive deps via npm overrides
-# picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
-# yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
-# hono               4.12.10 ← CVE-2025-62610, CVE-2026-22817, CVE-2026-22818, CVE-2026-29045
-# @hono/node-server  1.19.12 ← CVE-2026-29087 (HIGH)
-# minimatch          9.0.9   ← CVE-2026-27904, CVE-2026-27903 (HIGH)
+# Patch vulnerable deps at build time
+# Direct deps  → update version in dependencies (overrides can't touch direct deps)
+#   hono               4.12.10 ← CVE-2025-62610, CVE-2026-22817, CVE-2026-22818, CVE-2026-29045
+#   @hono/node-server  1.19.12 ← CVE-2026-29087 (HIGH)
+# Transitive deps → npm overrides
+#   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
+#   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
+#   minimatch          9.0.9   ← CVE-2026-27904, CVE-2026-27903 (HIGH)
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
+  pkg.dependencies.hono = '4.12.10'; \
+  pkg.dependencies['@hono/node-server'] = '1.19.12'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
-    hono: '4.12.10', \
-    '@hono/node-server': '1.19.12', \
     minimatch: '9.0.9' \
   }; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
