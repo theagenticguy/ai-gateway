@@ -17,7 +17,7 @@ dev = [
     "boto3-stubs>=1.42.72",
     "hypothesis>=6.151.9",
     "atheris>=3.0.0",
-    "pytest-cov>=7.0.0",
+    "pytest-cov>=7.1.0",
     "commitizen>=4.13.9",
     "bandit[sarif]>=1.7.10",
 ]
