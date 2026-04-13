@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.42.72",
     "email-validator>=2.0",
-    "pydantic>=2.12.5",
+    "pydantic>=2.13.0",
 ]
 
 [dependency-groups]
