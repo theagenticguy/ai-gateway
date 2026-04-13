@@ -19,7 +19,7 @@ dev = [
     "atheris>=3.0.0",
     "pytest-cov>=7.0.0",
     "commitizen>=4.13.9",
-    "bandit[sarif]>=1.7.10",
+    "bandit[sarif]>=1.9.4",
 ]
 
 [tool.uv]
