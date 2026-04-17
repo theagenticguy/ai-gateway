@@ -5,7 +5,7 @@ description = "Lightweight LLM API Gateway — Portkey OSS on ECS Fargate"
 requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.42.88",
-    "email-validator>=2.0",
+    "email-validator>=2.3.0",
     "pydantic>=2.13.0",
 ]
 
