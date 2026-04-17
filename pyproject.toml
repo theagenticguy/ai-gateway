@@ -18,7 +18,7 @@ dev = [
     "hypothesis>=6.152.1",
     "atheris>=3.0.0",
     "pytest-cov>=7.1.0",
-    "commitizen>=4.13.9",
+    "commitizen>=4.13.10",
     "bandit[sarif]>=1.9.4",
 ]
 
