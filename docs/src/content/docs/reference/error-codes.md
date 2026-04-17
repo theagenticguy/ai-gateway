@@ -289,7 +289,7 @@ These errors come from the Portkey gateway application itself (HTTP 200 status c
 {"error": "provider is not set"}
 ```
 
-Every request must include the `x-portkey-provider` header. See the [API Reference](/user-guide/api-reference/) for valid provider values and the [Troubleshooting guide](/user-guide/troubleshooting/#missing-x-portkey-provider-header) for per-agent configuration.
+Every request must include the `x-portkey-provider` header. See the [API Reference](/ai-gateway/user-guide/api-reference/) for valid provider values and the [Troubleshooting guide](/ai-gateway/user-guide/troubleshooting/#missing-x-portkey-provider-header) for per-agent configuration.
 
 ### Invalid Model
 

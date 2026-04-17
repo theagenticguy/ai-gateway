@@ -92,4 +92,4 @@ TOKEN="$TOKEN" ./scripts/check-health.sh --url "$GATEWAY_URL" --token "$TOKEN" -
 
 - [Authentication](authentication.md) -- How the Cognito M2M auth flow works
 - [Agent Setup](../user-guide/agent-setup.md) -- Detailed per-agent configuration
-- [Troubleshooting](../user-guide/troubleshooting.md) -- Common errors and fixes
+- [Troubleshooting](../user-guide/troubleshooting.mdx) -- Common errors and fixes
