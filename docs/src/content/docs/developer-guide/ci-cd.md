@@ -111,7 +111,7 @@ On pull requests, only the 4 gate jobs run. Build-and-push and deploy only execu
 
 ## Security Pipeline Phases
 
-The security scanning follows the 3-phase architecture from [ADR-004](adr-index.md):
+The security scanning follows the 3-phase architecture from [ADR-004](/ai-gateway/adrs/004-security-pipeline-composition/):
 
 ```mermaid
 flowchart LR

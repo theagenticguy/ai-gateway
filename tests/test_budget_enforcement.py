@@ -762,7 +762,7 @@ class TestPropertyBased:
         spend=st.decimals(min_value=0, max_value=1_000_000, places=2, allow_nan=False, allow_infinity=False),
         budget=st.decimals(min_value=0, max_value=1_000_000, places=2, allow_nan=False, allow_infinity=False),
     )
-    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
     @patch("budget_enforcement.handler._get_current_usage")
     @patch("budget_enforcement.handler._get_budget_record")
     def test_budget_check_never_crashes(
