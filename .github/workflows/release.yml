@@ -68,7 +68,7 @@ jobs:
       - name: Login to Amazon ECR
         if: steps.ecr-check.outputs.enabled == 'true'
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@f2e9fc6c2b355c1890b65e6f6f0e2ac3e6e22f78 # v2
+        uses: aws-actions/amazon-ecr-login@376925c9d111252e87ae59691e5a442dd100ef6a # v2
 
       # ── GHCR (always) ───────────────────────────────────────
       - name: Login to GitHub Container Registry
