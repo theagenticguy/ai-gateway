@@ -219,7 +219,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           severity: HIGH,CRITICAL
@@ -331,7 +331,7 @@ jobs:
 
       - name: Checkov IaC scan
         if: always()
-        uses: bridgecrewio/checkov-action@3203f966a7ccd680cd8f6aaa3c3c5b0b3e9afa32 # v12
+        uses: bridgecrewio/checkov-action@20fb358293b0af0188f25cf7658b69d49ec12c9a # v12
         with:
           directory: infrastructure/
           framework: terraform
@@ -403,7 +403,7 @@ jobs:
           category: hadolint
 
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:ci
           format: sarif
