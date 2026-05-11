@@ -13,7 +13,7 @@
     "@astrojs/starlight": "^0.38.3",
     "astro": "^6.1.8",
     "astro-mermaid": "^2.0.1",
-    "mermaid": "^11.14.0",
+    "mermaid": "^11.15.0",
     "starlight-llms-txt": "^0.8.1",
     "starlight-page-actions": "^0.5.0"
   },
