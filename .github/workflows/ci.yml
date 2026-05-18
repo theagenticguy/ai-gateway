@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: hashFiles('tests/**/*.py') != '' && always()
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: coverage.xml
           fail_ci_if_error: false
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         continue-on-error: true
         with:
           sarif_file: semgrep.sarif
@@ -132,7 +132,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         continue-on-error: true
         with:
           sarif_file: bandit.sarif
@@ -158,7 +158,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         with:
           sarif_file: results.sarif
           category: gitleaks
@@ -188,7 +188,7 @@ jobs:
 
       - name: OSV-Scanner lockfile scan
         id: osv
-        uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         continue-on-error: true
         with:
           scan-args: |-
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload OSV-Scanner SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         with:
           sarif_file: results.sarif
           category: osv-scanner
@@ -219,7 +219,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           severity: HIGH,CRITICAL
@@ -228,7 +228,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         continue-on-error: true
         with:
           sarif_file: trivy-fs.sarif
@@ -284,7 +284,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: "1.14.8"
 
@@ -331,7 +331,7 @@ jobs:
 
       - name: Checkov IaC scan
         if: always()
-        uses: bridgecrewio/checkov-action@3203f966a7ccd680cd8f6aaa3c3c5b0b3e9afa32 # v12
+        uses: bridgecrewio/checkov-action@4048c972aae68d0b983a48bb3479aab2d877b898 # v12
         with:
           directory: infrastructure/
           framework: terraform
@@ -342,7 +342,7 @@ jobs:
           download_external_modules: false
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         if: always()
         continue-on-error: true
         with:
@@ -395,7 +395,7 @@ jobs:
           output-file: hadolint-results.sarif
 
       - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         if: always()
         continue-on-error: true
         with:
@@ -403,7 +403,7 @@ jobs:
           category: hadolint
 
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:ci
           format: sarif
@@ -413,7 +413,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4
         if: always()
         continue-on-error: true
         with:
