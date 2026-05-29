@@ -48,8 +48,11 @@ resource "aws_dynamodb_table" "teams" {
   }
 
   global_secondary_index {
-    name            = "team-name-index"
-    hash_key        = "team_name"
+    name = "team-name-index"
+    key_schema {
+      attribute_name = "team_name"
+      key_type       = "HASH"
+    }
     projection_type = "ALL"
   }
 

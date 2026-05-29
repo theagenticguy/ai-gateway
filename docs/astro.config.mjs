@@ -44,29 +44,29 @@ export default defineConfig({
         { label: "Home", slug: "index" },
         {
           label: "Getting Started",
-          autogenerate: { directory: "getting-started" },
+          items: [{ autogenerate: { directory: "getting-started" } }],
         },
         {
           label: "User Guide",
-          autogenerate: { directory: "user-guide" },
+          items: [{ autogenerate: { directory: "user-guide" } }],
         },
         {
           label: "Admin Guide",
-          autogenerate: { directory: "admin-guide" },
+          items: [{ autogenerate: { directory: "admin-guide" } }],
         },
         {
           label: "Developer Guide",
-          autogenerate: { directory: "developer-guide" },
+          items: [{ autogenerate: { directory: "developer-guide" } }],
         },
         {
           label: "Reference",
           collapsed: true,
-          autogenerate: { directory: "reference" },
+          items: [{ autogenerate: { directory: "reference" } }],
         },
         {
           label: "ADRs",
           collapsed: true,
-          autogenerate: { directory: "adrs" },
+          items: [{ autogenerate: { directory: "adrs" } }],
         },
       ],
 

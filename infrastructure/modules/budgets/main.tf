@@ -51,9 +51,15 @@ resource "aws_dynamodb_table" "budgets" {
   }
 
   global_secondary_index {
-    name            = "scope-index"
-    hash_key        = "scope"
-    range_key       = "scope_id"
+    name = "scope-index"
+    key_schema {
+      attribute_name = "scope"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "scope_id"
+      key_type       = "RANGE"
+    }
     projection_type = "ALL"
   }
 
@@ -99,8 +105,11 @@ resource "aws_dynamodb_table" "usage" {
   }
 
   global_secondary_index {
-    name            = "period-index"
-    hash_key        = "period_date"
+    name = "period-index"
+    key_schema {
+      attribute_name = "period_date"
+      key_type       = "HASH"
+    }
     projection_type = "ALL"
   }
 
