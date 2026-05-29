@@ -188,12 +188,14 @@ Terragrunt automatically:
 
 ## Updating the Gateway Image Version
 
-The Portkey gateway image version is controlled by the `portkey_image` variable. To update:
+The deployed image is a **custom hardened image built from pinned Portkey source** — not the upstream `portkeyai/gateway` image. The Portkey *version* is controlled by `versions.env` at the repo root (`PORTKEY_VERSION` + `PORTKEY_TARBALL_SHA256`), and the release workflow builds and pushes the image to ECR/GHCR. See [Upgrading](/ai-gateway/admin-guide/upgrading/) for the full version-bump flow.
 
-1. **Update the variable** in the appropriate tfvars or Terragrunt inputs:
+The `portkey_image` variable selects **which built image URI** ECS runs. Override it only when pinning to a specific published tag (for example, a rollback to a prior SHA); the normal upgrade path is to bump `versions.env` and let the workflow publish a new image.
+
+1. **Set the image URI** in the appropriate tfvars or Terragrunt inputs to a tag published by the release workflow:
 
     ```hcl
-    portkey_image = "portkeyai/gateway:1.16.0"
+    portkey_image = "ghcr.io/theagenticguy/ai-gateway:<tag>"
     ```
 
     Or for Terragrunt, update `_env/common.hcl`:
@@ -201,7 +203,7 @@ The Portkey gateway image version is controlled by the `portkey_image` variable.
     ```hcl
     locals {
       project_name  = "ai-gateway"
-      portkey_image = "portkeyai/gateway:1.16.0"
+      portkey_image = "ghcr.io/theagenticguy/ai-gateway:<tag>"
     }
     ```
 

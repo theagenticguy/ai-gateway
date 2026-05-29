@@ -4,14 +4,34 @@ Terraform root module for the AI Gateway — deploys VPC, ALB, ECS Fargate, Cogn
 
 ## Architecture
 
-This module is composed of 4 local sub-modules:
+This root module composes 17 local sub-modules. The core data plane is always deployed; the remaining modules are feature-gated by input variables (see the Inputs table below).
+
+**Core (always deployed):**
 
 | Module | Purpose |
 |--------|---------|
 | `modules/networking` | VPC, ALB, WAF, VPC endpoints |
 | `modules/auth` | Cognito User Pool, M2M client, ALB JWT validation |
 | `modules/compute` | ECS Fargate, ECR, IAM roles, Secrets Manager |
-| `modules/observability` | CloudWatch log groups, KMS encryption, dashboard |
+| `modules/observability` | KMS-encrypted CloudWatch log groups and dashboard |
+| `modules/cache` | ElastiCache Redis for response caching |
+| `modules/guardrails` | Bedrock Guardrails for content safety filtering |
+| `modules/content_scanner` | Lambda + Function URL for PII redaction and injection detection |
+| `modules/appconfig` | Feature flags and dynamic config for the content scanner |
+| `modules/cost_attribution` | Lambda pipeline attributing spend per team via CloudWatch metrics |
+| `modules/inspector` | Continuous ECR vulnerability scanning |
+
+**Optional (feature-gated):**
+
+| Module | Purpose | Enabled by |
+|--------|---------|-----------|
+| `modules/clients` | Per-team Cognito app clients for multi-tenant M2M access | `client_configs` non-empty |
+| `modules/admin_api` | API Gateway REST API admin plane with Cognito authorizer | `enable_admin_api` |
+| `modules/routing` | DynamoDB table for custom routing configs | `enable_admin_api` |
+| `modules/team_registration` | Self-service API for team onboarding | `enable_admin_api` |
+| `modules/budgets` | DynamoDB tables for budget definitions and usage tracking | `enable_budgets` |
+| `modules/chargeback` | Monthly chargeback report pipeline | `enable_chargeback` (+ `enable_budgets`) |
+| `modules/audit_log` | Kinesis Firehose → S3 (Parquet) with Glue Catalog | `enable_audit_log` |
 
 <!-- BEGIN_TF_DOCS -->
 

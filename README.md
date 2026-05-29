@@ -8,7 +8,7 @@
 
 ## Overview
 
-AI Gateway is a lightweight LLM inference gateway on AWS that routes AI agent requests through [Portkey AI Gateway OSS](https://github.com/Portkey-ai/gateway) to multiple model providers -- Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI -- via a unified API. It serves both the OpenAI Chat Completions format (`/v1/chat/completions`) and the Anthropic Messages format (`/v1/messages`) natively, so every major coding agent works out of the box.
+AI Gateway is a lightweight LLM inference gateway on AWS that routes AI agent requests through [Portkey AI Gateway OSS](https://github.com/Portkey-AI/gateway) to multiple model providers -- Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI -- via a unified API. It serves both the OpenAI Chat Completions format (`/v1/chat/completions`) and the Anthropic Messages format (`/v1/messages`) natively, so every major coding agent works out of the box.
 
 Authentication uses Cognito M2M (`client_credentials`) with ALB-native JWT validation, eliminating the need for API Gateway and its per-request costs.
 
@@ -31,11 +31,11 @@ A detailed Mermaid architecture diagram is available in the `docs/` directory.
 |------|---------|---------|
 | [mise](https://mise.jdx.dev/) | latest | Tool version manager (installs all other tools) |
 | [uv](https://docs.astral.sh/uv/) | latest | Python package manager |
-| [Terraform](https://www.terraform.io/) | >= 1.9 | Infrastructure as code (installed via mise) |
+| [Terraform](https://www.terraform.io/) | ~> 1.14 | Infrastructure as code (installed via mise) |
 | [AWS CLI](https://aws.amazon.com/cli/) | v2 | AWS operations |
 | [Docker](https://www.docker.com/) | latest | Container builds and local testing |
 
-mise will install pinned versions of Python 3.13, Terraform 1.10.5, lefthook, checkov, trivy, hadolint, and gitleaks automatically from `mise.toml`.
+mise will install pinned versions of Python 3.13, Terraform 1.14.8, lefthook, checkov, trivy, hadolint, and gitleaks automatically from `mise.toml`.
 
 ## Quick Start
 
@@ -203,6 +203,13 @@ Architectural Decision Records are in the `adr/` directory.
 | [005](adr/005-alb-jwt-validation-over-api-gateway.md) | ALB JWT Validation Over API Gateway for Auth | Accepted |
 | [006](adr/006-portkey-dual-format-api.md) | Portkey OSS Natively Serves Both OpenAI and Anthropic API Formats | Accepted |
 | [007](adr/007-terraform-provider-upgrade-for-jwt.md) | Upgrade AWS Terraform Provider to >= 6.22 for ALB JWT Validation | Accepted |
+| [008](adr/008-multi-tenant-client-isolation.md) | Multi-Tenant Client Isolation via Per-Team Cognito App Clients | Accepted |
+| [009](adr/009-provider-routing-strategy.md) | Provider Routing Strategy | Accepted |
+| [010](adr/010-cost-attribution-pipeline.md) | Cost Attribution Pipeline via Lambda + CloudWatch Metrics | Accepted |
+| [011](adr/011-bedrock-guardrails-integration.md) | Bedrock Guardrails Integration for Content Safety Filtering | Accepted |
+| [012](adr/012-response-cache-strategy.md) | Response Cache Strategy with ElastiCache Redis | Accepted |
+| [013](adr/013-identity-center-saml-federation.md) | Identity Center SAML/OIDC Federation for User SSO | Accepted |
+| [014](adr/014-two-plane-architecture-split.md) | Two-Plane Architecture Split (ALB Inference + API Gateway Admin) | Accepted |
 
 ## Scripts
 
@@ -213,7 +220,7 @@ Architectural Decision Records are in the `adr/` directory.
 
 ## Agent Compatibility
 
-The gateway supports six AI coding agents across two API formats. See [docs/agent-setup.md](docs/agent-setup.md) for detailed configuration instructions.
+The gateway supports six AI coding agents across two API formats. See [docs/src/content/docs/user-guide/agent-setup.md](docs/src/content/docs/user-guide/agent-setup.md) for detailed configuration instructions.
 
 | Agent | API Format | Endpoint |
 |-------|-----------|----------|

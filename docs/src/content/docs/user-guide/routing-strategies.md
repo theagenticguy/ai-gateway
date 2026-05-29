@@ -4,7 +4,7 @@ description: "Provider routing strategies: fallback, load-balance, cost-optimize
 sidebar:
   order: 4
 ---
-The AI Gateway uses [Portkey's routing engine](https://portkey.ai/docs/product/ai-gateway/routing) to control how requests are distributed across LLM providers. This document covers the available strategies, pre-built config templates, and how to use them.
+The AI Gateway uses [Portkey's routing engine](https://portkey.ai/docs/product/ai-gateway) to control how requests are distributed across LLM providers. This document covers the available strategies, pre-built config templates, and how to use them.
 
 ## Available Strategies
 
