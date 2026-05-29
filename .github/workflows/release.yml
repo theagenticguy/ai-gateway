@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 0   # Full history for changelog generation
 
       - name: Load pinned versions
-        run: cat versions.env >> "$GITHUB_ENV"
+        run: grep -E '^[A-Z_][A-Z0-9_]*=' versions.env >> "$GITHUB_ENV"
 
       - name: Extract version from tag
         id: version
