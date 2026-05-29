@@ -234,3 +234,48 @@ dir = "docs"
 description = "Preview built documentation site"
 run = "pnpm preview"
 dir = "docs"
+
+# ──────────────────────────────────────────────
+# Dependency upgrade tasks
+#
+# `deps:upgrade` bumps every ecosystem to the latest allowed versions and
+# regenerates all lockfiles in one shot -- the manual equivalent of merging a
+# batch of Dependabot PRs. `deps:lock` re-resolves locks WITHOUT upgrading
+# (e.g. after a hand-edited pyproject.toml or package.json).
+# ──────────────────────────────────────────────
+
+[tasks."deps:upgrade"]
+description = "Upgrade ALL deps (Python, npm, Terraform) and regenerate every lockfile"
+depends = ["deps:python", "deps:npm", "deps:terraform"]
+
+[tasks."deps:python"]
+description = "Upgrade all Python deps to latest and sync the venv"
+run = "uv sync --all-groups --all-packages -U"
+
+[tasks."deps:npm"]
+description = "Upgrade all docs npm pins to latest and refresh pnpm-lock.yaml"
+dir = "docs"
+env = { CI = "true" }
+run = ["pnpm up --latest", "pnpm dedupe"]
+
+[tasks."deps:terraform"]
+description = "Upgrade Terraform providers, regenerate multi-platform lock, refresh README"
+run = [
+  "terraform -chdir=infrastructure init -upgrade -backend=false -input=false",
+  "terraform -chdir=infrastructure providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64",
+  "terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/",
+]
+
+[tasks."deps:lock"]
+description = "Re-resolve all lockfiles from current manifests WITHOUT upgrading"
+depends = ["deps:lock-python", "deps:lock-npm"]
+
+[tasks."deps:lock-python"]
+description = "Re-resolve uv.lock from pyproject.toml constraints"
+run = "uv lock"
+
+[tasks."deps:lock-npm"]
+description = "Re-resolve docs/pnpm-lock.yaml from package.json constraints"
+dir = "docs"
+env = { CI = "true" }
+run = "pnpm install --no-frozen-lockfile"
