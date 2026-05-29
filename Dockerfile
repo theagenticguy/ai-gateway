@@ -30,32 +30,38 @@ RUN set -eu \
 # ── Stage 2: Build ───────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS build
 WORKDIR /app
-COPY --from=source /src/package*.json ./
-COPY --from=source /src/patches ./patches/
+# Copy the FULL upstream source first, THEN patch. Upstream ships its own
+# package.json + package-lock.json, so the patch and the regenerated lock must
+# be applied on top of the copied tree. The previous order patched first and
+# then ran `COPY /src .`, which silently clobbered both manifests with the
+# unpatched upstream ones before the final `npm ci` — so the CVE patches below
+# never actually shipped. Copy-then-patch fixes that.
+COPY --from=source /src .
 # Patch vulnerable deps at build time
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
-#   hono               4.12.11 ← CVE-2025-62610, CVE-2026-22817, CVE-2026-22818, CVE-2026-29045
-#   @hono/node-server  1.19.12 ← CVE-2026-29087 (HIGH)
+#   hono               4.12.23 ← CVE-2025-62610, CVE-2026-22817/22818/29045 + later 4.12.x GHSAs
+#   @hono/node-server  1.19.14 ← CVE-2026-29087 (HIGH) + GHSA-92pp-h63x-v22m (latest stable 1.x)
 # Transitive deps → npm overrides
 #   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
 #   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
 #   minimatch          9.0.9   ← CVE-2026-27904, CVE-2026-27903 (HIGH)
 #   brace-expansion    2.0.3   ← GHSA-f886-m6hf-6m8v (MEDIUM)
+#   tmp                0.2.6   ← CVE-2026-44705 (HIGH) path traversal
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
-  pkg.dependencies.hono = '4.12.11'; \
-  pkg.dependencies['@hono/node-server'] = '1.19.12'; \
+  pkg.dependencies.hono = '4.12.23'; \
+  pkg.dependencies['@hono/node-server'] = '1.19.14'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
     minimatch: '9.0.9', \
-    'brace-expansion': '2.0.3' \
+    'brace-expansion': '2.0.3', \
+    tmp: '0.2.6' \
   }; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
     && npm install --package-lock-only --ignore-scripts \
     && npm ci
-COPY --from=source /src .
 RUN npm run build \
     && rm -rf node_modules \
     && npm ci --omit=dev
