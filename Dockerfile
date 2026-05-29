@@ -8,6 +8,10 @@
 # - No npm in runtime (direct node entrypoint)
 # - HEALTHCHECK for orchestrator liveness probes
 # ──────────────────────────────────────────────────────────────
+# PORTKEY_REF is the git ref to build from: a release tag (e.g. v1.15.2) or a
+# full commit SHA. GitHub serves archive/<ref>.tar.gz for both forms.
+# PORTKEY_VERSION is a human-readable label only (image tags, logs).
+ARG PORTKEY_REF=v1.15.2
 ARG PORTKEY_VERSION=1.15.2
 ARG PORTKEY_TARBALL_SHA256
 ARG NODE_VERSION=24
@@ -15,11 +19,11 @@ ARG NODE_ALPINE_DIGEST=sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e0
 
 # ── Stage 1: Fetch + verify source ──────────────────────────
 FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS source
-ARG PORTKEY_VERSION
+ARG PORTKEY_REF
 ARG PORTKEY_TARBALL_SHA256
 RUN set -eu \
     && wget -qO /tmp/portkey.tar.gz \
-       "https://github.com/Portkey-AI/gateway/archive/refs/tags/v${PORTKEY_VERSION}.tar.gz" \
+       "https://github.com/Portkey-AI/gateway/archive/${PORTKEY_REF}.tar.gz" \
     && if [ -n "${PORTKEY_TARBALL_SHA256:-}" ]; then \
          echo "${PORTKEY_TARBALL_SHA256}  /tmp/portkey.tar.gz" | sha256sum -c -; \
        fi \

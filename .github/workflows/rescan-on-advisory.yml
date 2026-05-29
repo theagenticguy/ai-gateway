@@ -63,6 +63,7 @@ jobs:
           load: true
           tags: ai-gateway:sbom-fallback
           build-args: |
+            PORTKEY_REF=${{ env.PORTKEY_REF }}
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
             PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
 
@@ -149,6 +150,7 @@ jobs:
           load: true
           tags: ai-gateway:rescan
           build-args: |
+            PORTKEY_REF=${{ env.PORTKEY_REF }}
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
             PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
 

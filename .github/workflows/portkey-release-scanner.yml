@@ -1,9 +1,13 @@
 # ──────────────────────────────────────────────────────────────
-# Portkey Release Scanner — Daily upstream release monitoring
+# Portkey Release Scanner — Daily upstream source monitoring
 # ──────────────────────────────────────────────────────────────
-# Checks GitHub Releases daily for new Portkey-AI/gateway versions.
-# When a new version is found, builds our custom hardened image,
-# runs security scans, and opens a PR to update versions.env.
+# We pin Portkey by git ref (PORTKEY_REF in versions.env): a release tag
+# OR a commit SHA. Upstream's release cadence has stalled (last tag v1.15.2,
+# 2026-01-12) while main ships unreleased security fixes, so we currently
+# track main HEAD. This workflow checks daily: if a newer stable release tag
+# exists it proposes that (preferred — release-gated); otherwise it proposes
+# the latest main commit SHA. Either way it builds our hardened image, scans
+# it, and opens a PR updating versions.env.
 # ──────────────────────────────────────────────────────────────
 name: Portkey Release Scanner
 
@@ -24,53 +28,67 @@ jobs:
     permissions:
       contents: read
     outputs:
+      new_ref: ${{ steps.check.outputs.new_ref }}
       new_version: ${{ steps.check.outputs.new_version }}
-      current_version: ${{ steps.check.outputs.current_version }}
+      current_ref: ${{ steps.check.outputs.current_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Load current pinned version
+      - name: Load current pinned ref
         run: cat versions.env >> "$GITHUB_ENV"
 
-      - name: Check GitHub for latest release
+      - name: Check GitHub for newer source
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "current_version=${PORTKEY_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "current_ref=${PORTKEY_REF}" >> "$GITHUB_OUTPUT"
 
-          # Fetch latest release from GitHub (excludes prereleases)
-          LATEST=$(gh api repos/Portkey-AI/gateway/releases/latest --jq '.tag_name' 2>/dev/null || true)
-          LATEST="${LATEST#v}"  # Strip v prefix
+          # Prefer a newer stable release tag if one exists (release-gated).
+          LATEST_TAG=$(gh api repos/Portkey-AI/gateway/releases/latest --jq '.tag_name' 2>/dev/null || true)
+          # Fall back to main HEAD when no tag is newer than what we track.
+          MAIN_SHA=$(gh api repos/Portkey-AI/gateway/commits/main --jq '.sha' 2>/dev/null || true)
 
-          if [[ -z "$LATEST" ]]; then
-            echo "::warning::Could not determine latest Portkey version from GitHub"
+          if [[ -z "$MAIN_SHA" ]]; then
+            echo "::warning::Could not query Portkey-AI/gateway from GitHub"
             exit 0
           fi
 
-          echo "Latest upstream: ${LATEST}, Current pinned: ${PORTKEY_VERSION}"
-
-          if [[ "$LATEST" == "$PORTKEY_VERSION" ]]; then
-            echo "Already on latest version"
+          # If the latest release tag is not what we're pinned to, prefer it.
+          if [[ -n "$LATEST_TAG" && "$LATEST_TAG" != "$PORTKEY_REF" && "v${PORTKEY_REF}" != "$LATEST_TAG" ]]; then
+            echo "Latest release tag: ${LATEST_TAG}, current pin: ${PORTKEY_REF}"
+            echo "new_ref=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+            echo "new_version=${LATEST_TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "::notice::Newer Portkey release tag found: ${LATEST_TAG}"
             exit 0
           fi
 
-          echo "new_version=${LATEST}" >> "$GITHUB_OUTPUT"
-          echo "::notice::New Portkey release found: ${LATEST}"
+          # No newer tag — compare main HEAD against our pinned SHA.
+          echo "Main HEAD: ${MAIN_SHA}, current pin: ${PORTKEY_REF}"
+          if [[ "$MAIN_SHA" == "$PORTKEY_REF" ]]; then
+            echo "Already tracking main HEAD"
+            exit 0
+          fi
+
+          SHORT="${MAIN_SHA:0:7}"
+          echo "new_ref=${MAIN_SHA}" >> "$GITHUB_OUTPUT"
+          echo "new_version=${LATEST_TAG#v}+${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Portkey main advanced to ${MAIN_SHA}"
 
   scan-and-pr:
     name: Scan & Open PR
     needs: check-release
-    if: needs.check-release.outputs.new_version != ''
+    if: needs.check-release.outputs.new_ref != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
       security-events: write
     env:
+      NEW_REF: ${{ needs.check-release.outputs.new_ref }}
       NEW_VERSION: ${{ needs.check-release.outputs.new_version }}
-      CURRENT_VERSION: ${{ needs.check-release.outputs.current_version }}
+      CURRENT_REF: ${{ needs.check-release.outputs.current_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -82,12 +100,12 @@ jobs:
         id: tarball
         run: |
           wget -qO /tmp/portkey.tar.gz \
-            "https://github.com/Portkey-AI/gateway/archive/refs/tags/v${NEW_VERSION}.tar.gz"
+            "https://github.com/Portkey-AI/gateway/archive/${NEW_REF}.tar.gz"
           SHA=$(sha256sum /tmp/portkey.tar.gz | cut -d' ' -f1)
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
           rm -f /tmp/portkey.tar.gz
 
-      - name: Build custom image with new version
+      - name: Build custom image with new ref
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
@@ -95,6 +113,7 @@ jobs:
           load: true
           tags: ai-gateway:upgrade-scan
           build-args: |
+            PORTKEY_REF=${{ env.NEW_REF }}
             PORTKEY_VERSION=${{ env.NEW_VERSION }}
             PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
 
@@ -153,28 +172,47 @@ jobs:
       - name: Update versions.env
         run: |
           cat > versions.env <<EOF
+          PORTKEY_REF=${NEW_REF}
           PORTKEY_VERSION=${NEW_VERSION}
           PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
           EOF
           sed -i 's/^[[:space:]]*//' versions.env
 
+      - name: Build compare/release link
+        id: link
+        run: |
+          # If NEW_REF looks like a tag (starts with v), link release notes;
+          # otherwise link the commit-range comparison from the current pin.
+          if [[ "${NEW_REF}" == v* ]]; then
+            echo "url=https://github.com/Portkey-AI/gateway/releases/tag/${NEW_REF}" >> "$GITHUB_OUTPUT"
+            echo "label=Release notes ${NEW_REF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://github.com/Portkey-AI/gateway/compare/${CURRENT_REF}...${NEW_REF}" >> "$GITHUB_OUTPUT"
+            echo "label=Compare ${CURRENT_REF} → ${NEW_REF}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: deps/portkey-${{ env.NEW_VERSION }}
-          commit-message: "deps(portkey): bump portkeyai/gateway ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}"
-          title: "deps(portkey): bump portkeyai/gateway ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}"
+          commit-message: "deps(portkey): bump Portkey gateway ${{ env.CURRENT_REF }} → ${{ env.NEW_REF }}"
+          title: "deps(portkey): bump Portkey gateway → ${{ env.NEW_VERSION }}"
           body: |
             ## Portkey Gateway Upgrade
 
-            Automated upgrade detected by the daily release scanner.
+            Automated upgrade detected by the daily source scanner.
 
             | | |
             |---|---|
-            | **Current** | `${{ env.CURRENT_VERSION }}` |
-            | **New** | `${{ env.NEW_VERSION }}` |
-            | **Release notes** | [Portkey-AI/gateway v${{ env.NEW_VERSION }}](https://github.com/Portkey-AI/gateway/releases/tag/v${{ env.NEW_VERSION }}) |
+            | **Current ref** | `${{ env.CURRENT_REF }}` |
+            | **New ref** | `${{ env.NEW_REF }}` |
+            | **Label** | `${{ env.NEW_VERSION }}` |
+            | **Upstream** | [${{ steps.link.outputs.label }}](${{ steps.link.outputs.url }}) |
             | **Image build** | Custom hardened container (Node.js 24 LTS, non-root, tini) |
+
+            > **Note:** when the new ref is a commit SHA (not a release tag), this
+            > is unreleased upstream code that skipped Portkey's own release gate —
+            > review the compare link carefully before merging.
 
             ### Security Scan Results
 

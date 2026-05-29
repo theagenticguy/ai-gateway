@@ -9,16 +9,26 @@ This guide covers the three main upgrade paths for the AI Gateway: upgrading the
 
 ## Upgrading Portkey Version
 
-The gateway pins a specific version of the [Portkey-AI/gateway](https://github.com/Portkey-AI/gateway) in `versions.env` at the repository root. The Dockerfile downloads, verifies, and builds from this pinned source.
+The gateway pins a specific git ref of the [Portkey-AI/gateway](https://github.com/Portkey-AI/gateway) in `versions.env` at the repository root. The Dockerfile downloads, verifies, and builds from this pinned source.
+
+`versions.env` holds three values:
+
+- `PORTKEY_REF` — the git ref to build from: a release tag (e.g. `v1.15.2`) **or** a full commit SHA. Both are fetched from `https://github.com/Portkey-AI/gateway/archive/<ref>.tar.gz`.
+- `PORTKEY_VERSION` — a human-readable label for image tags and logs (for a SHA pin, `<upstream-version>+<short-sha>`).
+- `PORTKEY_TARBALL_SHA256` — sha256 of the archive tarball, verified at build time.
+
+:::note[Why a commit SHA?]
+Portkey's release cadence has stalled (last tag `v1.15.2`, 2026-01-12) while `main` has shipped unreleased security fixes. We therefore currently pin a **commit SHA** rather than a release tag, to pick up those fixes while keeping the build reproducible and SHA256-verifiable. When Portkey resumes tagging, prefer pinning the tag — release-gated code is preferred over raw `main`.
+:::
 
 ### Automated Detection
 
-A daily GitHub Actions workflow ([`portkey-release-scanner.yml`](https://github.com/theagenticguy/ai-gateway/blob/main/.github/workflows/portkey-release-scanner.yml)) checks for new upstream Portkey releases at 07:00 UTC. When a new version is found, the workflow:
+A daily GitHub Actions workflow ([`portkey-release-scanner.yml`](https://github.com/theagenticguy/ai-gateway/blob/main/.github/workflows/portkey-release-scanner.yml)) checks for newer upstream source at 07:00 UTC. It prefers a newer stable **release tag** if one exists; otherwise it proposes the latest **`main` commit SHA**. When a newer ref is found, the workflow:
 
 1. Downloads the new source tarball and computes its SHA256 hash.
-2. Builds the custom hardened container image with the new version.
+2. Builds the custom hardened container image from the new ref.
 3. Runs Trivy and Grype security scans against the built image.
-4. Opens a pull request to update `versions.env` with the new version and hash.
+4. Opens a pull request to update `versions.env` (with a release-notes link for tags, or a commit-range compare link for SHA bumps).
 
 :::tip
 You can trigger the scanner manually from the Actions tab via `workflow_dispatch` if you want to check for updates outside the daily schedule.
@@ -26,21 +36,23 @@ You can trigger the scanner manually from the Actions tab via `workflow_dispatch
 
 ### Manual Upgrade Steps
 
-If you prefer to upgrade manually or need to pin a specific version:
+If you prefer to upgrade manually or need to pin a specific ref:
 
 **1. Update `versions.env`**
 
 ```bash
-# versions.env — two values, both required
+# versions.env — three values, all required.
+# PORTKEY_REF is a tag (v1.16.0) or a full commit SHA.
+PORTKEY_REF=v1.16.0
 PORTKEY_VERSION=1.16.0
-PORTKEY_TARBALL_SHA256=<sha256-of-the-v1.16.0-tarball>
+PORTKEY_TARBALL_SHA256=<sha256-of-the-tarball>
 ```
 
 **2. Compute the SHA256 hash**
 
 ```bash
 wget -qO /tmp/portkey.tar.gz \
-  "https://github.com/Portkey-AI/gateway/archive/refs/tags/v1.16.0.tar.gz"
+  "https://github.com/Portkey-AI/gateway/archive/v1.16.0.tar.gz"
 sha256sum /tmp/portkey.tar.gz
 ```
 
@@ -50,6 +62,7 @@ Copy the hash into `PORTKEY_TARBALL_SHA256` in `versions.env`.
 
 ```bash
 docker build \
+  --build-arg PORTKEY_REF=v1.16.0 \
   --build-arg PORTKEY_VERSION=1.16.0 \
   --build-arg PORTKEY_TARBALL_SHA256=<hash> \
   -t ai-gateway:test .

@@ -104,6 +104,7 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
+            PORTKEY_REF=${{ env.PORTKEY_REF }}
             PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
             PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
           cache-from: type=gha
