@@ -4,6 +4,7 @@ import sitemap from "@astrojs/sitemap";
 import mermaid from "astro-mermaid";
 import starlightPageActions from "starlight-page-actions";
 import starlightLlmsTxt from "starlight-llms-txt";
+import remarkGfm from "remark-gfm";
 
 export default defineConfig({
   site: "https://theagenticguy.github.io",
@@ -91,7 +92,12 @@ export default defineConfig({
   ],
 
   markdown: {
-    remarkPlugins: [remarkStripMdLinks],
+    // remark-gfm is added explicitly: as of Astro 6.4 + @astrojs/mdx 5,
+    // supplying a custom remarkPlugins array no longer auto-injects the
+    // default GFM plugin into the MDX processor, so tables (and other GFM
+    // syntax) silently stopped rendering in .mdx pages. Listing it here
+    // restores GFM for both .md and .mdx.
+    remarkPlugins: [remarkGfm, remarkStripMdLinks],
   },
 });
 

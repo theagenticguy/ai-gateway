@@ -97,7 +97,8 @@ On pull requests, only the 4 gate jobs run. Build-and-push and deploy only execu
 |------|-------------|
 | Configure AWS credentials | OIDC-based assume-role (no long-lived keys) |
 | Login to ECR | Authenticate with Amazon ECR |
-| Pull + tag + push | Pull `portkeyai/gateway:1.15.2`, tag with SHA and `latest`, push to ECR |
+| Build custom image | Build the hardened image from the pinned Portkey source (`Dockerfile` with `PORTKEY_VERSION` / `PORTKEY_TARBALL_SHA256` build args from `versions.env`) |
+| Tag + push | Tag with the commit SHA and `latest`, push to ECR |
 | cosign sign | Keyless image signing via Sigstore OIDC |
 
 ### 6. Deploy to ECS
