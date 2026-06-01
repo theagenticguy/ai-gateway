@@ -121,6 +121,10 @@ jobs:
       - name: Trivy vulnerability scan
         id: trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          # Keep Trivy's DB cache out of the repo checkout so the PR action's
+          # `git add -A` doesn't stage the >1GB trivy.db (exceeds GitHub's 100MB limit).
+          TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
         with:
           image-ref: ai-gateway:upgrade-scan
           format: sarif
@@ -128,6 +132,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
           ignore-unfixed: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
