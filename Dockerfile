@@ -53,6 +53,7 @@ COPY --from=source /src .
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
 #   hono               4.12.23 ← CVE-2025-62610, CVE-2026-22817/22818/29045 + later 4.12.x GHSAs
 #   @hono/node-server  1.19.14 ← CVE-2026-29087 (HIGH) + GHSA-92pp-h63x-v22m (latest stable 1.x)
+#   ws                 8.20.1  ← CVE-2026-45736 (HIGH) uninitialized memory disclosure on close()
 # Transitive deps → npm overrides
 #   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
 #   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
@@ -64,6 +65,7 @@ RUN node -e " \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
   pkg.dependencies.hono = '4.12.23'; \
   pkg.dependencies['@hono/node-server'] = '1.19.14'; \
+  pkg.dependencies.ws = '8.20.1'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
