@@ -15,7 +15,15 @@ ARG PORTKEY_REF=v1.15.2
 ARG PORTKEY_VERSION=1.15.2
 ARG PORTKEY_TARBALL_SHA256
 ARG NODE_VERSION=24
-ARG NODE_ALPINE_DIGEST=sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b
+# node:24-alpine digest. Bumped to the Alpine 3.23 rebuild that ships
+# openssl 3.5.6-r0 and musl 1.2.5-r23, which fix the HIGH/CRITICAL OS CVEs
+# flagged by the nightly rescan (CVE-2026-28387/28388/28389/28390/31789/31790
+# in openssl, CVE-2026-40200 in musl). The previous digest
+# (01743339…) bundled openssl 3.5.5-r0 / musl 1.2.5-r21; although the runtime
+# stage runs `apk upgrade`, the rescan SBOM was captured before the fixed
+# packages landed, so the scan gated. Pinning the patched base makes the build
+# deterministically clean.
+ARG NODE_ALPINE_DIGEST=sha256:2bdb65ed1dab192432bc31c95f94155ca5ad7fc1392fb7eb7526ab682fa5bf14
 
 # ── Stage 1: Fetch + verify source ──────────────────────────
 FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS source
