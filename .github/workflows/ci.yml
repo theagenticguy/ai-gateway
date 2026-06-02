@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         continue-on-error: true
         with:
           sarif_file: semgrep.sarif
@@ -132,7 +132,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         continue-on-error: true
         with:
           sarif_file: bandit.sarif
@@ -158,7 +158,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         with:
           sarif_file: results.sarif
           category: gitleaks
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload OSV-Scanner SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         with:
           sarif_file: results.sarif
           category: osv-scanner
@@ -228,7 +228,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         continue-on-error: true
         with:
           sarif_file: trivy-fs.sarif
@@ -331,7 +331,7 @@ jobs:
 
       - name: Checkov IaC scan
         if: always()
-        uses: bridgecrewio/checkov-action@4048c972aae68d0b983a48bb3479aab2d877b898 # v12
+        uses: bridgecrewio/checkov-action@b75da993a1a8b73d1086c8d330cadeee5bcccb31 # v12
         with:
           directory: infrastructure/
           framework: terraform
@@ -342,7 +342,7 @@ jobs:
           download_external_modules: false
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         if: always()
         continue-on-error: true
         with:
@@ -396,7 +396,7 @@ jobs:
           output-file: hadolint-results.sarif
 
       - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         if: always()
         continue-on-error: true
         with:
@@ -414,7 +414,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         if: always()
         continue-on-error: true
         with:
