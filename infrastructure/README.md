@@ -47,7 +47,8 @@ This root module composes 17 local sub-modules. The core data plane is always de
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.50.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.47.0 |
+| <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
 
 ## Modules
 
@@ -75,6 +76,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 
 | Name | Type |
 |------|------|
+| [terraform_data.jwt_auth_guard](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) | resource |
 
 ## Inputs
 
