@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-The AI Gateway is a lightweight LLM API proxy built on **Portkey OSS** (v1.15.2), deployed as a containerized service on **AWS ECS Fargate** behind an **Application Load Balancer**. Infrastructure is managed with **Terraform** using battle-tested `terraform-aws-modules` (VPC, ECS, ALB). The container image uses `python:3.13-slim` with multi-stage hardening (non-root, tini, minimal packages), scanned by a 3-phase CI security pipeline (hadolint + checkov pre-build, trivy post-build, cosign signing pre-push). Observability flows through an ADOT sidecar exporting to CloudWatch. Provider API keys live in AWS Secrets Manager, injected at task startup. Total infrastructure cost: ~$215-280/month at medium scale.
+The AI Gateway is a lightweight LLM API proxy built on **Portkey OSS** (pinned to main @ `669825c`, the post-v1.15.2 security fixes), deployed as a containerized service on **AWS ECS Fargate** behind an **Application Load Balancer**. Infrastructure is managed with **Terraform** using battle-tested `terraform-aws-modules` (VPC, ECS, ALB). The container image is built from Portkey OSS source on `node:24-alpine` with multi-stage hardening (non-root, tini, minimal packages), scanned by a 3-phase CI security pipeline (hadolint + checkov pre-build, trivy post-build, cosign signing pre-push). Observability flows through an ADOT sidecar exporting to CloudWatch. Provider API keys live in AWS Secrets Manager, injected at task startup. Total infrastructure cost: ~$215-280/month at medium scale.
 
 ---
 
@@ -31,7 +31,7 @@ The AI Gateway is a lightweight LLM API proxy built on **Portkey OSS** (v1.15.2)
 | Layer | Technology | Version | Role | Health |
 |---|---|---|---|---|
 | **Gateway** | | | | |
-| LLM Proxy | Portkey OSS | 1.15.2 | Multi-provider API gateway | HEALTHY |
+| LLM Proxy | Portkey OSS | 1.15.2+669825c | Multi-provider API gateway | HEALTHY |
 | **Infrastructure** | | | | |
 | IaC | Terraform | 1.10.x | Infrastructure as Code | HEALTHY |
 | IaC Modules (VPC) | terraform-aws-modules/vpc | 5.21.0 | VPC, subnets, NAT, endpoints | HEALTHY |
@@ -261,7 +261,7 @@ run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
 1. terraform-aws-modules/ecs v5.12.1 — https://github.com/terraform-aws-modules/terraform-aws-ecs
 2. terraform-aws-modules/alb v9.16.0 — https://github.com/terraform-aws-modules/terraform-aws-alb
 3. terraform-aws-modules/vpc v5.21.0 — https://github.com/terraform-aws-modules/terraform-aws-vpc
-4. Portkey AI Gateway v1.15.2 — https://github.com/Portkey-AI/gateway
+4. Portkey AI Gateway (pinned main @ 669825c) — https://github.com/Portkey-AI/gateway
 5. Portkey ECS Reference — https://github.com/Portkey-AI/ecs_full_sh
 6. Hynek Schlawack, "Production-ready Python Docker with uv" — https://hynek.me/articles/docker-uv/
 7. Chainguard Python image versions — https://images.chainguard.dev/directory/image/python/versions
