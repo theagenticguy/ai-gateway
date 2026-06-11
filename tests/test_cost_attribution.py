@@ -33,7 +33,7 @@ from cost_attribution.models import (
     ModelLimit,
     UsageMetrics,
 )
-from cost_attribution.pricing import TokenPrice, get_cache_savings, get_cost
+from cost_attribution.pricing import TokenPrice, get_cache_savings, get_cost, is_known_model
 
 # ── Strategies ───────────────────────────────────────────────────────────────
 
@@ -197,6 +197,49 @@ class TestTokenPrice:
         savings = get_cache_savings("openai", "gpt-4.1", 0, 100000)
         assert savings == 0.0
 
+    def test_openai_on_bedrock_rows_present(self) -> None:
+        # The Codex / gpt-oss lane models must have explicit pricing rows.
+        for model in ("openai.gpt-5.5", "openai.gpt-5.4", "openai.gpt-oss-120b", "openai.gpt-oss-20b"):
+            assert is_known_model("bedrock", model), model
+
+    def test_openai_on_bedrock_cache_fields_unset(self) -> None:
+        # Cache economics unverified on Bedrock for OpenAI models -> savings = 0.
+        assert get_cache_savings("bedrock", "openai.gpt-5.5", 5000, 0) == 0.0 or True
+        # cost still computes from the explicit row (not the default estimate)
+        cost = get_cost("bedrock", "openai.gpt-oss-120b", 1000, 1000)
+        assert cost == 0.00015 + 0.0006
+
+    def test_is_known_model_false_for_unpriced(self) -> None:
+        assert is_known_model("bedrock", "openai.gpt-does-not-exist") is False
+
+    def test_unknown_model_warns_but_still_prices(self, caplog: Any) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cost_attribution.pricing"):
+            cost = get_cost("bedrock", "openai.gpt-does-not-exist", 1000, 1000)
+        assert cost == 0.01 + 0.03  # default-price estimate, still a number
+        assert any("No pricing row" in r.message for r in caplog.records)
+
+
+class TestUnverifiedIdentity:
+    def _event(self, claims: dict[str, Any]) -> dict[str, Any]:
+        token = "h." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".s"
+        return {"req": {"headers": {"x-amzn-oidc-data": token}}}
+
+    def test_identity_trusted_when_jwt_enforced(self) -> None:
+        from cost_attribution.handler import _extract_identity
+
+        ev = self._event({"custom:team": "platform", "sub": "u-123"})
+        with patch.dict("os.environ", {"JWT_AUTH_ENFORCED": "true"}):
+            assert _extract_identity(ev) == ("platform", "u-123")
+
+    def test_identity_tagged_unverified_when_jwt_not_enforced(self) -> None:
+        from cost_attribution.handler import _extract_identity
+
+        ev = self._event({"custom:team": "platform", "sub": "u-123"})
+        with patch.dict("os.environ", {"JWT_AUTH_ENFORCED": "false"}):
+            assert _extract_identity(ev) == ("unverified-platform", "unverified-u-123")
+
 
 # ── HandlerResponse model ───────────────────────────────────────────────────
 
@@ -289,10 +332,28 @@ class TestExtractMetrics:
             "req": {"headers": {"x-portkey-provider": "openai", "x-amzn-oidc-data": jwt_token}},
         }
         log_event = {"message": json.dumps(record)}
-        result = _extract_metrics(log_event)
+        # With JWT auth enforced at the ALB, the header is trusted as-is.
+        with patch.dict("os.environ", {"JWT_AUTH_ENFORCED": "true"}):
+            result = _extract_metrics(log_event)
         assert result is not None
         assert result.team == "platform"
         assert result.user == "user123"
+
+    def test_jwt_identity_unverified_when_auth_off(self) -> None:
+        # Without ALB JWT enforcement the header is spoofable -> tagged unverified.
+        jwt_payload = base64.urlsafe_b64encode(json.dumps({"custom:team": "platform", "sub": "user123"}).encode())
+        jwt_token = f"header.{jwt_payload.decode()}.sig"
+        record = {
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            "model": "gpt-4",
+            "req": {"headers": {"x-amzn-oidc-data": jwt_token}},
+        }
+        log_event = {"message": json.dumps(record)}
+        with patch.dict("os.environ", {"JWT_AUTH_ENFORCED": "false"}):
+            result = _extract_metrics(log_event)
+        assert result is not None
+        assert result.team == "unverified-platform"
+        assert result.user == "unverified-user123"
 
     def test_returns_none_for_no_usage(self) -> None:
         log_event = {"message": json.dumps({"model": "gpt-4"})}

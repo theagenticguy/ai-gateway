@@ -10,7 +10,14 @@ from typing import Any
 import boto3
 from pydantic import BaseModel, Field
 
-__all__ = ["PRICING_TABLE", "TokenPrice", "get_cache_savings", "get_cost", "get_pricing_table"]
+__all__ = [
+    "PRICING_TABLE",
+    "TokenPrice",
+    "get_cache_savings",
+    "get_cost",
+    "get_pricing_table",
+    "is_known_model",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +72,21 @@ PRICING_TABLE: dict[tuple[str, str], TokenPrice] = {
     ("bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0"): TokenPrice(input_per_1k=0.001, output_per_1k=0.005),
     ("bedrock", "amazon.nova-pro-v1:0"): TokenPrice(input_per_1k=0.0008, output_per_1k=0.0032),
     ("bedrock", "amazon.nova-lite-v1:0"): TokenPrice(input_per_1k=0.00006, output_per_1k=0.00024),
+    # OpenAI on Bedrock (Codex / gpt-oss lane).
+    # WARNING: the input/output rates below are REFERENCE ESTIMATES, not verified
+    # against AWS's published Bedrock pricing — confirm before relying on these
+    # for chargeback. They exist so a known model does not trip the
+    # UnknownModelPrice signal; correct them via the DynamoDB pricing overlay
+    # (PRICING_TABLE_NAME) once the real rates are confirmed.
+    # Cache fields left None pending an empirical usage.cached_tokens test:
+    # Bedrock's documented prompt-caching support list covers only Anthropic +
+    # Nova, so cache economics are unverified here. Until confirmed, savings
+    # compute as 0 rather than fabricating a 10%/125% figure against a cache that
+    # may not exist.
+    ("bedrock", "openai.gpt-5.5"): TokenPrice(input_per_1k=0.00125, output_per_1k=0.01),
+    ("bedrock", "openai.gpt-5.4"): TokenPrice(input_per_1k=0.00125, output_per_1k=0.01),
+    ("bedrock", "openai.gpt-oss-120b"): TokenPrice(input_per_1k=0.00015, output_per_1k=0.0006),
+    ("bedrock", "openai.gpt-oss-20b"): TokenPrice(input_per_1k=0.00007, output_per_1k=0.0003),
     # OpenAI
     ("openai", "gpt-4.1"): TokenPrice(input_per_1k=0.002, output_per_1k=0.008),
     ("openai", "gpt-4.1-mini"): TokenPrice(input_per_1k=0.0004, output_per_1k=0.0016),
@@ -151,10 +173,42 @@ def get_pricing_table() -> dict[tuple[str, str], TokenPrice]:
     return _PRICING_CACHE
 
 
+def is_known_model(provider: str, model: str) -> bool:
+    """Whether (provider, model) has an explicit pricing row.
+
+    False means cost is being estimated from `_DEFAULT_PRICE` — the caller
+    (handler) should emit the `UnknownModelPrice` metric so unpriced models are
+    visible rather than silently mis-billed.
+    """
+    return (provider.lower(), model) in get_pricing_table()
+
+
+def _resolve_price(provider: str, model: str) -> TokenPrice:
+    """Look up a price, logging a WARNING (not silently defaulting) on a miss.
+
+    Still returns a usable number (`_DEFAULT_PRICE`) so the metric pipeline never
+    breaks — but the miss is now observable in logs, and `is_known_model` lets
+    the handler raise the `UnknownModelPrice` signal.
+    """
+    table = get_pricing_table()
+    key = (provider.lower(), model)
+    price = table.get(key)
+    if price is None:
+        logger.warning(
+            "No pricing row for (%s, %s); using _DEFAULT_PRICE estimate "
+            "($%.3f/$%.3f per 1k). Add a row or a DynamoDB pricing override.",
+            provider,
+            model,
+            _DEFAULT_PRICE.input_per_1k,
+            _DEFAULT_PRICE.output_per_1k,
+        )
+        return _DEFAULT_PRICE
+    return price
+
+
 def get_cost(provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> float:
     """Calculate the total cost for a request (input + output tokens)."""
-    table = get_pricing_table()
-    price = table.get((provider.lower(), model), _DEFAULT_PRICE)
+    price = _resolve_price(provider, model)
     return (prompt_tokens / 1000.0) * price.input_per_1k + (completion_tokens / 1000.0) * price.output_per_1k
 
 
@@ -175,8 +229,7 @@ def get_cache_savings(
     if cache_read_tokens == 0 and cache_creation_tokens == 0:
         return 0.0
 
-    table = get_pricing_table()
-    price = table.get((provider.lower(), model), _DEFAULT_PRICE)
+    price = _resolve_price(provider, model)
 
     # Savings from reading cached tokens instead of paying full input price
     read_savings = (cache_read_tokens / 1000.0) * (price.input_per_1k - price.effective_cache_read_per_1k)
