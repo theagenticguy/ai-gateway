@@ -11,19 +11,19 @@
 # PORTKEY_REF is the git ref to build from: a release tag (e.g. v1.15.2) or a
 # full commit SHA. GitHub serves archive/<ref>.tar.gz for both forms.
 # PORTKEY_VERSION is a human-readable label only (image tags, logs).
-ARG PORTKEY_REF=v1.15.2
-ARG PORTKEY_VERSION=1.15.2
-ARG PORTKEY_TARBALL_SHA256
+#
+# These ARG defaults are a FALLBACK for bare `docker build .` invocations only.
+# The canonical pin lives in versions.env, and every CI/release workflow passes
+# it through --build-arg. Keep these defaults in sync with versions.env so a
+# local build without --build-arg does not silently produce a stale, less-secure
+# image. Current pin: Portkey main @ 669825c (post-v1.15.2 security fixes —
+# public-route auth validation, admin-token hardening, provider-option log
+# redaction, header-forwarding loop fix).
+ARG PORTKEY_REF=669825cbe89ee51569918b8f78a9db486fd69dd4
+ARG PORTKEY_VERSION=1.15.2+669825c
+ARG PORTKEY_TARBALL_SHA256=d69ce5369b2a9fd61beb44608c9f09458fbd2bf3bd5ef884348c19a17b26b8c1
 ARG NODE_VERSION=24
-# node:24-alpine digest. Bumped to the Alpine 3.23 rebuild that ships
-# openssl 3.5.6-r0 and musl 1.2.5-r23, which fix the HIGH/CRITICAL OS CVEs
-# flagged by the nightly rescan (CVE-2026-28387/28388/28389/28390/31789/31790
-# in openssl, CVE-2026-40200 in musl). The previous digest
-# (01743339…) bundled openssl 3.5.5-r0 / musl 1.2.5-r21; although the runtime
-# stage runs `apk upgrade`, the rescan SBOM was captured before the fixed
-# packages landed, so the scan gated. Pinning the patched base makes the build
-# deterministically clean.
-ARG NODE_ALPINE_DIGEST=sha256:2bdb65ed1dab192432bc31c95f94155ca5ad7fc1392fb7eb7526ab682fa5bf14
+ARG NODE_ALPINE_DIGEST=sha256:01743339035a5c3c11a373cd7c83aeab6ed1457b55da6a69e014a95ac4e4700b
 
 # ── Stage 1: Fetch + verify source ──────────────────────────
 FROM node:${NODE_VERSION}-alpine@${NODE_ALPINE_DIGEST} AS source
@@ -53,7 +53,6 @@ COPY --from=source /src .
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
 #   hono               4.12.23 ← CVE-2025-62610, CVE-2026-22817/22818/29045 + later 4.12.x GHSAs
 #   @hono/node-server  1.19.14 ← CVE-2026-29087 (HIGH) + GHSA-92pp-h63x-v22m (latest stable 1.x)
-#   ws                 8.20.1  ← CVE-2026-45736 (HIGH) uninitialized memory disclosure on close()
 # Transitive deps → npm overrides
 #   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
 #   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
@@ -65,7 +64,6 @@ RUN node -e " \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
   pkg.dependencies.hono = '4.12.23'; \
   pkg.dependencies['@hono/node-server'] = '1.19.14'; \
-  pkg.dependencies.ws = '8.20.1'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
