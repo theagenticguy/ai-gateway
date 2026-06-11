@@ -205,6 +205,12 @@ module "cost_attribution" {
   usage_table                 = var.enable_budgets ? module.budgets[0].usage_table_name : ""
   budgets_table               = var.enable_budgets ? module.budgets[0].budgets_table_name : ""
   budget_alerts_sns_topic_arn = var.enable_budgets ? module.budgets[0].budget_alerts_topic_arn : ""
+
+  # F.2: wire the audit Firehose (previously orphaned — AUDIT_FIREHOSE_STREAM was never set).
+  audit_firehose_stream = var.enable_audit_log ? module.audit_log[0].firehose_stream_name : ""
+  # F.6 (safe via F.4): mirror ALB JWT enforcement so the handler tags identity
+  # unverified-* when the x-amzn-oidc-data header is not ALB-verified.
+  jwt_auth_enforced = var.enable_jwt_auth
 }
 
 # Content Scanner (Lambda: PII redaction + prompt injection detection)

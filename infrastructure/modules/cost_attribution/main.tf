@@ -68,6 +68,15 @@ resource "aws_iam_role_policy" "lambda" {
           "arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/${var.budgets_table}",
         ]
       },
+      # Pricing overlay (runtime-configurable rates). _load_dynamic_pricing uses
+      # Scan, so this grants Scan/GetItem on the pricing table only when one is
+      # configured. Empty pricing_table_name => no statement (static table only).
+      {
+        Sid      = "DynamoDBPricingOverlayRead"
+        Effect   = "Allow"
+        Action   = ["dynamodb:Scan", "dynamodb:GetItem"]
+        Resource = var.pricing_table_name != "" ? ["arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/${var.pricing_table_name}"] : ["arn:aws:dynamodb:${var.aws_region}:${var.account_id}:table/__none__"]
+      },
       {
         Sid      = "SNSPublishAlerts"
         Effect   = "Allow"
@@ -108,6 +117,14 @@ resource "aws_lambda_function" "cost_attribution" {
       USAGE_TABLE                 = var.usage_table
       BUDGETS_TABLE               = var.budgets_table
       BUDGET_ALERTS_SNS_TOPIC_ARN = var.budget_alerts_sns_topic_arn
+      # F.2: wire the audit Firehose so _publish_audit_records is no longer dead
+      # code (the handler no-ops cleanly when this is empty).
+      AUDIT_FIREHOSE_STREAM = var.audit_firehose_stream
+      # F.5: dynamic pricing overlay table (empty = static PRICING_TABLE only).
+      PRICING_TABLE_NAME = var.pricing_table_name
+      # F.6 (made safe by F.4): the handler trusts the x-amzn-oidc-data header
+      # only when the ALB enforces JWT; otherwise it tags identity unverified-*.
+      JWT_AUTH_ENFORCED = tostring(var.jwt_auth_enforced)
     }
   }
   logging_config {
