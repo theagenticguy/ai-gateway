@@ -331,7 +331,7 @@ jobs:
 
       - name: Checkov IaC scan
         if: always()
-        uses: bridgecrewio/checkov-action@dfb51aed1b783289b0d3f255028e7a88d5e8caa1 # v12
+        uses: bridgecrewio/checkov-action@a6a5c23963b9d127020ae43a959cd5d8eefc94c7 # v12
         with:
           directory: infrastructure/
           framework: terraform
