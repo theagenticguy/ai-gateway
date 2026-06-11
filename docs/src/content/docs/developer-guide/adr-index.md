@@ -28,6 +28,7 @@ ADRs are stored in the `adr/` directory at the repository root.
 | [012](/ai-gateway/adrs/012-response-cache-strategy/) | Response Cache Strategy | Accepted | ElastiCache Redis cluster in VPC private subnets for exact-match response caching via Portkey Gateway. |
 | [013](/ai-gateway/adrs/013-identity-center-saml-federation/) | Identity Center SAML/OIDC Federation | Proposed | SAML 2.0 and OIDC federation with the Cognito User Pool, plus a Pre-Token-Generation V2 Lambda for IdP group-to-claim mapping. |
 | [014](/ai-gateway/adrs/014-two-plane-architecture-split/) | Two-Plane Architecture Split | Accepted | ALB stays on the inference path; admin APIs (teams, budgets, routing, scanner, pricing, usage) move behind API Gateway with a Cognito authorizer. Eliminates duplicated JWT validation across handlers. |
+| [015](/ai-gateway/adrs/015-openai-responses-bedrock-mantle-proxy/) | OpenAI Responses → Bedrock mantle proxy | Accepted | Codex + GPT-5.5/5.4 (Responses-only) route through the gateway via the `openai` provider with a `custom_host` pointed at the Bedrock mantle endpoint — a proxy, not a fork or a bypass. Amends ADR-006; retracts the earlier "bypass the gateway / fork a `bedrock-responses` provider" framing. |
 
 ## Creating a New ADR
 

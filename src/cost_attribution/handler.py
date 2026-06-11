@@ -17,7 +17,7 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from cost_attribution.models import HandlerResponse, LogRecord, MetricResult
-from cost_attribution.pricing import get_cost
+from cost_attribution.pricing import get_cost, is_known_model
 
 logger = logging.getLogger("cost_attribution")
 logger.setLevel(logging.INFO)
@@ -80,10 +80,26 @@ def _decode_jwt_claims(jwt_token: str) -> dict[str, Any]:
         return {}
 
 
+def _jwt_auth_enforced() -> bool:
+    """Whether the ALB is verifying JWTs upstream of this Lambda.
+
+    The `x-amzn-oidc-data` header is only trustworthy when the ALB enforces JWT
+    auth (enable_jwt_auth=true). Terraform sets JWT_AUTH_ENFORCED to mirror that
+    flag. When auth is off, the header is attacker-spoofable, so identities
+    derived from it are tagged `unverified-*` rather than trusted (F.6, made safe
+    by F.4). We do NOT re-verify the signature here — that duplicates the ALB's
+    job (ADR-014 anti-duplication); we only refuse to trust an unverified header.
+    """
+    return os.environ.get("JWT_AUTH_ENFORCED", "").lower() == "true"
+
+
 def _extract_identity(log_event_raw: dict[str, Any]) -> tuple[str, str]:
     """Extract (team, user) from log record's JWT header.
 
-    Falls back to ("unknown", "unknown") if JWT is absent or unparseable.
+    Falls back to ("unknown", "unknown") if JWT is absent or unparseable. When
+    the ALB is not enforcing JWT auth, the header is untrusted and the resolved
+    identity is prefixed with `unverified-` so downstream attribution can tell
+    real identities from spoofable ones.
     """
     try:
         req = log_event_raw.get("req", {})
@@ -95,9 +111,14 @@ def _extract_identity(log_event_raw: dict[str, Any]) -> tuple[str, str]:
         claims = _decode_jwt_claims(jwt_token)
         team = claims.get("custom:team", claims.get("team", "unknown"))
         user = claims.get("sub", claims.get("username", "unknown"))
-        return (str(team) if team else "unknown", str(user) if user else "unknown")
+        team_str = str(team) if team else "unknown"
+        user_str = str(user) if user else "unknown"
     except Exception:
         return ("unknown", "unknown")
+
+    if not _jwt_auth_enforced():
+        return (f"unverified-{team_str}", f"unverified-{user_str}")
+    return (team_str, user_str)
 
 
 # ── Log decoding & metric extraction ─────────────────────────────────────────
@@ -156,6 +177,7 @@ def _extract_metrics(log_event: dict[str, Any]) -> MetricResult | None:
         cache_creation_input_tokens=record.usage.cache_creation_input_tokens,
         cache_savings_usd=cache_savings,
         cache_hit=cache_hit,
+        price_known=is_known_model(provider, model),
         team=team,
         user=user,
     )
@@ -195,6 +217,12 @@ def _publish_metrics(metrics: list[MetricResult]) -> None:
                 },
             ]
         )
+
+        # Surface unpriced models loudly: a non-zero UnknownModelPrice means
+        # cost_usd was a default-price estimate, not a real rate. Alarm on this
+        # rather than letting new models silently mis-bill.
+        if not m.price_known:
+            metric_data.append({"MetricName": "UnknownModelPrice", "Dimensions": dims, "Value": 1.0, "Unit": "Count"})
 
         # Per-team cache metrics
         team_dims = [{"Name": "Team", "Value": m.team}]
