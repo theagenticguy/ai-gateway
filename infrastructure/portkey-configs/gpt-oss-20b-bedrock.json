@@ -1,0 +1,13 @@
+{
+  "strategy": {
+    "mode": "single"
+  },
+  "targets": [
+    {
+      "provider": "bedrock",
+      "override_params": {
+        "model": "openai.gpt-oss-20b"
+      }
+    }
+  ]
+}

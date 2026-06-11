@@ -1,0 +1,28 @@
+# Codex client config — AI Gateway (OpenAI Responses → bedrock-mantle proxy)
+#
+# This points the OpenAI Codex client at the AI Gateway instead of api.openai.com.
+# The gateway proxies Responses requests to Amazon Bedrock's OpenAI-compatible
+# mantle endpoint (openai provider + custom_host, no fork), so traffic stays
+# inside the customer AWS boundary and flows through the gateway's hooks,
+# logging, and cost attribution.
+#
+# Deploy via MDM (Jamf / Intune / GPO) to ~/.codex/config.toml on developer
+# endpoints, alongside requirements.toml (which admin-pins these values so a
+# project-level config cannot repoint Codex back at api.openai.com).
+#
+# Replace <gateway-host> with the in-VPC ALB hostname. Region is fixed per fleet.
+
+model = "openai.gpt-5.5"
+model_provider = "ai-gateway"
+
+[model_providers.ai-gateway]
+name = "AI Gateway (Responses -> Bedrock mantle)"
+# Point at the gateway's OpenAI-compatible base. The gateway rewrites only the
+# upstream host (to bedrock-mantle) and preserves the /responses path.
+base_url = "https://<gateway-host>/v1"
+# Codex speaks the Responses API exclusively (wire_api = "chat" was removed).
+wire_api = "responses"
+# Auth to the GATEWAY. The gateway holds the Bedrock API key server-side and
+# injects it toward mantle; developer endpoints present only a gateway token.
+# env_key names the env var Codex reads the bearer from.
+env_key = "AI_GATEWAY_TOKEN"

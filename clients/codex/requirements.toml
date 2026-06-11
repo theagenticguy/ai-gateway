@@ -1,0 +1,27 @@
+# Codex managed requirements — admin-enforced, machine-local, non-overridable.
+#
+# Deploy via MDM to the Codex managed-config path. These pins prevent a
+# project-level or user-level config.toml from repointing Codex away from the
+# AI Gateway (e.g. back to api.openai.com) — the data-isolation control.
+#
+# MCP governance lives HERE, client-side, and is intentionally decoupled from
+# gateway inference routing. The gateway is NOT an MCP funnel and must never be
+# positioned as the single approved MCP endpoint (project HARD CONSTRAINT).
+
+# --- Inference routing pins (isolation control) ---
+# Lock the provider + provider map so project config cannot override them.
+[pins]
+model_provider = "ai-gateway"
+model_providers = "locked"
+profiles = "locked"
+
+# --- MCP allow/deny (client-side governance — separate from routing above) ---
+# This section is structurally independent of [pins]/[model_providers]; it does
+# not route MCP through the gateway. Edit the lists to match the org policy.
+[mcp]
+# Allowlist of approved MCP servers (empty list = none permitted).
+allowed_servers = []
+# Denylist always wins over the allowlist.
+denied_servers = []
+# Block clients from adding ad-hoc MCP servers outside the managed allowlist.
+allow_managed_servers_only = true
