@@ -102,7 +102,7 @@ updates:
 
   # ── Docker (container images) ──────────────────────────────
   - package-ecosystem: docker
-    directory: /infrastructure/modules/compute
+    directory: /
     schedule:
       interval: weekly
       day: monday
