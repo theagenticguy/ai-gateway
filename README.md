@@ -210,6 +210,7 @@ Architectural Decision Records are in the `adr/` directory.
 | [012](adr/012-response-cache-strategy.md) | Response Cache Strategy with ElastiCache Redis | Accepted |
 | [013](adr/013-identity-center-saml-federation.md) | Identity Center SAML/OIDC Federation for User SSO | Accepted |
 | [014](adr/014-two-plane-architecture-split.md) | Two-Plane Architecture Split (ALB Inference + API Gateway Admin) | Accepted |
+| [015](adr/015-openai-responses-bedrock-mantle-proxy.md) | OpenAI Responses → Bedrock mantle proxy (openai provider + custom_host, no fork) | Accepted |
 
 ## Scripts
 

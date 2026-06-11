@@ -1,8 +1,16 @@
 # ADR-006: Portkey OSS Natively Serves Both OpenAI and Anthropic API Formats
 
-**Status**: Accepted
+**Status**: Accepted (amended 2026-06-11 — see ADR-015)
 **Date**: 2026-03-18
 **Deciders**: AI Engineering NAMER
+
+> **Amendment (2026-06-11):** `/v1/responses` is served by the gateway for the
+> `openai` provider (not the `bedrock` provider). The OpenAI-on-Bedrock lane —
+> Codex + GPT-5.5/5.4, which are Responses-API-only — therefore routes through
+> the `openai` provider with a `custom_host` pointed at the Bedrock mantle
+> endpoint, **proxied through the gateway, no fork**. See **ADR-015**. The
+> "Codex CLI → `/v1/chat/completions`" row below is stale: Codex is now
+> Responses-only and uses `/v1/responses`.
 
 ## Context
 
@@ -42,7 +50,7 @@ Anthropic header forwarding confirmed:
 | Goose | `/v1/chat/completions` | `OPENAI_HOST=<gateway>/v1` |
 | Continue.dev | `/v1/chat/completions` | `apiBase: <gateway>/v1` in config.yaml |
 | LangChain | `/v1/chat/completions` | `OPENAI_BASE_URL=<gateway>/v1` |
-| Codex CLI | `/v1/chat/completions` | `OPENAI_BASE_URL=<gateway>/v1` |
+| Codex CLI | `/v1/responses` (Responses-only) | `base_url=<gateway>/v1`, `wire_api="responses"` — see ADR-015 |
 
 ## Sources
 
