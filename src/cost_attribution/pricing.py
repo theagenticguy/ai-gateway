@@ -74,11 +74,51 @@ PRICING_TABLE: dict[tuple[str, str], TokenPrice] = {
     ("anthropic", "claude-opus-4"): TokenPrice(input_per_1k=0.015, output_per_1k=0.075),
     ("anthropic", "claude-3-5-sonnet-20241022"): TokenPrice(input_per_1k=0.003, output_per_1k=0.015),
     ("anthropic", "claude-3-5-haiku-20241022"): TokenPrice(input_per_1k=0.001, output_per_1k=0.005),
-    # Bedrock
-    ("bedrock", "anthropic.claude-sonnet-4-20250514-v1:0"): TokenPrice(input_per_1k=0.003, output_per_1k=0.015),
-    ("bedrock", "anthropic.claude-opus-4-20250514-v1:0"): TokenPrice(input_per_1k=0.015, output_per_1k=0.075),
+    # Bedrock — Anthropic Claude. Verified 2026-06-11 against the AWS Price List
+    # bulk API (AmazonBedrockFoundationModels, publicationDate 2026-06-09) + the
+    # per-model Bedrock model cards. Published cache-read is exactly 10% of input
+    # and cache-write (5-min) exactly 125% of input for every Claude row, so we
+    # leave cache fields None and rely on the effective_cache_* defaults (which
+    # ARE 10%/125%) rather than restating them. These are FALLBACK rates — custom
+    # agreements / volume discounts come from the DynamoDB overlay.
+    #
+    # Model-ID forms are NOT uniform across the 4.x line (verified): 4.8/4.7 have
+    # no -v1/date; 4.6 has -v1 but no date; 4.5 has full date + -v1:0. We key on
+    # the exact strings. Each model has a base ID billed at the STANDARD (regional)
+    # rate and a `global.`-prefixed inference profile ~10% cheaper (the GLOBAL
+    # rate); both forms are listed so a global-profile deployment is priced right
+    # and does not trip UnknownModelPrice. (Opus 4.1 has no global profile.)
+    # --- Claude 3.5 (legacy) ---
     ("bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0"): TokenPrice(input_per_1k=0.003, output_per_1k=0.015),
-    ("bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0"): TokenPrice(input_per_1k=0.001, output_per_1k=0.005),
+    ("bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0"): TokenPrice(input_per_1k=0.0008, output_per_1k=0.004),
+    # --- Claude Opus 4 / 4.1 (flat rate, no standard/global split) ---
+    ("bedrock", "anthropic.claude-opus-4-20250514-v1:0"): TokenPrice(input_per_1k=0.015, output_per_1k=0.075),
+    ("bedrock", "anthropic.claude-opus-4-1-20250805-v1:0"): TokenPrice(input_per_1k=0.015, output_per_1k=0.075),
+    # --- Claude Opus 4.5 / 4.6 / 4.7 / 4.8 (standard rate on base ID) ---
+    ("bedrock", "anthropic.claude-opus-4-5-20251101-v1:0"): TokenPrice(input_per_1k=0.0055, output_per_1k=0.0275),
+    ("bedrock", "anthropic.claude-opus-4-6-v1"): TokenPrice(input_per_1k=0.0055, output_per_1k=0.0275),
+    ("bedrock", "anthropic.claude-opus-4-7"): TokenPrice(input_per_1k=0.0055, output_per_1k=0.0275),
+    ("bedrock", "anthropic.claude-opus-4-8"): TokenPrice(input_per_1k=0.0055, output_per_1k=0.0275),
+    # global inference profiles (~10% cheaper)
+    ("bedrock", "global.anthropic.claude-opus-4-6-v1"): TokenPrice(input_per_1k=0.005, output_per_1k=0.025),
+    ("bedrock", "global.anthropic.claude-opus-4-7"): TokenPrice(input_per_1k=0.005, output_per_1k=0.025),
+    ("bedrock", "global.anthropic.claude-opus-4-8"): TokenPrice(input_per_1k=0.005, output_per_1k=0.025),
+    # --- Claude Sonnet 4 / 4.5 / 4.6 (standard rate on base ID) ---
+    ("bedrock", "anthropic.claude-sonnet-4-20250514-v1:0"): TokenPrice(input_per_1k=0.003, output_per_1k=0.015),
+    ("bedrock", "anthropic.claude-sonnet-4-5-20250929-v1:0"): TokenPrice(input_per_1k=0.0033, output_per_1k=0.0165),
+    ("bedrock", "anthropic.claude-sonnet-4-6"): TokenPrice(input_per_1k=0.0033, output_per_1k=0.0165),
+    ("bedrock", "global.anthropic.claude-sonnet-4-6"): TokenPrice(input_per_1k=0.003, output_per_1k=0.015),
+    # --- Claude Haiku 4.5 (only Haiku in the 4.x line; 4.6/4.7/4.8 do not exist) ---
+    ("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0"): TokenPrice(input_per_1k=0.0011, output_per_1k=0.0055),
+    ("bedrock", "global.anthropic.claude-haiku-4-5-20251001-v1:0"): TokenPrice(input_per_1k=0.001, output_per_1k=0.005),
+    # --- Claude Fable 5 (standard + global) ---
+    ("bedrock", "anthropic.claude-fable-5"): TokenPrice(input_per_1k=0.011, output_per_1k=0.055),
+    ("bedrock", "global.anthropic.claude-fable-5"): TokenPrice(input_per_1k=0.010, output_per_1k=0.050),
+    # Claude Mythos 5 (anthropic.claude-mythos-5): GATED PREVIEW, mantle-only,
+    # vetted-customers-only. NO published Bedrock pricing — zero entries in the
+    # Price List API in any region. Intentionally omitted: if it appears in
+    # traffic it SHOULD trip UnknownModelPrice rather than be billed at a guess.
+    # --- Amazon Nova ---
     ("bedrock", "amazon.nova-pro-v1:0"): TokenPrice(input_per_1k=0.0008, output_per_1k=0.0032),
     ("bedrock", "amazon.nova-lite-v1:0"): TokenPrice(input_per_1k=0.00006, output_per_1k=0.00024),
     # OpenAI on Bedrock (Codex / gpt-oss lane). Verified 2026-06-11.

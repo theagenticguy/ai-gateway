@@ -220,6 +220,34 @@ class TestTokenPrice:
         # Back-compat: models without the flag still cache (Claude/Nova unchanged).
         assert get_cache_savings("bedrock", "anthropic.claude-sonnet-4-20250514-v1:0", 5000, 0) > 0
 
+    def test_claude_4x_verified_rows(self) -> None:
+        # Verified 2026-06-11 from the AWS Price List bulk API (standard rate).
+        assert get_cost("bedrock", "anthropic.claude-opus-4-8", 1000, 1000) == 0.0055 + 0.0275
+        assert get_cost("bedrock", "anthropic.claude-sonnet-4-6", 1000, 1000) == 0.0033 + 0.0165
+        assert get_cost("bedrock", "anthropic.claude-haiku-4-5-20251001-v1:0", 1000, 1000) == 0.0011 + 0.0055
+        assert get_cost("bedrock", "anthropic.claude-fable-5", 1000, 1000) == 0.011 + 0.055
+
+    def test_global_profile_cheaper_than_standard(self) -> None:
+        # global. inference profiles bill ~10% less than the regional base ID.
+        std = get_cost("bedrock", "anthropic.claude-opus-4-8", 1000, 1000)
+        glob = get_cost("bedrock", "global.anthropic.claude-opus-4-8", 1000, 1000)
+        assert glob < std
+        assert is_known_model("bedrock", "global.anthropic.claude-fable-5")
+
+    def test_claude_4x_cache_defaults_are_10_and_125_pct(self) -> None:
+        # Published Claude cache rates == 10% read / 125% write of input, which is
+        # exactly what effective_cache_* defaults to -> savings are correct with
+        # cache fields left None.
+        from cost_attribution.pricing import get_pricing_table
+
+        p = get_pricing_table()[("bedrock", "anthropic.claude-opus-4-8")]
+        assert p.effective_cache_read_per_1k == 0.0055 * 0.1
+        assert p.effective_cache_write_per_1k == 0.0055 * 1.25
+
+    def test_mythos_is_unpriced(self) -> None:
+        # Mythos 5 is a gated preview with no published price -> must trip Unknown.
+        assert is_known_model("bedrock", "anthropic.claude-mythos-5") is False
+
     def test_is_known_model_false_for_unpriced(self) -> None:
         assert is_known_model("bedrock", "openai.gpt-does-not-exist") is False
 

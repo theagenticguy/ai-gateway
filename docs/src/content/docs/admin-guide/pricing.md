@@ -68,6 +68,35 @@ us-east-1 list rates and are a **fallback** — set the overlay to your actual
 billed/negotiated rate for accurate chargeback.
 :::
 
+### Anthropic Claude on Bedrock (verified 2026-06-11)
+
+Standard (regional) rate on the base model ID; the `global.`-prefixed inference
+profile is ~10% cheaper and has its own row. Published cache-read is exactly 10%
+of input and cache-write (5-min) exactly 125%, so the defaults compute correct
+cache savings without per-row cache fields.
+
+| Model | Base ID | Input /1K | Output /1K |
+|---|---|---|---|
+| Opus 4.8 | `anthropic.claude-opus-4-8` | $0.0055 | $0.0275 |
+| Opus 4.7 | `anthropic.claude-opus-4-7` | $0.0055 | $0.0275 |
+| Opus 4.6 | `anthropic.claude-opus-4-6-v1` | $0.0055 | $0.0275 |
+| Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | $0.0055 | $0.0275 |
+| Opus 4.1 / 4 | `anthropic.claude-opus-4-1-...` / `-4-...` | $0.015 | $0.075 |
+| Sonnet 4.6 | `anthropic.claude-sonnet-4-6` | $0.0033 | $0.0165 |
+| Sonnet 4.5 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | $0.0033 | $0.0165 |
+| Sonnet 4 | `anthropic.claude-sonnet-4-20250514-v1:0` | $0.003 | $0.015 |
+| Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | $0.0011 | $0.0055 |
+| Fable 5 | `anthropic.claude-fable-5` | $0.011 | $0.055 |
+
+:::note
+**Model-ID forms are not uniform** across the 4.x line — 4.8/4.7 carry no
+`-v1`/date, 4.6 has `-v1` but no date, 4.5 and older carry the full date — so the
+table keys on exact strings, not a date-stamp pattern. **Haiku exists only at
+4.5** in the 4.x line. **Claude Mythos 5** (`anthropic.claude-mythos-5`) is a
+gated preview with **no published price** — intentionally omitted so it trips
+`UnknownModelPrice` rather than billing at a guess.
+:::
+
 ## Auto-refresh (future)
 
 AWS exposes per-model token pricing programmatically via the **Price List bulk
