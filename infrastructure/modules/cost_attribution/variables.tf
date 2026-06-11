@@ -44,3 +44,21 @@ variable "budget_alerts_sns_topic_arn" {
   type        = string
   default     = ""
 }
+
+variable "audit_firehose_stream" {
+  description = "Name of the audit Firehose delivery stream. Empty disables audit-record delivery (handler no-ops). Wires F.2 (previously-orphaned audit pipeline)."
+  type        = string
+  default     = ""
+}
+
+variable "pricing_table_name" {
+  description = "DynamoDB table for the dynamic pricing overlay. Empty = static PRICING_TABLE only (F.5)."
+  type        = string
+  default     = ""
+}
+
+variable "jwt_auth_enforced" {
+  description = "Whether the ALB enforces JWT (mirrors enable_jwt_auth). When false, the handler tags attribution identity unverified-* because the x-amzn-oidc-data header is not trustworthy (F.6, safe via F.4)."
+  type        = bool
+  default     = false
+}

@@ -108,6 +108,14 @@ resource "aws_lambda_function" "cost_attribution" {
       USAGE_TABLE                 = var.usage_table
       BUDGETS_TABLE               = var.budgets_table
       BUDGET_ALERTS_SNS_TOPIC_ARN = var.budget_alerts_sns_topic_arn
+      # F.2: wire the audit Firehose so _publish_audit_records is no longer dead
+      # code (the handler no-ops cleanly when this is empty).
+      AUDIT_FIREHOSE_STREAM = var.audit_firehose_stream
+      # F.5: dynamic pricing overlay table (empty = static PRICING_TABLE only).
+      PRICING_TABLE_NAME = var.pricing_table_name
+      # F.6 (made safe by F.4): the handler trusts the x-amzn-oidc-data header
+      # only when the ALB enforces JWT; otherwise it tags identity unverified-*.
+      JWT_AUTH_ENFORCED = tostring(var.jwt_auth_enforced)
     }
   }
   logging_config {
