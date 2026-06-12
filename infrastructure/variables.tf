@@ -91,9 +91,9 @@ variable "cognito_domain_prefix" {
 }
 
 variable "enable_jwt_auth" {
-  description = "Whether to enable ALB JWT validation. Requires certificate_arn and cognito_user_pool_id."
+  description = "Whether to enable ALB JWT validation. Secure default (true) for this reference architecture — requires certificate_arn and cognito_user_pool_id (a precondition in guards.tf fails the plan if either is empty). Set to false only for a deliberately unauthenticated deployment (e.g. a no-cert local smoke test)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 # Identity Center / SSO (D.1)
