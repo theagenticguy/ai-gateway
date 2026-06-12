@@ -16,5 +16,16 @@ resource "terraform_data" "jwt_auth_guard" {
       condition     = !var.enable_provider_fallback || var.enable_jwt_auth
       error_message = "enable_jwt_auth must be true when enable_provider_fallback is true: routing the OpenAI/Claude lanes through an unauthenticated gateway has no per-team attribution or access control. Set enable_jwt_auth = true (requires certificate_arn + cognito_user_pool_id)."
     }
+
+    # Secure-by-default: enable_jwt_auth is true by default, but the ALB JWT
+    # listener is count-gated on certificate_arn != "" (modules/auth/main.tf) and
+    # its issuer/JWKS URLs interpolate cognito_user_pool_id. Without both, a
+    # default apply would silently stand up an ALB with NO authenticated listener
+    # — worse than an explicit opt-out. Fail the plan loudly instead, and make the
+    # error message the turnkey fix. Opt out explicitly with enable_jwt_auth = false.
+    precondition {
+      condition     = !var.enable_jwt_auth || (var.certificate_arn != "" && var.cognito_user_pool_id != "")
+      error_message = "enable_jwt_auth is true (the secure default) but certificate_arn and/or cognito_user_pool_id is empty. JWT validation cannot stand up without both: set certificate_arn (ACM cert for the HTTPS listener) and cognito_user_pool_id (issuer/JWKS source). To run a deliberately unauthenticated gateway (e.g. a local smoke test), set enable_jwt_auth = false explicitly. See docs/admin-guide/security.md."
+    }
   }
 }

@@ -37,7 +37,11 @@ No other configuration is needed. The WAF ACL, logging, and ALB association are 
 
 ## ALB JWT Validation
 
-When `enable_jwt_auth = true` and a `certificate_arn` is provided, the ALB replaces its standard HTTPS forward listener with a two-action listener that validates JWTs before forwarding traffic.
+JWT validation is **on by default** (`enable_jwt_auth = true`) in this reference architecture — a clone-and-apply is authenticated unless you deliberately opt out. When enabled, the ALB replaces its standard HTTPS forward listener with a two-action listener that validates JWTs before forwarding traffic.
+
+:::caution[Secure by default — two inputs are required]
+Because `enable_jwt_auth` defaults to `true`, you **must** also set `certificate_arn` (the ACM cert for the HTTPS listener) and `cognito_user_pool_id` (the JWT issuer / JWKS source). A precondition in `infrastructure/guards.tf` **fails `terraform plan`** with an explanatory message if either is empty — this is intentional: without them, JWT validation cannot stand up and the gateway would otherwise serve unauthenticated. To run a deliberately unauthenticated deployment (e.g. a no-cert local smoke test), set `enable_jwt_auth = false` explicitly (this is what `environments/dev.tfvars` does; `environments/prod.tfvars` models the secure default).
+:::
 
 ### How It Works
 
@@ -72,12 +76,21 @@ sequenceDiagram
     end
 ```
 
-### Enabling JWT Auth
+### Configuring JWT Auth (on by default)
+
+`enable_jwt_auth` is `true` by default. Provide the two required inputs:
 
 ```hcl
-# Both are required:
-certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/abc-123"
-enable_jwt_auth = true
+# Required whenever enable_jwt_auth = true (the default):
+certificate_arn      = "arn:aws:acm:us-east-1:123456789012:certificate/abc-123"
+cognito_user_pool_id = "us-east-1_EXAMPLE"
+enable_jwt_auth      = true # default — shown for clarity
+```
+
+To deliberately run unauthenticated (no cert, e.g. a local smoke test), opt out explicitly:
+
+```hcl
+enable_jwt_auth = false
 ```
 
 :::caution

@@ -34,8 +34,6 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | `modules/audit_log` | Kinesis Firehose → S3 (Parquet) with Glue Catalog | `enable_audit_log` |
 
 <!-- BEGIN_TF_DOCS -->
-
-
 ## Requirements
 
 | Name | Version |
@@ -47,7 +45,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.50.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.47.0 |
 | <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
 
 ## Modules
@@ -77,12 +75,13 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | Name | Type |
 |------|------|
 | [terraform_data.jwt_auth_guard](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) | resource |
+| [aws_availability_zones.available](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/availability_zones) | data source |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment (dev or prod) | `string` | n/a | yes |
 | <a name="input_alarm_sns_topic_arns"></a> [alarm\_sns\_topic\_arns](#input\_alarm\_sns\_topic\_arns) | List of SNS topic ARNs for CloudWatch alarm notifications. If empty, a default topic is created. | `list(string)` | `[]` | no |
 | <a name="input_autoscaling_max_capacity"></a> [autoscaling\_max\_capacity](#input\_autoscaling\_max\_capacity) | Maximum number of ECS tasks for autoscaling | `number` | `6` | no |
 | <a name="input_autoscaling_min_capacity"></a> [autoscaling\_min\_capacity](#input\_autoscaling\_min\_capacity) | Minimum number of ECS tasks for autoscaling | `number` | `2` | no |
@@ -107,10 +106,11 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to enable Bedrock Guardrails for content safety filtering | `bool` | `false` | no |
 | <a name="input_enable_inspector"></a> [enable\_inspector](#input\_enable\_inspector) | Whether to enable Amazon Inspector enhanced scanning for ECR repositories | `bool` | `false` | no |
-| <a name="input_enable_jwt_auth"></a> [enable\_jwt\_auth](#input\_enable\_jwt\_auth) | Whether to enable ALB JWT validation. Requires certificate\_arn and cognito\_user\_pool\_id. | `bool` | `false` | no |
+| <a name="input_enable_jwt_auth"></a> [enable\_jwt\_auth](#input\_enable\_jwt\_auth) | Whether to enable ALB JWT validation. Secure default (true) for this reference architecture — requires certificate\_arn and cognito\_user\_pool\_id (a precondition in guards.tf fails the plan if either is empty). Set to false only for a deliberately unauthenticated deployment (e.g. a no-cert local smoke test). | `bool` | `true` | no |
 | <a name="input_enable_provider_fallback"></a> [enable\_provider\_fallback](#input\_enable\_provider\_fallback) | Whether to enable provider fallback routing. When true, routing configs are injected into the gateway container as environment variables. | `bool` | `false` | no |
 | <a name="input_enable_user_auth"></a> [enable\_user\_auth](#input\_enable\_user\_auth) | Whether to enable user-facing SSO authentication (authorization\_code flow) | `bool` | `false` | no |
 | <a name="input_enable_waf"></a> [enable\_waf](#input\_enable\_waf) | Whether to enable WAF on the ALB | `bool` | `true` | no |
+| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment (dev or prod) | `string` | n/a | yes |
 | <a name="input_error_rate_evaluation_minutes"></a> [error\_rate\_evaluation\_minutes](#input\_error\_rate\_evaluation\_minutes) | Number of 1-minute evaluation periods for the error rate alarm | `number` | `5` | no |
 | <a name="input_error_rate_threshold_pct"></a> [error\_rate\_threshold\_pct](#input\_error\_rate\_threshold\_pct) | Error rate percentage threshold that triggers the high error rate alarm | `number` | `5` | no |
 | <a name="input_gateway_cpu"></a> [gateway\_cpu](#input\_gateway\_cpu) | Total CPU units for the gateway ECS task | `number` | `1024` | no |
