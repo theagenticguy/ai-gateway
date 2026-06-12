@@ -13,4 +13,4 @@ cognito_domain_prefix    = "ai-gateway-dev"
 # NOT the recommended posture — prod.tfvars models the secure default. To make
 # dev secure too, set enable_jwt_auth = true and provide certificate_arn +
 # cognito_user_pool_id (see guards.tf precondition + docs/admin-guide/security.md).
-enable_jwt_auth          = false
+enable_jwt_auth = false
