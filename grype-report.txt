@@ -1,0 +1,5 @@
+NAME           INSTALLED   FIXED IN  TYPE  VULNERABILITY        SEVERITY  EPSS           RISK   
+busybox        1.37.0-r30            apk   CVE-2025-60876       Medium    < 0.1% (21st)  < 0.1  
+busybox-binsh  1.37.0-r30            apk   CVE-2025-60876       Medium    < 0.1% (21st)  < 0.1  
+ssl_client     1.37.0-r30            apk   CVE-2025-60876       Medium    < 0.1% (21st)  < 0.1  
+ws             8.18.3      8.20.1    npm   GHSA-58qx-3vcg-4xpx  Medium    < 0.1% (1st)   < 0.1  
