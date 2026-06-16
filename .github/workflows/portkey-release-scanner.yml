@@ -55,13 +55,25 @@ jobs:
             exit 0
           fi
 
-          # If the latest release tag is not what we're pinned to, prefer it.
+          # Prefer a release tag ONLY when it is genuinely ahead of our pin.
+          # We deliberately track a commit SHA on main that sits AHEAD of the
+          # latest tag (post-v1.15.2 security fixes), so a tag that differs from
+          # our pin is usually a DOWNGRADE, not an upgrade. The compare API tells
+          # us the direction: base=our pin, head=tag.
+          #   status "ahead"/"diverged" → tag has commits we lack → real upgrade
+          #   status "behind"/"identical" → our pin already contains the tag → skip
+          # This is the fix for the recurring false-positive downgrade PR (#193).
           if [[ -n "$LATEST_TAG" && "$LATEST_TAG" != "$PORTKEY_REF" && "v${PORTKEY_REF}" != "$LATEST_TAG" ]]; then
-            echo "Latest release tag: ${LATEST_TAG}, current pin: ${PORTKEY_REF}"
-            echo "new_ref=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
-            echo "new_version=${LATEST_TAG#v}" >> "$GITHUB_OUTPUT"
-            echo "::notice::Newer Portkey release tag found: ${LATEST_TAG}"
-            exit 0
+            CMP_STATUS=$(gh api "repos/Portkey-AI/gateway/compare/${PORTKEY_REF}...${LATEST_TAG}" --jq '.status' 2>/dev/null || true)
+            echo "Latest release tag: ${LATEST_TAG}, current pin: ${PORTKEY_REF}, compare status: ${CMP_STATUS:-unknown}"
+            if [[ "$CMP_STATUS" == "ahead" || "$CMP_STATUS" == "diverged" ]]; then
+              echo "new_ref=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+              echo "new_version=${LATEST_TAG#v}" >> "$GITHUB_OUTPUT"
+              echo "::notice::Newer Portkey release tag found (${CMP_STATUS}): ${LATEST_TAG}"
+              exit 0
+            fi
+            # behind / identical / unknown → our SHA pin already includes the tag.
+            echo "::notice::Release tag ${LATEST_TAG} is not ahead of our pin (status: ${CMP_STATUS:-unknown}) — skipping tag downgrade, checking main."
           fi
 
           # No newer tag — compare main HEAD against our pinned SHA.

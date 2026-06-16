@@ -53,23 +53,29 @@ COPY --from=source /src .
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
 #   hono               4.12.23 ← CVE-2025-62610, CVE-2026-22817/22818/29045 + later 4.12.x GHSAs
 #   @hono/node-server  1.19.14 ← CVE-2026-29087 (HIGH) + GHSA-92pp-h63x-v22m (latest stable 1.x)
+#   ws                 8.21.0  ← CVE-2026-48779 (HIGH) + CVE-2026-45736 (MEDIUM); upstream
+#                                pins ^8.18.0 (resolves 8.18.3). Also overridden below so the
+#                                @hono/node-ws@1.2.0 transitive copy (ws ^8.17.0) is forced too.
 # Transitive deps → npm overrides
 #   picomatch          2.3.2   ← CVE-2026-33671 (HIGH) + CVE-2026-33672 (MEDIUM)
 #   yaml               2.8.3   ← CVE-2026-33532 (MEDIUM)
 #   minimatch          9.0.9   ← CVE-2026-27904, CVE-2026-27903 (HIGH)
 #   brace-expansion    2.0.3   ← GHSA-f886-m6hf-6m8v (MEDIUM)
-#   tmp                0.2.6   ← CVE-2026-44705 (HIGH) path traversal
+#   tmp                0.2.7   ← CVE-2026-49982 (HIGH) + CVE-2026-44705 (HIGH) path traversal
+#   ws                 8.21.0  ← forces the @hono/node-ws transitive copy (see direct dep above)
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
   pkg.dependencies.hono = '4.12.23'; \
   pkg.dependencies['@hono/node-server'] = '1.19.14'; \
+  pkg.dependencies.ws = '8.21.0'; \
   pkg.overrides = { ...pkg.overrides, \
     picomatch: '2.3.2', \
     yaml: '2.8.3', \
     minimatch: '9.0.9', \
     'brace-expansion': '2.0.3', \
-    tmp: '0.2.6' \
+    tmp: '0.2.7', \
+    ws: '8.21.0' \
   }; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));" \
     && npm install --package-lock-only --ignore-scripts \
