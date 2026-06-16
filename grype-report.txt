@@ -1,0 +1,7 @@
+NAME           INSTALLED   FIXED IN  TYPE  VULNERABILITY        SEVERITY  EPSS         RISK  
+tmp            0.2.6       0.2.7     npm   GHSA-7c78-jf6q-g5cm  High      0.4% (35th)  0.4   
+ws             8.18.3      8.20.1    npm   GHSA-58qx-3vcg-4xpx  Medium    0.5% (37th)  0.2   
+busybox        1.37.0-r30            apk   CVE-2025-60876       Medium    0.3% (16th)  0.1   
+busybox-binsh  1.37.0-r30            apk   CVE-2025-60876       Medium    0.3% (16th)  0.1   
+ssl_client     1.37.0-r30            apk   CVE-2025-60876       Medium    0.3% (16th)  0.1   
+ws             8.18.3      8.21.0    npm   GHSA-96hv-2xvq-fx4p  High      N/A          N/A   

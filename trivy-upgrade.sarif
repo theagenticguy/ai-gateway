@@ -1,0 +1,197 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "fullName": "Trivy Vulnerability Scanner",
+          "informationUri": "https://github.com/aquasecurity/trivy",
+          "name": "Trivy",
+          "rules": [
+            {
+              "id": "CVE-2026-49982",
+              "name": "LanguageSpecificPackageVulnerability",
+              "shortDescription": {
+                "text": "tmp: Type-confusion bypass of _assertPath allows path traversal via non-string prefix/postfix/template"
+              },
+              "fullDescription": {
+                "text": "tmp is a temporary file and directory creator for node.js. In version 0.2.6, the _assertPath guard added to tmp rejects only string values that contain the substring ... It is bypassed when prefix, postfix, or template is supplied as a non-string value (Array, Buffer, or any object) whose includes('..') returns falsy but whose stringification still contains ../. The value flows through Array.prototype.join/String coercion inside _generateTmpName and path.join(tmpDir, opts.dir, name), producing a final path that escapes tmpdir and creates a file or directory at an attacker-controlled location with the host process's privileges. This affects any application that forwards untrusted request data (a common pattern is JSON body fields or qs-parsed bracket-array query strings such as ?prefix[]=...) into tmp.file, tmp.fileSync, tmp.dir, tmp.dirSync, tmp.tmpName, or tmp.tmpNameSync without explicit type coercion. This vulnerability is fixed in 0.2.7."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://avd.aquasec.com/nvd/cve-2026-49982",
+              "help": {
+                "text": "Vulnerability CVE-2026-49982\nSeverity: HIGH\nPackage: tmp\nFixed Version: 0.2.7\nLink: [CVE-2026-49982](https://avd.aquasec.com/nvd/cve-2026-49982)\ntmp is a temporary file and directory creator for node.js. In version 0.2.6, the _assertPath guard added to tmp rejects only string values that contain the substring ... It is bypassed when prefix, postfix, or template is supplied as a non-string value (Array, Buffer, or any object) whose includes('..') returns falsy but whose stringification still contains ../. The value flows through Array.prototype.join/String coercion inside _generateTmpName and path.join(tmpDir, opts.dir, name), producing a final path that escapes tmpdir and creates a file or directory at an attacker-controlled location with the host process's privileges. This affects any application that forwards untrusted request data (a common pattern is JSON body fields or qs-parsed bracket-array query strings such as ?prefix[]=...) into tmp.file, tmp.fileSync, tmp.dir, tmp.dirSync, tmp.tmpName, or tmp.tmpNameSync without explicit type coercion. This vulnerability is fixed in 0.2.7.",
+                "markdown": "**Vulnerability CVE-2026-49982**\n| Severity | Package | Fixed Version | Link |\n| --- | --- | --- | --- |\n|HIGH|tmp|0.2.7|[CVE-2026-49982](https://avd.aquasec.com/nvd/cve-2026-49982)|\n\ntmp is a temporary file and directory creator for node.js. In version 0.2.6, the _assertPath guard added to tmp rejects only string values that contain the substring ... It is bypassed when prefix, postfix, or template is supplied as a non-string value (Array, Buffer, or any object) whose includes('..') returns falsy but whose stringification still contains ../. The value flows through Array.prototype.join/String coercion inside _generateTmpName and path.join(tmpDir, opts.dir, name), producing a final path that escapes tmpdir and creates a file or directory at an attacker-controlled location with the host process's privileges. This affects any application that forwards untrusted request data (a common pattern is JSON body fields or qs-parsed bracket-array query strings such as ?prefix[]=...) into tmp.file, tmp.fileSync, tmp.dir, tmp.dirSync, tmp.tmpName, or tmp.tmpNameSync without explicit type coercion. This vulnerability is fixed in 0.2.7."
+              },
+              "properties": {
+                "cvssv3_baseScore": 8.2,
+                "cvssv3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:L",
+                "precision": "very-high",
+                "security-severity": "8.2",
+                "tags": [
+                  "vulnerability",
+                  "security",
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-48779",
+              "name": "LanguageSpecificPackageVulnerability",
+              "shortDescription": {
+                "text": "ws: Memory exhaustion DoS from tiny fragments and data chunks"
+              },
+              "fullDescription": {
+                "text": "### Impact\n\nA high volume of exceptionally small fragments and data chunks can be sent by a peer, with modest network traffic, to force the remote peer into allocating and holding structural wrappers that consume far more memory than the default documented message-size limit, leading to process termination due to OOM.\n\n### Proof of concept\n\n```js\nimport { WebSocket, WebSocketServer } from 'ws';\n\nconst wss = new WebSocketServer({ port: 0 }, function () {\n  const data = Buffer.alloc(1);\n  const options = { fin: false };\n  const { port } = wss.address();\n  const ws = new WebSocket(`ws://localhost:${port}`);\n\n  ws.on('open', function () {\n    (function send() {\n      ws.send(data, options, function (err) {\n        if (err) return;\n        send();\n      });\n    })();\n  });\n\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`client close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n\nwss.on('connection', function (ws) {\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`server close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n```\n\n### Patches\n\nThe vulnerability was fixed in ws@8.21.0 (https://github.com/websockets/ws/commit/bca91adf15677e47dbe4f959653452727be28b94) and backported to ws@7.5.11 (https://github.com/websockets/ws/commit/fd36cd864fcdf62a08273a99e19a7d975401fee8), ws@6.2.4 (https://github.com/websockets/ws/commit/86d3e8a5fb0246ed373860c5fbb0de88824a27f7), and ws@5.2.5 (https://github.com/websockets/ws/commit/b5372ac67bb97a773727b8e9f5035a8123556d53).\n\n### Workarounds\n\nIn vulnerable versions, the issue can be mitigated by lowering the value of the `maxPayload` option if possible.\n\n### Credits\n\nThe vulnerability was responsibly disclosed and fixed by [Nadav Magier](https://github.com/Nadav0077)."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://avd.aquasec.com/nvd/cve-2026-48779",
+              "help": {
+                "text": "Vulnerability CVE-2026-48779\nSeverity: HIGH\nPackage: ws\nFixed Version: 5.2.5, 6.2.4, 7.5.11, 8.21.0\nLink: [CVE-2026-48779](https://avd.aquasec.com/nvd/cve-2026-48779)\n### Impact\n\nA high volume of exceptionally small fragments and data chunks can be sent by a peer, with modest network traffic, to force the remote peer into allocating and holding structural wrappers that consume far more memory than the default documented message-size limit, leading to process termination due to OOM.\n\n### Proof of concept\n\n```js\nimport { WebSocket, WebSocketServer } from 'ws';\n\nconst wss = new WebSocketServer({ port: 0 }, function () {\n  const data = Buffer.alloc(1);\n  const options = { fin: false };\n  const { port } = wss.address();\n  const ws = new WebSocket(`ws://localhost:${port}`);\n\n  ws.on('open', function () {\n    (function send() {\n      ws.send(data, options, function (err) {\n        if (err) return;\n        send();\n      });\n    })();\n  });\n\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`client close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n\nwss.on('connection', function (ws) {\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`server close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n```\n\n### Patches\n\nThe vulnerability was fixed in ws@8.21.0 (https://github.com/websockets/ws/commit/bca91adf15677e47dbe4f959653452727be28b94) and backported to ws@7.5.11 (https://github.com/websockets/ws/commit/fd36cd864fcdf62a08273a99e19a7d975401fee8), ws@6.2.4 (https://github.com/websockets/ws/commit/86d3e8a5fb0246ed373860c5fbb0de88824a27f7), and ws@5.2.5 (https://github.com/websockets/ws/commit/b5372ac67bb97a773727b8e9f5035a8123556d53).\n\n### Workarounds\n\nIn vulnerable versions, the issue can be mitigated by lowering the value of the `maxPayload` option if possible.\n\n### Credits\n\nThe vulnerability was responsibly disclosed and fixed by [Nadav Magier](https://github.com/Nadav0077).",
+                "markdown": "**Vulnerability CVE-2026-48779**\n| Severity | Package | Fixed Version | Link |\n| --- | --- | --- | --- |\n|HIGH|ws|5.2.5, 6.2.4, 7.5.11, 8.21.0|[CVE-2026-48779](https://avd.aquasec.com/nvd/cve-2026-48779)|\n\n### Impact\n\nA high volume of exceptionally small fragments and data chunks can be sent by a peer, with modest network traffic, to force the remote peer into allocating and holding structural wrappers that consume far more memory than the default documented message-size limit, leading to process termination due to OOM.\n\n### Proof of concept\n\n```js\nimport { WebSocket, WebSocketServer } from 'ws';\n\nconst wss = new WebSocketServer({ port: 0 }, function () {\n  const data = Buffer.alloc(1);\n  const options = { fin: false };\n  const { port } = wss.address();\n  const ws = new WebSocket(`ws://localhost:${port}`);\n\n  ws.on('open', function () {\n    (function send() {\n      ws.send(data, options, function (err) {\n        if (err) return;\n        send();\n      });\n    })();\n  });\n\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`client close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n\nwss.on('connection', function (ws) {\n  ws.on('error', console.error);\n  ws.on('close', function (code, reason) {\n    console.log(`server close - code: ${code} reason: ${reason.toString()}`);\n  });\n});\n```\n\n### Patches\n\nThe vulnerability was fixed in ws@8.21.0 (https://github.com/websockets/ws/commit/bca91adf15677e47dbe4f959653452727be28b94) and backported to ws@7.5.11 (https://github.com/websockets/ws/commit/fd36cd864fcdf62a08273a99e19a7d975401fee8), ws@6.2.4 (https://github.com/websockets/ws/commit/86d3e8a5fb0246ed373860c5fbb0de88824a27f7), and ws@5.2.5 (https://github.com/websockets/ws/commit/b5372ac67bb97a773727b8e9f5035a8123556d53).\n\n### Workarounds\n\nIn vulnerable versions, the issue can be mitigated by lowering the value of the `maxPayload` option if possible.\n\n### Credits\n\nThe vulnerability was responsibly disclosed and fixed by [Nadav Magier](https://github.com/Nadav0077)."
+              },
+              "properties": {
+                "cvssv3_baseScore": 7.5,
+                "cvssv3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                "precision": "very-high",
+                "security-severity": "7.5",
+                "tags": [
+                  "vulnerability",
+                  "security",
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-45736",
+              "name": "LanguageSpecificPackageVulnerability",
+              "shortDescription": {
+                "text": "ws is an open source WebSocket client and server for Node.js. Prior to ..."
+              },
+              "fullDescription": {
+                "text": "ws is an open source WebSocket client and server for Node.js. Prior to 8.20.1, the websocket.close() implementation is vulnerable to uninitialized memory disclosure when a TypedArray is passed as the reason argument. This vulnerability is fixed in 8.20.1."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://avd.aquasec.com/nvd/cve-2026-45736",
+              "help": {
+                "text": "Vulnerability CVE-2026-45736\nSeverity: MEDIUM\nPackage: ws\nFixed Version: 8.20.1\nLink: [CVE-2026-45736](https://avd.aquasec.com/nvd/cve-2026-45736)\nws is an open source WebSocket client and server for Node.js. Prior to 8.20.1, the websocket.close() implementation is vulnerable to uninitialized memory disclosure when a TypedArray is passed as the reason argument. This vulnerability is fixed in 8.20.1.",
+                "markdown": "**Vulnerability CVE-2026-45736**\n| Severity | Package | Fixed Version | Link |\n| --- | --- | --- | --- |\n|MEDIUM|ws|8.20.1|[CVE-2026-45736](https://avd.aquasec.com/nvd/cve-2026-45736)|\n\nws is an open source WebSocket client and server for Node.js. Prior to 8.20.1, the websocket.close() implementation is vulnerable to uninitialized memory disclosure when a TypedArray is passed as the reason argument. This vulnerability is fixed in 8.20.1."
+              },
+              "properties": {
+                "cvssv3_baseScore": 4.4,
+                "cvssv3_vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:N/A:N",
+                "precision": "very-high",
+                "security-severity": "4.4",
+                "tags": [
+                  "vulnerability",
+                  "security",
+                  "MEDIUM"
+                ]
+              }
+            }
+          ],
+          "version": "0.70.0"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2026-49982",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "Package: tmp\nInstalled Version: 0.2.6\nVulnerability CVE-2026-49982\nSeverity: HIGH\nFixed Version: 0.2.7\nLink: [CVE-2026-49982](https://avd.aquasec.com/nvd/cve-2026-49982)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app/node_modules/tmp/package.json",
+                  "uriBaseId": "ROOTPATH"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1,
+                  "endLine": 1,
+                  "endColumn": 1
+                }
+              },
+              "message": {
+                "text": "app/node_modules/tmp/package.json: tmp@0.2.6"
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-48779",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Package: ws\nInstalled Version: 8.18.3\nVulnerability CVE-2026-48779\nSeverity: HIGH\nFixed Version: 5.2.5, 6.2.4, 7.5.11, 8.21.0\nLink: [CVE-2026-48779](https://avd.aquasec.com/nvd/cve-2026-48779)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app/node_modules/ws/package.json",
+                  "uriBaseId": "ROOTPATH"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1,
+                  "endLine": 1,
+                  "endColumn": 1
+                }
+              },
+              "message": {
+                "text": "app/node_modules/ws/package.json: ws@8.18.3"
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-45736",
+          "ruleIndex": 2,
+          "level": "warning",
+          "message": {
+            "text": "Package: ws\nInstalled Version: 8.18.3\nVulnerability CVE-2026-45736\nSeverity: MEDIUM\nFixed Version: 8.20.1\nLink: [CVE-2026-45736](https://avd.aquasec.com/nvd/cve-2026-45736)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app/node_modules/ws/package.json",
+                  "uriBaseId": "ROOTPATH"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1,
+                  "endLine": 1,
+                  "endColumn": 1
+                }
+              },
+              "message": {
+                "text": "app/node_modules/ws/package.json: ws@8.18.3"
+              }
+            }
+          ]
+        }
+      ],
+      "columnKind": "utf16CodeUnits",
+      "properties": {
+        "imageID": "sha256:ca03cd45b1f9a7a7f27ae0eb63075e020ba9a31ed8070416ce2ea97ee754cdf1",
+        "imageName": "ai-gateway:upgrade-scan",
+        "repoDigests": [],
+        "repoTags": [
+          "ai-gateway:upgrade-scan"
+        ]
+      }
+    }
+  ]
+}
