@@ -51,7 +51,10 @@ WORKDIR /app
 COPY --from=source /src .
 # Patch vulnerable deps at build time
 # Direct deps  → update version in dependencies (overrides can't touch direct deps)
-#   hono               4.12.23 ← CVE-2025-62610, CVE-2026-22817/22818/29045 + later 4.12.x GHSAs
+#   hono               4.12.26 ← CVE-2026-54290 (HIGH, CORS credential reflection) +
+#                                CVE-2026-54286/54287/54288/54289 (MED); fixed in 4.12.25,
+#                                4.12.26 is latest 4.12.x stable. Supersedes the earlier
+#                                4.12.23 pin (CVE-2025-62610, CVE-2026-22817/22818/29045).
 #   @hono/node-server  1.19.14 ← CVE-2026-29087 (HIGH) + GHSA-92pp-h63x-v22m (latest stable 1.x)
 #   ws                 8.21.0  ← CVE-2026-48779 (HIGH) + CVE-2026-45736 (MEDIUM); upstream
 #                                pins ^8.18.0 (resolves 8.18.3). Also overridden below so the
@@ -66,7 +69,7 @@ COPY --from=source /src .
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8')); \
-  pkg.dependencies.hono = '4.12.23'; \
+  pkg.dependencies.hono = '4.12.26'; \
   pkg.dependencies['@hono/node-server'] = '1.19.14'; \
   pkg.dependencies.ws = '8.21.0'; \
   pkg.overrides = { ...pkg.overrides, \
