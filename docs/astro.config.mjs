@@ -13,15 +13,21 @@ const SITE_BASE = "/ai-gateway";
 const DOCS_ROOT = "src/content/docs";
 
 /**
- * Integration: fix the home page's "copy as markdown" action URL.
+ * Integration: fix the home page's "copy / view as markdown" action targets.
  *
- * starlight-page-actions builds the markdown href as
- * `Astro.url.pathname.replace(/\/$/, "") + ".md"`. For every page that yields a
- * real file (`/ai-gateway/user-guide/` -> `/ai-gateway/user-guide.md`), but for
- * the site root it collapses `/ai-gateway/` -> `/ai-gateway` -> `/ai-gateway.md`,
- * which sits OUTSIDE the base path and cannot be served by a project Pages site.
- * The actual home markdown lives at `/ai-gateway/index.md`. Rewrite just that one
- * href in the built home page. Self-contained, no node_modules patch.
+ * starlight-page-actions derives the markdown path as
+ * `Astro.url.pathname.replace(/\/$/, "")` and appends `.md`. For every normal
+ * page that yields a real file (`/ai-gateway/user-guide/` -> `/ai-gateway/user-guide.md`),
+ * but for the SITE ROOT it collapses `/ai-gateway/` -> `/ai-gateway` -> `/ai-gateway.md`,
+ * which sits OUTSIDE the base path and cannot be served by a project Pages site
+ * (404). The actual home markdown lives at `/ai-gateway/index.md`.
+ *
+ * Two consumers on the home page need fixing, both rooted at that same path:
+ *   1. the "View in Markdown" dropdown link  -> `<a href="/ai-gateway.md">`
+ *   2. the "Copy Markdown" button            -> `<button data-path="/ai-gateway">`,
+ *      whose client JS does `fetch(`${dataset.path}.md`)`.
+ * Rewrite both in the built home page so each resolves to `/ai-gateway/index.md`.
+ * Self-contained; no node_modules patch.
  */
 function fixHomeMarkdownActionUrl() {
   return {
@@ -29,14 +35,23 @@ function fixHomeMarkdownActionUrl() {
     hooks: {
       "astro:build:done": async ({ dir, logger }) => {
         const home = fileURLToPath(new URL("./index.html", dir));
-        const bad = `href="${SITE_BASE}.md"`;
-        const good = `href="${SITE_BASE}/index.md"`;
+        const replacements = [
+          // dropdown link href
+          [`href="${SITE_BASE}.md"`, `href="${SITE_BASE}/index.md"`],
+          // copy-button data-path (JS appends ".md" -> /ai-gateway/index.md)
+          [`data-path="${SITE_BASE}"`, `data-path="${SITE_BASE}/index"`],
+        ];
         try {
-          const html = await readFile(home, "utf-8");
-          if (html.includes(bad)) {
-            await writeFile(home, html.split(bad).join(good));
-            logger.info(`Rewrote home markdown action: ${bad} -> ${good}`);
+          let html = await readFile(home, "utf-8");
+          let changed = false;
+          for (const [bad, good] of replacements) {
+            if (html.includes(bad)) {
+              html = html.split(bad).join(good);
+              changed = true;
+              logger.info(`Rewrote home markdown action: ${bad} -> ${good}`);
+            }
           }
+          if (changed) await writeFile(home, html);
         } catch (err) {
           logger.warn(`Could not post-process home page: ${err}`);
         }
