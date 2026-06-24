@@ -1023,3 +1023,84 @@ class TestPerTeamCacheMetrics:
         assert savings_by_team[0]["Dimensions"] == [{"Name": "Team", "Value": "data-eng"}]
         assert savings_by_team[0]["Value"] == 0.005
         assert savings_by_team[0]["Unit"] == "None"
+
+
+# ── gwcore observability (ADR-016) ───────────────────────────────────────────
+
+
+class TestObservability:
+    """The migration adds operational EMF metrics for handler outcomes. The
+    billing CloudWatch metrics and usage Firehose records are unchanged."""
+
+    @patch("cost_attribution.handler.emit_metric")
+    @patch("cost_attribution.handler.check_and_publish_alerts")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_processed_metric_emitted(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_metric: Any) -> None:
+        mock_alerts.return_value = 0
+        log_events = [
+            {
+                "id": "1",
+                "message": json.dumps(
+                    {
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                        "model": "gpt-4",
+                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                    }
+                ),
+            }
+        ]
+        handler(_make_event(log_events))
+        assert any(c.args and c.args[0] == "EventsProcessed" and c.args[1] == 1.0 for c in mock_metric.call_args_list)
+
+    @patch("cost_attribution.handler.emit_metric")
+    def test_decode_error_metric_emitted(self, mock_metric: Any) -> None:
+        result = handler({"awslogs": {"data": "not-valid-base64!!!"}})
+        assert result["statusCode"] == 400
+        assert any(
+            c.args and c.args[0] == "CostAttributionError" and c.kwargs.get("dimensions") == {"Code": "decode_error"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("cost_attribution.handler.emit_metric")
+    @patch("cost_attribution.handler.check_and_publish_alerts")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_extract_error_metric_emitted(
+        self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_metric: Any
+    ) -> None:
+        mock_alerts.return_value = 0
+        # A log event whose message is valid JSON but processing raises -> error.
+        with patch("cost_attribution.handler._extract_metrics", side_effect=RuntimeError("boom")):
+            handler(_make_event([{"id": "1", "message": "{}"}]))
+        assert any(
+            c.args and c.args[0] == "CostAttributionError" and c.kwargs.get("dimensions") == {"Code": "extract_error"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("cost_attribution.handler.emit_metric")
+    @patch("cost_attribution.handler.check_and_publish_alerts")
+    @patch("cost_attribution.handler.dynamodb")
+    @patch("cost_attribution.handler.cloudwatch")
+    def test_publish_error_metric_emitted(
+        self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_metric: Any
+    ) -> None:
+        mock_alerts.return_value = 0
+        mock_cw.put_metric_data.side_effect = Exception("cw down")
+        log_events = [
+            {
+                "id": "1",
+                "message": json.dumps(
+                    {
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                        "model": "gpt-4",
+                    }
+                ),
+            }
+        ]
+        result = handler(_make_event(log_events))
+        assert result["statusCode"] == 500
+        assert any(
+            c.args and c.args[0] == "CostAttributionError" and c.kwargs.get("dimensions") == {"Code": "publish_error"}
+            for c in mock_metric.call_args_list
+        )

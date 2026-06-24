@@ -1,11 +1,24 @@
-"""Lambda handler for AI Gateway cost attribution."""
+"""Lambda handler for AI Gateway cost attribution.
+
+A CloudWatch Logs subscription Lambda: it parses gateway access logs, derives
+per-request cost/token metrics, publishes them as *billing* CloudWatch metrics
+(rich Provider/Model/Team dimensions), accumulates usage in DynamoDB, fires SNS
+budget alerts, and writes usage records to the audit Firehose. It is event-
+driven (no HTTP, no Portkey contract) and does no authorization.
+
+Migrated onto gwcore (ADR-016) for the lightest touch: structured JSON logging
+plus operational EMF metrics for handler outcomes (decode failures, processed /
+error counts, metric-publish failures). The existing *billing* CloudWatch
+metrics and the usage Firehose records are domain telemetry with their own
+Iceberg schema and are deliberately left as-is — gwcore observability
+complements them, it does not replace them.
+"""
 
 from __future__ import annotations
 
 import base64
 import gzip
 import json
-import logging
 import os
 import uuid
 from datetime import UTC, datetime
@@ -18,24 +31,10 @@ from pydantic import ValidationError
 
 from cost_attribution.models import HandlerResponse, LogRecord, MetricResult
 from cost_attribution.pricing import get_cost, is_known_model
+from gwcore.logging import get_logger
+from gwcore.telemetry import Timer, emit_metric
 
-logger = logging.getLogger("cost_attribution")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("cost_attribution")
 
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "AIGateway")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
@@ -557,10 +556,16 @@ def _publish_audit_records(metrics: list[MetricResult]) -> None:
 
 
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
+    with Timer("RequestLatency", route="cost_attribution"):
+        return _handle(event)
+
+
+def _handle(event: dict[str, Any]) -> dict[str, Any]:
     try:
         log_data = _decode_log_data(event)
     except Exception:
         logger.exception("Failed to decode log event payload")
+        emit_metric("CostAttributionError", 1, dimensions={"Code": "decode_error"})
         return HandlerResponse(statusCode=400, error="Failed to decode log data").model_dump(exclude_none=True)
 
     log_events = log_data.get("logEvents", [])
@@ -577,11 +582,16 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             logger.exception("Failed to process log event: %s", log_event.get("id", "unknown"))
             errors += 1
 
+    emit_metric("EventsProcessed", float(len(extracted)), dimensions={"Route": "cost_attribution"})
+    if errors:
+        emit_metric("CostAttributionError", float(errors), dimensions={"Code": "extract_error"})
+
     if extracted:
         try:
             _publish_metrics(extracted)
         except Exception:
             logger.exception("Failed to publish metrics to CloudWatch")
+            emit_metric("CostAttributionError", 1, dimensions={"Code": "publish_error"})
             return HandlerResponse(
                 statusCode=500, processed=len(extracted), errors=errors, error="Failed to publish metrics"
             ).model_dump(exclude_none=True)
