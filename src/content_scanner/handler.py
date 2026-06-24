@@ -174,12 +174,25 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             if isinstance(body, str):
                 body = json.loads(body)
             request = ScanRequest.model_validate(body)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            log.warning("Invalid request body: %s", exc)
+        except json.JSONDecodeError:
+            # Never echo the exception text — a JSON error can quote the payload,
+            # which may carry PII. Log/return a generic message only.
+            log.warning("Invalid request body: malformed JSON")
             emit_metric("ContentScannerError", 1, dimensions={"Code": "bad_request"})
             return _build_portkey_response(
                 True,
-                ScanResponse(verdict="allow", error=f"Invalid request: {exc}"),
+                ScanResponse(verdict="allow", error="Invalid request: malformed JSON"),
+            )
+        except ValidationError as exc:
+            # A pydantic ValidationError repr can include the offending input
+            # value (e.g. ``content``, which may be PII). Surface only the error
+            # COUNT, never the field values.
+            count = exc.error_count()
+            log.warning("Invalid request body: %d validation error(s)", count)
+            emit_metric("ContentScannerError", 1, dimensions={"Code": "bad_request"})
+            return _build_portkey_response(
+                True,
+                ScanResponse(verdict="allow", error=f"Invalid request: {count} validation error(s)"),
             )
 
         # ── AppConfig kill-switch ─────────────────────────────────────────────

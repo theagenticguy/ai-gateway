@@ -706,6 +706,24 @@ class TestObservability:
         assert _parse_portkey(result)["verdict"] is True
         assert any(c.args and c.args[0] == "ContentScannerError" for c in mock_metric.call_args_list)
 
+    def test_validation_error_does_not_echo_payload(self) -> None:
+        # A pydantic ValidationError must not leak the offending input value
+        # (which may carry PII) into the Portkey error field. ``content`` here
+        # is the wrong type, which previously surfaced the value in the error.
+        secret = "123-45-6789 my secret prompt"
+        result = handler(_make_event({"content": {"nested": secret}, "team_id": "t1"}))
+        body = _parse_portkey(result)
+        assert body["verdict"] is True
+        assert secret not in body["error"]
+        assert "validation error" in body["error"].lower()
+
+    def test_malformed_json_does_not_echo_payload(self) -> None:
+        secret = "123-45-6789"
+        result = handler({"body": f'{{"content": "{secret}" '})  # missing closing brace
+        body = _parse_portkey(result)
+        assert body["verdict"] is True
+        assert secret not in body["error"]
+
     @patch("content_scanner.handler.emit_metric")
     @patch("content_scanner.handler._load_appconfig")
     @patch("content_scanner.handler._load_team_config")
