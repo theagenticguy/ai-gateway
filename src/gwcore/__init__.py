@@ -19,7 +19,7 @@ from gwcore.errors import (
     UnauthorizedError,
     ValidationFailedError,
 )
-from gwcore.responses import error_response, ok, page, parse_cursor
+from gwcore.responses import error_response, ok, page, parse_cursor, request_body
 
 __all__ = [
     "ConflictError",
@@ -35,5 +35,6 @@ __all__ = [
     "ok",
     "page",
     "parse_cursor",
+    "request_body",
     "require",
 ]

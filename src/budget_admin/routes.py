@@ -25,6 +25,7 @@ from budget_admin.models import (
     UsageResponse,
 )
 from gwcore import audit, auth, errors, ok, page, parse_cursor
+from gwcore.responses import request_body
 
 logger = logging.getLogger("budget_admin.routes")
 
@@ -139,7 +140,7 @@ def get_budget(budget_id: str) -> dict[str, Any]:
 
 def create_budget(event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """Create a new budget. Fails if a budget with the same ID already exists."""
-    raw_body = event.get("body") or "{}"
+    raw_body = request_body(event)
     try:
         request = CreateBudgetRequest.model_validate_json(raw_body)
     except ValidationError as e:
@@ -185,7 +186,7 @@ def create_budget(event: dict[str, Any], principal: auth.Principal) -> dict[str,
 
 def update_budget(budget_id: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """Update a budget with partial fields via UpdateItem expression builder."""
-    raw_body = event.get("body") or "{}"
+    raw_body = request_body(event)
     try:
         request = UpdateBudgetRequest.model_validate_json(raw_body)
     except ValidationError as e:

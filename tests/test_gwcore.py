@@ -101,6 +101,26 @@ def test_parse_cursor_malformed_raises() -> None:
         responses.parse_cursor(bad)
 
 
+def test_parse_cursor_tolerates_stripped_padding() -> None:
+    key = {"pk": "BUDGET#ml", "sk": "CONFIG"}
+    cursor = responses.encode_cursor(key)
+    assert cursor is not None
+    # A client that strips "=" padding (common in URLs) must still round-trip.
+    assert responses.parse_cursor(cursor.rstrip("=")) == key
+
+
+def test_request_body_passthrough() -> None:
+    assert responses.request_body({"body": '{"a":1}'}) == '{"a":1}'
+    assert responses.request_body({}) == "{}"
+
+
+def test_request_body_decodes_base64() -> None:
+    raw = '{"scope":"team"}'
+    encoded = base64.b64encode(raw.encode()).decode()
+    event = {"body": encoded, "isBase64Encoded": True}
+    assert responses.request_body(event) == raw
+
+
 def test_page_response() -> None:
     resp = responses.page([{"id": 1}, {"id": 2}], {"pk": "X"})
     body = json.loads(resp["body"])

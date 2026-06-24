@@ -100,7 +100,10 @@ def parse_cursor(cursor: str | None) -> dict[str, Any] | None:
     if not cursor:
         return None
     try:
-        raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        # Tolerate unpadded cursors (clients commonly strip "=" for URLs/queries).
+        token = cursor.strip()
+        token += "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(token.encode("ascii"))
         decoded: Any = json.loads(raw)
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
         msg = "Malformed pagination cursor"
@@ -109,6 +112,22 @@ def parse_cursor(cursor: str | None) -> dict[str, Any] | None:
         msg = "Malformed pagination cursor"
         raise ValidationFailedError(msg, details={"cursor": "invalid"})
     return decoded
+
+
+def request_body(event: dict[str, Any]) -> str:
+    """Return the request body, decoding base64 when ``isBase64Encoded`` is set.
+
+    API Gateway / Function URL events may base64-encode the body (binary
+    content types, some proxy configs). Handlers should read the body through
+    this so a base64 body does not become a spurious 400.
+    """
+    body = event.get("body") or "{}"
+    if event.get("isBase64Encoded") and isinstance(body, str):
+        try:
+            return base64.b64decode(body).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return body  # let the downstream JSON parse surface the real error
+    return body
 
 
 def page(

@@ -17,6 +17,7 @@ with no round-trip to this service.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from typing import Any
@@ -151,18 +152,28 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         rejection_code = exc.code
         log.info("token exchange rejected: %s", rejection_code)  # nosemgrep: python-logger-credential-disclosure
         if exc.status in {401, 403}:
+            # Derive actor + requested audience when still possible (e.g. the
+            # post-auth no-team 403), so the denial record is actionable.
+            actor = "unknown"
+            audience = "?"
+            with contextlib.suppress(errors.ControlPlaneError):
+                actor = auth.build_principal(event).sub or "unknown"
+            with contextlib.suppress(ValidationError, ValueError):
+                audience = TokenExchangeRequest.model_validate_json(event.get("body") or "{}").audience.value
             audit.emit(
                 audit.event_from_request(
                     event,
                     action="token.exchange",
-                    actor="unknown",
-                    resource="audience:?",
+                    actor=actor,
+                    resource=f"audience:{audience}",
                     decision="deny",
                     status=exc.status,
                     detail=exc.code,
                 )
             )
         emit_metric("TokenExchangeError", 1, dimensions={"Code": exc.code})
+        if exc.status in {401, 403}:
+            emit_metric("AuthzDenied", 1, dimensions={"Route": "auth_token"})
         return responses.error_response(exc)
     except Exception:
         log.exception("Unhandled error in token exchange")

@@ -19,6 +19,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from typing import Any
@@ -33,7 +34,7 @@ from budget_admin.routes import (
     list_budgets,
     update_budget,
 )
-from gwcore import auth, errors, ok, responses
+from gwcore import audit, auth, errors, ok, responses
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
 
@@ -136,6 +137,22 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         if exc.status in {401, 403}:
             log.info("budget_admin authz rejected: %s %s (%s)", method, path, exc.code)
             emit_metric("AuthzDenied", 1, dimensions={"Route": "budget_admin"})
+            # Audit the denial too (ADR-016: record allow AND deny). Actor is
+            # the token sub when derivable, else "unknown" for a bad/absent token.
+            actor = "unknown"
+            with contextlib.suppress(errors.ControlPlaneError):
+                actor = auth.build_principal(event).sub or "unknown"
+            audit.emit(
+                audit.event_from_request(
+                    event,
+                    action="budget.access",
+                    actor=actor,
+                    resource=f"{method} {path}",
+                    decision="deny",
+                    status=exc.status,
+                    detail=exc.code,
+                )
+            )
         return responses.error_response(exc)
     except Exception:
         log.exception("Unhandled error in budget_admin: %s %s", method, path)

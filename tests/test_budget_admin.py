@@ -102,6 +102,16 @@ class TestAuthorization:
         result = handler(_make_event(method="GET", path="/budgets", authorization=f"Bearer {token}"))
         assert result["statusCode"] == 200
 
+    @patch("budget_admin.handler.audit.emit")
+    def test_denial_emits_audit_event(self, mock_audit: Any) -> None:
+        # A 403 (non-admin) must be audited as a deny decision (ADR-016).
+        result = handler(_make_event(method="GET", path="/budgets", authorization=f"Bearer {_non_admin_jwt()}"))
+        assert result["statusCode"] == 403
+        mock_audit.assert_called_once()
+        ev = mock_audit.call_args[0][0]
+        assert ev.decision == "deny"
+        assert ev.actor == "regular-user"  # actor derived from the token, not "unknown"
+
 
 # ── List budgets (gwcore cursor pagination) ────────────────────────────────────
 

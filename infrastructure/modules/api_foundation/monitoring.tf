@@ -45,19 +45,21 @@ resource "aws_cloudwatch_metric_alarm" "control_latency" {
   alarm_actions = var.alarm_sns_topic_arn == "" ? [] : [var.alarm_sns_topic_arn]
 }
 
-# Authorization-denial surge — a spike of 403s can signal a misconfigured
-# client or an attack. Backed by the gwcore EMF TokenExchangeError metric.
+# Authorization-denial surge — a spike of 401/403 can signal a misconfigured
+# client or an attack. Scoped to the AuthzDenied metric (emitted only on
+# 401/403), NOT all TokenExchangeError codes, so validation/upstream errors
+# don't trip it.
 resource "aws_cloudwatch_metric_alarm" "authz_denials" {
   count               = var.enable_api_foundation ? 1 : 0
   alarm_name          = "${local.name}-authz-denials"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
-  metric_name         = "TokenExchangeError"
+  metric_name         = "AuthzDenied"
   namespace           = "AIGateway/ControlPlane"
   period              = 300
   statistic           = "Sum"
   threshold           = var.alarm_authz_denial_threshold
-  alarm_description   = "Control-plane authorization denials over threshold"
+  alarm_description   = "Control-plane authorization denials (401/403) over threshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_sns_topic_arn == "" ? [] : [var.alarm_sns_topic_arn]
 }

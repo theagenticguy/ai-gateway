@@ -70,10 +70,16 @@ class TTLCache[T]:
             self._store.clear()
 
     def read_through(self, key: str, loader: Callable[[], T], *, ttl: float | None = None) -> T:
-        """Return the cached value, or call ``loader`` once, cache, and return it.
+        """Return the cached value, or call ``loader`` on a miss, cache, and return it.
 
-        The loader runs only on a miss. If the loader raises, nothing is cached
-        and the exception propagates (callers map it to an ``UpstreamError``).
+        The lock is intentionally NOT held across ``loader`` (it may do network
+        I/O — config/JWKS fetch). Under concurrent misses for the same key the
+        loader can therefore run more than once; the last write wins and the
+        cache stays consistent. This is acceptable because the loaders here are
+        idempotent reads and Lambda is single-threaded per invocation (the only
+        concurrency is the module-scoped cache across warm invocations). If the
+        loader raises, nothing is cached and the exception propagates (callers
+        map it to an ``UpstreamError``).
         """
         cached = self.get(key)
         if cached is not None:
