@@ -586,6 +586,23 @@ class TestUnsupportedMethod:
         assert result["statusCode"] == 404
 
 
+class TestHandlerInfra:
+    """Health route and the catch-all (non-ControlPlaneError → 500)."""
+
+    def test_health_check(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/health"}}, "rawPath": "/health"}
+        result = handler(event)
+        assert result["statusCode"] == 200
+        assert _parse_body(result)["status"] == "healthy"
+
+    @patch("pricing_admin.handler._list_prices")
+    def test_unhandled_error_returns_500(self, mock_list: Any) -> None:
+        mock_list.side_effect = RuntimeError("boom")
+        result = handler(_make_event(method="GET", path="/pricing"))
+        assert result["statusCode"] == 500
+        assert _parse_body(result)["error"]["code"] == "internal_error"
+
+
 # -- Response format -----------------------------------------------------------
 
 

@@ -578,6 +578,102 @@ class TestHandlerMethodNotAllowed:
         assert result["statusCode"] == 404
 
 
+def _client_error(op: str = "GetItem") -> ClientError:
+    return ClientError({"Error": {"Code": "InternalServerError", "Message": "ddb down"}}, op)
+
+
+class TestHandlerStorageErrors:
+    """DynamoDB failures map to UpstreamError (502); the health route and the
+    outer catch-all (500) round out the error-branch coverage."""
+
+    def test_health_check(self) -> None:
+        event = _make_function_url_event("GET", "/health")
+        result = handler(event)
+        assert result["statusCode"] == 200
+        assert json.loads(result["body"])["status"] == "healthy"
+
+    @patch("routing_config.handler._get_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_get_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_custom.side_effect = _client_error()
+        result = handler(_make_function_url_event("GET", "/routing/configs/x"))
+        assert result["statusCode"] == 502
+        assert json.loads(result["body"])["error"]["code"] == "upstream_error"
+
+    @patch("routing_config.handler._get_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_create_conflict_check_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_custom.side_effect = _client_error()
+        body = {"name": "c", "strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
+        result = handler(_make_function_url_event("POST", "/routing/configs", body))
+        assert result["statusCode"] == 502
+
+    @patch("routing_config.handler._put_custom_config")
+    @patch("routing_config.handler._get_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_create_put_storage_error(self, mock_builtin: Any, mock_custom: Any, mock_put: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_custom.return_value = None
+        mock_put.side_effect = _client_error("PutItem")
+        body = {"name": "c", "strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
+        result = handler(_make_function_url_event("POST", "/routing/configs", body))
+        assert result["statusCode"] == 502
+
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_update_invalid_config(self, mock_builtin: Any) -> None:
+        mock_builtin.return_value = {}
+        body = {"strategy": {"mode": "loadbalance"}, "targets": []}
+        result = handler(_make_function_url_event("PUT", "/routing/configs/x", body))
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["error"]["code"] == "validation_failed"
+
+    @patch("routing_config.handler._get_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_update_existence_check_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_custom.side_effect = _client_error()
+        body = {"strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
+        result = handler(_make_function_url_event("PUT", "/routing/configs/x", body))
+        assert result["statusCode"] == 502
+
+    @patch("routing_config.handler._put_custom_config")
+    @patch("routing_config.handler._get_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_update_put_storage_error(self, mock_builtin: Any, mock_custom: Any, mock_put: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_custom.return_value = {"strategy": {"mode": "fallback"}}
+        mock_put.side_effect = _client_error("PutItem")
+        body = {"strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
+        result = handler(_make_function_url_event("PUT", "/routing/configs/x", body))
+        assert result["statusCode"] == 502
+
+    @patch("routing_config.handler._delete_custom_config")
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_delete_storage_error(self, mock_builtin: Any, mock_delete: Any) -> None:
+        mock_builtin.return_value = {}
+        mock_delete.side_effect = _client_error("DeleteItem")
+        result = handler(_make_function_url_event("DELETE", "/routing/configs/x"))
+        assert result["statusCode"] == 502
+
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_create_body_not_object(self, mock_builtin: Any) -> None:
+        mock_builtin.return_value = {}
+        event = _make_function_url_event("POST", "/routing/configs")
+        event["body"] = "[1, 2, 3]"
+        result = handler(event)
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["error"]["code"] == "validation_failed"
+
+    @patch("routing_config.handler._get_builtin_configs")
+    def test_unhandled_error_returns_500(self, mock_builtin: Any) -> None:
+        mock_builtin.side_effect = RuntimeError("boom")
+        result = handler(_make_function_url_event("GET", "/routing/configs"))
+        assert result["statusCode"] == 500
+        assert json.loads(result["body"])["error"]["code"] == "internal_error"
+
+
 # -- Property-based tests ------------------------------------------------------
 
 

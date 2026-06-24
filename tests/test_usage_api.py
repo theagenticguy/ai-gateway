@@ -1026,3 +1026,20 @@ class TestEnvConfiguration:
         from usage_api.handler import BUDGETS_TABLE
 
         assert isinstance(BUDGETS_TABLE, str)
+
+
+class TestHandlerInfra:
+    """Health route and the catch-all (non-ClientError → 500)."""
+
+    def test_health_check(self) -> None:
+        event = {"rawPath": "/health", "requestContext": {"http": {"method": "GET", "path": "/health"}}}
+        result = handler(event)
+        assert result["statusCode"] == 200
+        assert _parse_body(result)["status"] == "healthy"
+
+    @patch("usage_api.handler.dynamodb")
+    def test_unhandled_error_returns_500(self, mock_ddb: Any) -> None:
+        mock_ddb.Table.side_effect = RuntimeError("boom")
+        result = handler(_make_event(team="test-team"))
+        assert result["statusCode"] == 500
+        assert _err(result)["code"] == "internal_error"
