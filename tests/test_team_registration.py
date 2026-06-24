@@ -16,12 +16,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError
 
-from team_registration.auth import (
-    REQUIRED_SCOPE,
-    decode_jwt_claims,
-    extract_bearer_token,
-    validate_admin_scope,
-)
 from team_registration.handler import handler
 from team_registration.models import (
     TIER_BUDGET_DEFAULTS,
@@ -45,7 +39,8 @@ def _make_jwt(claims: dict[str, Any]) -> str:
     return f"{header}.{payload}.{signature}"
 
 
-ADMIN_JWT = _make_jwt({"scope": REQUIRED_SCOPE, "sub": "admin-user"})
+ADMIN_SCOPE = "https://gateway.internal/admin"
+ADMIN_JWT = _make_jwt({"scope": ADMIN_SCOPE, "sub": "admin-user"})
 NON_ADMIN_JWT = _make_jwt({"scope": "https://gateway.internal/invoke", "sub": "regular-user"})
 
 SAMPLE_TEAM_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -115,59 +110,43 @@ def _make_team_item(
     }
 
 
-# ── Auth tests ───────────────────────────────────────────────────────────────
+# ── Authorization (now enforced in-handler via gwcore, ADR-016) ────────────────
 
 
-class TestAuth:
-    def test_extract_bearer_token_valid(self) -> None:
-        event = {"headers": {"authorization": "Bearer abc123"}}
-        assert extract_bearer_token(event) == "abc123"
+class TestAuthorization:
+    def test_health_no_auth(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/health"}}, "headers": {}}
+        result = handler(event)
+        assert result["statusCode"] == 200
 
-    def test_extract_bearer_token_missing(self) -> None:
-        event = {"headers": {}}
-        assert extract_bearer_token(event) is None
+    def test_missing_auth_401(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/teams"}}, "headers": {}, "body": ""}
+        result = handler(event)
+        assert result["statusCode"] == 401
+        assert json.loads(result["body"])["error"]["code"] == "unauthorized"
 
-    def test_extract_bearer_token_no_bearer_prefix(self) -> None:
-        event = {"headers": {"authorization": "Basic abc123"}}
-        assert extract_bearer_token(event) is None
+    def test_non_admin_403(self) -> None:
+        result = handler(_make_event("GET", "/teams", token=NON_ADMIN_JWT))
+        assert result["statusCode"] == 403
+        assert json.loads(result["body"])["error"]["code"] == "forbidden"
 
-    def test_decode_jwt_claims_valid(self) -> None:
-        token = _make_jwt({"sub": "test", "scope": "admin"})
-        claims = decode_jwt_claims(token)
-        assert claims["sub"] == "test"
-
-    def test_decode_jwt_claims_invalid(self) -> None:
-        assert decode_jwt_claims("garbage") == {}
-
-    def test_validate_admin_scope_success(self) -> None:
-        event = _make_event("GET", "/teams")
-        assert validate_admin_scope(event) is None
-
-    def test_validate_admin_scope_missing_header(self) -> None:
-        event = {"headers": {}, "requestContext": {"http": {"method": "GET", "path": "/teams"}}}
-        result = validate_admin_scope(event)
-        assert result is not None
-        assert "Missing" in result
-
-    def test_validate_admin_scope_wrong_scope(self) -> None:
-        event = _make_event("GET", "/teams", token=NON_ADMIN_JWT)
-        result = validate_admin_scope(event)
-        assert result is not None
-        assert "Missing required scope" in result
-
-    def test_handler_delegates_auth_to_api_gateway(self) -> None:
-        """Auth is now enforced at the API Gateway Cognito authorizer (ADR-014).
-
-        The handler no longer checks scopes itself — a non-admin JWT that
-        reaches the handler means API Gateway already authorized the request.
-        """
-        event = _make_event("GET", "/teams", token=NON_ADMIN_JWT)
+    def test_legacy_admin_scope_accepted(self) -> None:
+        # The OTHER half of the divergent-scope bug: a token carrying the legacy
+        # bare "admin" scope is now accepted by gwcore's alias.
+        token = _make_jwt({"scope": "admin openid", "sub": "legacy-admin"})
         with patch("team_registration.routes.dynamodb") as mock_dynamodb:
             mock_table = MagicMock()
             mock_table.scan.return_value = {"Items": []}
             mock_dynamodb.Table.return_value = mock_table
-            result = handler(event)
-            assert result["statusCode"] == 200
+            result = handler(_make_event("GET", "/teams", token=token))
+        assert result["statusCode"] == 200
+
+    @patch("team_registration.handler.audit.emit")
+    def test_denial_audited(self, mock_audit: MagicMock) -> None:
+        result = handler(_make_event("GET", "/teams", token=NON_ADMIN_JWT))
+        assert result["statusCode"] == 403
+        mock_audit.assert_called_once()
+        assert mock_audit.call_args[0][0].decision == "deny"
 
 
 # ── Registration tests ───────────────────────────────────────────────────────
@@ -223,7 +202,7 @@ class TestRegisterTeam:
         body = json.loads(result["body"])
 
         assert result["statusCode"] == 409
-        assert "already exists" in body["error"]
+        assert "already exists" in body["error"]["message"]
 
     def test_invalid_tier(self) -> None:
         event = _make_event(
@@ -289,8 +268,8 @@ class TestRegisterTeam:
         result = handler(event)
         body = json.loads(result["body"])
 
-        assert result["statusCode"] == 500
-        assert "Cognito error" in body["error"]
+        assert result["statusCode"] == 502  # gwcore maps a downstream failure to UpstreamError
+        assert body["error"]["code"] == "upstream_error"
 
     @patch("team_registration.routes.dynamodb")
     @patch("team_registration.routes.cognito")
