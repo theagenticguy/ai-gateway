@@ -1,7 +1,10 @@
-"""Route implementations for the team registration API.
+"""Route implementations for the team registration API (migrated onto gwcore).
 
-Each function corresponds to an API route and encapsulates all
-Cognito / DynamoDB interaction for that operation.
+Each function encapsulates the Cognito / DynamoDB interaction for one route.
+Responses use the gwcore envelope; failures raise typed ``gwcore.errors``
+(mapped to HTTP by the handler); the mutating routes (register / rotate /
+deactivate) emit a ``gwcore.audit`` event since each creates or destroys a
+Cognito app client.
 """
 
 from __future__ import annotations
@@ -15,7 +18,10 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+from pydantic import ValidationError
 
+from gwcore import audit, auth, errors, ok
+from gwcore.responses import request_body
 from team_registration.models import (
     TIER_BUDGET_DEFAULTS,
     CredentialsResponse,
@@ -59,13 +65,16 @@ def _current_period() -> str:
 
 
 def _client_error_code(e: ClientError) -> str:
-    """Safely extract the error code from a ClientError."""
     return str(e.response.get("Error", {}).get("Code", ""))
 
 
 def _client_error_message(e: ClientError) -> str:
-    """Safely extract the error message from a ClientError."""
     return str(e.response.get("Error", {}).get("Message", "Unknown error"))
+
+
+def _audit(event: dict[str, Any], principal: auth.Principal, **kw: Any) -> None:
+    """Emit a control-plane audit event for a team mutation."""
+    audit.emit(audit.event_from_request(event, actor=principal.sub, team=principal.team, **kw))
 
 
 def _team_exists_by_name(team_name: str) -> bool:
@@ -80,46 +89,48 @@ def _team_exists_by_name(team_name: str) -> bool:
     return len(resp.get("Items", [])) > 0
 
 
+def _create_invoke_client(client_name: str) -> dict[str, Any]:
+    """Create a Cognito app client with the client_credentials/invoke grant."""
+    resp = cognito.create_user_pool_client(
+        UserPoolId=USER_POOL_ID,
+        ClientName=client_name,
+        GenerateSecret=True,
+        AllowedOAuthFlowsUserPoolClient=True,
+        AllowedOAuthFlows=["client_credentials"],
+        AllowedOAuthScopes=[f"{RESOURCE_SERVER_IDENTIFIER}/invoke"],
+        AccessTokenValidity=1,
+        TokenValidityUnits={"AccessToken": "hours"},
+    )
+    return resp["UserPoolClient"]
+
+
 # ── POST /teams ──────────────────────────────────────────────────────────────
 
 
-def register_team(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def register_team(event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """Register a new team: create Cognito client, store metadata, seed budget."""
-    request = RegisterTeamRequest.model_validate(body)
+    try:
+        request = RegisterTeamRequest.model_validate_json(request_body(event))
+    except ValidationError as e:
+        raise errors.ValidationFailedError("Invalid team registration", details={"errors": e.errors()}) from e
 
-    # Duplicate check
     if _team_exists_by_name(request.team_name):
-        return {"error": f"Team '{request.team_name}' already exists"}, 409
+        raise errors.ConflictError(f"Team '{request.team_name}' already exists")
 
     team_id = str(uuid.uuid4())
     now = _now_iso()
-
-    # 1. Create Cognito app client
     client_name = f"{PROJECT_NAME}-{request.team_name}-{ENVIRONMENT}"
-    allowed_scopes = [f"{RESOURCE_SERVER_IDENTIFIER}/invoke"]
 
     try:
-        cognito_resp = cognito.create_user_pool_client(
-            UserPoolId=USER_POOL_ID,
-            ClientName=client_name,
-            GenerateSecret=True,
-            AllowedOAuthFlowsUserPoolClient=True,
-            AllowedOAuthFlows=["client_credentials"],
-            AllowedOAuthScopes=allowed_scopes,
-            AccessTokenValidity=1,
-            TokenValidityUnits={"AccessToken": "hours"},
-        )
+        client_data = _create_invoke_client(client_name)
     except ClientError as e:
         logger.exception("Failed to create Cognito client for team=%s", request.team_name)
-        return {"error": f"Cognito error: {_client_error_message(e)}"}, 500
+        raise errors.UpstreamError("Cognito error", details={"message": _client_error_message(e)}) from e
 
-    client_data = cognito_resp["UserPoolClient"]
     client_id = client_data["ClientId"]
     client_secret = client_data.get("ClientSecret", "")
 
-    # 2. Store team metadata in DynamoDB
-    teams_table = dynamodb.Table(TEAMS_TABLE)
-    teams_table.put_item(
+    dynamodb.Table(TEAMS_TABLE).put_item(
         Item={
             "team_id": team_id,
             "team_name": request.team_name,
@@ -134,10 +145,8 @@ def register_team(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
         }
     )
 
-    # 3. Create default budget record
     budget = TIER_BUDGET_DEFAULTS.get(request.tier.value, 1000)
-    budgets_table = dynamodb.Table(BUDGETS_TABLE)
-    budgets_table.put_item(
+    dynamodb.Table(BUDGETS_TABLE).put_item(
         Item={
             "pk": f"BUDGET#{request.team_name}",
             "sk": "CONFIG",
@@ -152,41 +161,45 @@ def register_team(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
     )
 
     logger.info("Registered team=%s id=%s tier=%s", request.team_name, team_id, request.tier.value)
-
-    credentials = CredentialsResponse(
-        client_id=client_id,
-        client_secret=client_secret,
-        token_endpoint=TOKEN_ENDPOINT,
+    _audit(
+        event,
+        principal,
+        action="team.create",
+        resource=team_id,
+        after={"team_name": request.team_name, "tier": request.tier.value, "client_id": client_id},
+        status=201,
     )
-    result = {
-        "team_id": team_id,
-        "team_name": request.team_name,
-        "tier": request.tier.value,
-        "credentials": credentials.model_dump(),
-        "setup_instructions": {
-            "step_1": f"Export CLIENT_ID={client_id} and CLIENT_SECRET=<secret>",
-            "step_2": (
-                f"POST {TOKEN_ENDPOINT} with grant_type=client_credentials, scope={RESOURCE_SERVER_IDENTIFIER}/invoke"
-            ),
-            "step_3": "Use the access_token in the Authorization: Bearer header for gateway requests.",
+
+    credentials = CredentialsResponse(client_id=client_id, client_secret=client_secret, token_endpoint=TOKEN_ENDPOINT)
+    return ok(
+        {
+            "team_id": team_id,
+            "team_name": request.team_name,
+            "tier": request.tier.value,
+            "credentials": credentials.model_dump(),
+            "setup_instructions": {
+                "step_1": f"Export CLIENT_ID={client_id} and CLIENT_SECRET=<secret>",
+                "step_2": (
+                    f"POST {TOKEN_ENDPOINT} with grant_type=client_credentials, "
+                    f"scope={RESOURCE_SERVER_IDENTIFIER}/invoke"
+                ),
+                "step_3": "Use the access_token in the Authorization: Bearer header for gateway requests.",
+            },
         },
-    }
-    return result, 201
+        status=201,
+    )
 
 
 # ── GET /teams ───────────────────────────────────────────────────────────────
 
 
-def list_teams() -> tuple[dict[str, Any], int]:
+def list_teams() -> dict[str, Any]:
     """Return all active teams."""
-    table = dynamodb.Table(TEAMS_TABLE)
-    resp = table.scan(
+    resp = dynamodb.Table(TEAMS_TABLE).scan(
         FilterExpression="attribute_not_exists(#s) OR #s = :active",
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":active": TeamStatus.ACTIVE},
     )
-    items = resp.get("Items", [])
-
     teams = [
         TeamResponse(
             team_id=item["team_id"],
@@ -199,26 +212,22 @@ def list_teams() -> tuple[dict[str, Any], int]:
             created_at=item.get("created_at", ""),
             updated_at=item.get("updated_at", ""),
         )
-        for item in items
+        for item in resp.get("Items", [])
     ]
-
-    return TeamListResponse(teams=teams, count=len(teams)).model_dump(), 200
+    return ok(TeamListResponse(teams=teams, count=len(teams)).model_dump())
 
 
 # ── GET /teams/{id} ──────────────────────────────────────────────────────────
 
 
-def get_team(team_id: str) -> tuple[dict[str, Any], int]:
-    """Get team details, Cognito status, current usage, and budget."""
-    table = dynamodb.Table(TEAMS_TABLE)
-    resp = table.get_item(Key={"team_id": team_id})
+def get_team(team_id: str) -> dict[str, Any]:
+    """Get team details, current usage, and budget."""
+    resp = dynamodb.Table(TEAMS_TABLE).get_item(Key={"team_id": team_id})
     item = resp.get("Item")
     if not item:
-        return {"error": f"Team {team_id} not found"}, 404
+        raise errors.NotFoundError(f"Team {team_id} not found")
 
-    # Fetch usage
     usage_summary = _get_usage_summary(item.get("team_name", ""), item.get("tier", "standard"))
-
     team = TeamResponse(
         team_id=item["team_id"],
         team_name=item["team_name"],
@@ -231,7 +240,7 @@ def get_team(team_id: str) -> tuple[dict[str, Any], int]:
         updated_at=item.get("updated_at", ""),
         usage_summary=usage_summary,
     )
-    return team.model_dump(), 200
+    return ok(team.model_dump())
 
 
 def _get_usage_summary(team_name: str, tier: str) -> UsageSummary:
@@ -239,21 +248,19 @@ def _get_usage_summary(team_name: str, tier: str) -> UsageSummary:
     period = _current_period()
     budget = float(TIER_BUDGET_DEFAULTS.get(tier, 1000))
 
-    # Try to get custom budget
     try:
-        budgets_table = dynamodb.Table(BUDGETS_TABLE)
-        budget_resp = budgets_table.get_item(Key={"pk": f"BUDGET#{team_name}", "sk": "CONFIG"})
+        budget_resp = dynamodb.Table(BUDGETS_TABLE).get_item(Key={"pk": f"BUDGET#{team_name}", "sk": "CONFIG"})
         budget_item = budget_resp.get("Item")
         if budget_item:
             budget = float(Decimal(str(budget_item.get("monthly_budget_usd", budget))))
     except (ClientError, InvalidOperation):
         logger.debug("Could not fetch budget for team=%s, using tier default", team_name)
 
-    # Get current spend
     total_cost = 0.0
     try:
-        usage_table = dynamodb.Table(USAGE_TABLE)
-        usage_resp = usage_table.get_item(Key={"pk": f"USAGE#TEAM#{team_name}", "sk": f"PERIOD#{period}"})
+        usage_resp = dynamodb.Table(USAGE_TABLE).get_item(
+            Key={"pk": f"USAGE#TEAM#{team_name}", "sk": f"PERIOD#{period}"}
+        )
         usage_item = usage_resp.get("Item")
         if usage_item:
             total_cost = float(Decimal(str(usage_item.get("total_cost_usd", "0"))))
@@ -261,7 +268,6 @@ def _get_usage_summary(team_name: str, tier: str) -> UsageSummary:
         logger.debug("Could not fetch usage for team=%s", team_name)
 
     utilization = (total_cost / budget * 100) if budget > 0 else 0.0
-
     return UsageSummary(
         period=period,
         total_cost_usd=total_cost,
@@ -273,129 +279,92 @@ def _get_usage_summary(team_name: str, tier: str) -> UsageSummary:
 # ── POST /teams/{id}/rotate ─────────────────────────────────────────────────
 
 
-def rotate_credentials(team_id: str) -> tuple[dict[str, Any], int]:
-    """Rotate a team's Cognito client credentials.
-
-    1. Look up team record to get the old client_id.
-    2. Delete the old Cognito user pool client.
-    3. Create a new client with the same settings.
-    4. Update DynamoDB with the new client_id.
-    5. Return the new credentials.
-    """
+def rotate_credentials(team_id: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """Rotate a team's Cognito client credentials (delete old client, create new)."""
     table = dynamodb.Table(TEAMS_TABLE)
-    resp = table.get_item(Key={"team_id": team_id})
-    item = resp.get("Item")
+    item = table.get_item(Key={"team_id": team_id}).get("Item")
     if not item:
-        return {"error": f"Team {team_id} not found"}, 404
-
+        raise errors.NotFoundError(f"Team {team_id} not found")
     if item.get("status") == TeamStatus.INACTIVE:
-        return {"error": "Cannot rotate credentials for an inactive team"}, 400
+        raise errors.ValidationFailedError("Cannot rotate credentials for an inactive team")
 
     old_client_id = item.get("client_id", "")
     team_name = item["team_name"]
 
-    # Delete old Cognito client
     if old_client_id:
         try:
-            cognito.delete_user_pool_client(
-                UserPoolId=USER_POOL_ID,
-                ClientId=old_client_id,
-            )
+            cognito.delete_user_pool_client(UserPoolId=USER_POOL_ID, ClientId=old_client_id)
         except ClientError as e:
-            # If already deleted, proceed
             if _client_error_code(e) != "ResourceNotFoundException":
                 logger.exception("Failed to delete old Cognito client for team=%s", team_name)
-                return {"error": f"Failed to delete old client: {_client_error_message(e)}"}, 500
+                raise errors.UpstreamError(
+                    "Failed to delete old client", details={"message": _client_error_message(e)}
+                ) from e
 
-    # Create new Cognito client
     client_name = item.get("cognito_client_name", f"{PROJECT_NAME}-{team_name}-{ENVIRONMENT}")
-    allowed_scopes = [f"{RESOURCE_SERVER_IDENTIFIER}/invoke"]
-
     try:
-        cognito_resp = cognito.create_user_pool_client(
-            UserPoolId=USER_POOL_ID,
-            ClientName=client_name,
-            GenerateSecret=True,
-            AllowedOAuthFlowsUserPoolClient=True,
-            AllowedOAuthFlows=["client_credentials"],
-            AllowedOAuthScopes=allowed_scopes,
-            AccessTokenValidity=1,
-            TokenValidityUnits={"AccessToken": "hours"},
-        )
+        new_client = _create_invoke_client(client_name)
     except ClientError as e:
         logger.exception("Failed to create new Cognito client for team=%s", team_name)
-        return {"error": f"Cognito error: {_client_error_message(e)}"}, 500
+        raise errors.UpstreamError("Cognito error", details={"message": _client_error_message(e)}) from e
 
-    new_client = cognito_resp["UserPoolClient"]
     new_client_id = new_client["ClientId"]
     new_client_secret = new_client.get("ClientSecret", "")
 
-    # Update DynamoDB
-    now = _now_iso()
     table.update_item(
         Key={"team_id": team_id},
         UpdateExpression="SET client_id = :cid, updated_at = :now",
-        ExpressionAttributeValues={":cid": new_client_id, ":now": now},
+        ExpressionAttributeValues={":cid": new_client_id, ":now": _now_iso()},
     )
 
-    # nosemgrep: python.lang.security.audit.logging.logger-credential-leak  # noqa: ERA001
-    logger.info("Client rotation complete for team=%s", team_name)
+    logger.info("Client rotation complete for team=%s", team_name)  # nosemgrep: python-logger-credential-disclosure
+    _audit(
+        event,
+        principal,
+        action="team.rotate",
+        resource=team_id,
+        detail=f"rotated client_id {old_client_id} -> {new_client_id}",
+    )
 
     credentials = CredentialsResponse(
-        client_id=new_client_id,
-        client_secret=new_client_secret,
-        token_endpoint=TOKEN_ENDPOINT,
+        client_id=new_client_id, client_secret=new_client_secret, token_endpoint=TOKEN_ENDPOINT
     )
-    return credentials.model_dump(), 200
+    return ok(credentials.model_dump())
 
 
 # ── DELETE /teams/{id} ───────────────────────────────────────────────────────
 
 
-def deactivate_team(team_id: str) -> tuple[dict[str, Any], int]:
-    """Deactivate a team: delete Cognito client and mark inactive.
-
-    Deleting the Cognito client immediately invalidates all outstanding
-    access tokens — there is no grace period.
-    """
+def deactivate_team(team_id: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """Deactivate a team: delete its Cognito client (revokes all tokens) and mark inactive."""
     table = dynamodb.Table(TEAMS_TABLE)
-    resp = table.get_item(Key={"team_id": team_id})
-    item = resp.get("Item")
+    item = table.get_item(Key={"team_id": team_id}).get("Item")
     if not item:
-        return {"error": f"Team {team_id} not found"}, 404
-
+        raise errors.NotFoundError(f"Team {team_id} not found")
     if item.get("status") == TeamStatus.INACTIVE:
-        return {"error": "Team is already inactive"}, 400
+        raise errors.ValidationFailedError("Team is already inactive")
 
     client_id = item.get("client_id", "")
     team_name = item["team_name"]
 
-    # Delete Cognito client
     if client_id:
         try:
-            cognito.delete_user_pool_client(
-                UserPoolId=USER_POOL_ID,
-                ClientId=client_id,
-            )
+            cognito.delete_user_pool_client(UserPoolId=USER_POOL_ID, ClientId=client_id)
         except ClientError as e:
             if _client_error_code(e) != "ResourceNotFoundException":
                 logger.exception("Failed to delete Cognito client for team=%s", team_name)
-                return {"error": f"Failed to delete Cognito client: {_client_error_message(e)}"}, 500
+                raise errors.UpstreamError(
+                    "Failed to delete Cognito client", details={"message": _client_error_message(e)}
+                ) from e
 
-    # Mark team as inactive
-    now = _now_iso()
     table.update_item(
         Key={"team_id": team_id},
         UpdateExpression="SET #s = :inactive, updated_at = :now, client_id = :empty",
         ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={
-            ":inactive": TeamStatus.INACTIVE,
-            ":now": now,
-            ":empty": "",
-        },
+        ExpressionAttributeValues={":inactive": TeamStatus.INACTIVE, ":now": _now_iso(), ":empty": ""},
     )
 
     logger.info("Deactivated team=%s id=%s", team_name, team_id)
+    _audit(event, principal, action="team.deactivate", resource=team_id, detail=f"team={team_name}")
 
-    result = DeactivateResponse(team_id=team_id)
-    return result.model_dump(), 200
+    return ok(DeactivateResponse(team_id=team_id).model_dump())

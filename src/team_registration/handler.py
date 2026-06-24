@@ -1,26 +1,28 @@
-"""Team registration Lambda (Function URL) — self-service API for onboarding.
+"""Team registration Lambda — self-service onboarding API, on gwcore (ADR-016).
 
-Provides CRUD operations for team management:
+Authorization is enforced in-handler via gwcore (previously it was not —
+``team_registration/auth.py`` was dead code, imported only by tests, so the
+handler relied entirely on the API Gateway Cognito authorizer with no in-handler
+defense in depth). Every request requires the admin scope; the legacy ``"admin"``
+and canonical ``"https://gateway.internal/admin"`` strings are both accepted.
 
+Routes:
 - ``POST   /teams``              — Register a new team
 - ``GET    /teams``              — List all active teams
 - ``GET    /teams/{id}``         — Get team details + usage + budget
 - ``POST   /teams/{id}/rotate``  — Rotate client credentials
-- ``DELETE  /teams/{id}``        — Deactivate team (revokes all tokens)
-
-Admin scope (``https://gateway.internal/admin``) is enforced by the API Gateway
-Cognito authorizer; the handler no longer validates JWTs directly.
+- ``DELETE /teams/{id}``         — Deactivate team (revokes all tokens)
 """
 
 from __future__ import annotations
 
-import json
-import logging
+import contextlib
 import re
 from typing import Any
 
-from pydantic import ValidationError
-
+from gwcore import audit, auth, errors, ok, responses
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.telemetry import Timer, emit_metric
 from team_registration.routes import (
     deactivate_team,
     get_team,
@@ -29,110 +31,75 @@ from team_registration.routes import (
     rotate_credentials,
 )
 
-logger = logging.getLogger("team_registration")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("team_registration")
 
-# Route pattern: /teams/{team_id}
 _TEAM_ID_RE = re.compile(r"^/teams/([a-f0-9-]{36})$")
-# Route pattern: /teams/{team_id}/rotate
 _ROTATE_RE = re.compile(r"^/teams/([a-f0-9-]{36})/rotate$")
 
 
-def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
-    """Lambda Function URL handler with route dispatch."""
-    try:
-        return _dispatch(event)
-    except Exception:
-        logger.exception("Unhandled error in team registration handler")
-        return _response(500, {"error": "Internal server error"})
+def _method(event: dict[str, Any]) -> str:
+    if m := event.get("httpMethod"):
+        return str(m).upper()
+    return str(event.get("requestContext", {}).get("http", {}).get("method", "GET")).upper()
 
 
-def _dispatch(event: dict[str, Any]) -> dict[str, Any]:
-    """Parse the HTTP method + path and route to the right handler."""
-    # Function URL puts HTTP info in requestContext.http
-    request_ctx = event.get("requestContext", {})
-    http = request_ctx.get("http", {})
-    method = http.get("method", "").upper()
-    path = http.get("path", "")
-
-    # Normalize path: strip trailing slash, default to /teams
-    path = path.rstrip("/") or "/teams"
-
-    result, status = _route(method, path, event)
-    return _response(status, result)
+def _path(event: dict[str, Any]) -> str:
+    rc = event.get("requestContext", {})
+    raw = rc.get("http", {}).get("path") or event.get("path") or event.get("rawPath", "/")
+    return str(raw).rstrip("/") or "/teams"
 
 
-def _route(method: str, path: str, event: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    """Match method + path to a route handler and return (body, status)."""
-    # POST /teams — register
+def _route(method: str, path: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """Match method + path and dispatch. Routes raise typed gwcore errors."""
     if method == "POST" and path == "/teams":
-        return _handle_register(event)
-
-    # GET /teams — list
+        return register_team(event, principal)
     if method == "GET" and path == "/teams":
         return list_teams()
-
-    # GET /teams/{id} — detail
     if method == "GET" and (m := _TEAM_ID_RE.match(path)):
         return get_team(m.group(1))
-
-    # POST /teams/{id}/rotate — rotate credentials
     if method == "POST" and (m := _ROTATE_RE.match(path)):
-        return rotate_credentials(m.group(1))
-
-    # DELETE /teams/{id} — deactivate
+        return rotate_credentials(m.group(1), event, principal)
     if method == "DELETE" and (m := _TEAM_ID_RE.match(path)):
-        return deactivate_team(m.group(1))
+        return deactivate_team(m.group(1), event, principal)
+    raise errors.NotFoundError(f"Not found: {method} {path}")
 
-    return {"error": f"Not found: {method} {path}"}, 404
 
+def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
+    """Lambda handler — authorizes, then routes to team registration endpoints."""
+    cid = correlation_id(event)
+    log = bind(logger, cid)
+    method = _method(event)
+    path = _path(event)
 
-def _handle_register(event: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    """Parse body and delegate to register_team."""
-    body = _parse_body(event)
-    if body is None:
-        return {"error": "Invalid or missing JSON body"}, 400
+    if path == "/health" and method == "GET":
+        return ok({"status": "healthy"})
+
     try:
-        return register_team(body)
-    except ValidationError as e:
-        return {"error": f"Validation error: {e.error_count()} errors", "details": e.errors()}, 400
-
-
-def _parse_body(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract JSON body from a Function URL event."""
-    try:
-        body_str = event.get("body", "")
-        if event.get("isBase64Encoded"):
-            import base64  # noqa: PLC0415
-
-            body_str = base64.b64decode(body_str).decode()
-        if not body_str:
-            return None
-        parsed = json.loads(body_str)
-        return parsed if isinstance(parsed, dict) else None
-    except (json.JSONDecodeError, Exception):
-        return None
-
-
-def _response(status_code: int, body: Any) -> dict[str, Any]:
-    """Build a Lambda Function URL response."""
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body, default=str),
-    }
+        with Timer("RequestLatency", route="team_registration"):
+            principal = auth.build_principal(event)
+            auth.require(principal, scopes=[auth.ADMIN_SCOPE])
+            log.info("admin request: %s %s by %s", method, path, principal.sub)
+            return _route(method, path, event, principal)
+    except errors.ControlPlaneError as exc:
+        if exc.status in {401, 403}:
+            log.info("team_registration authz rejected: %s %s (%s)", method, path, exc.code)
+            emit_metric("AuthzDenied", 1, dimensions={"Route": "team_registration"})
+            actor = "unknown"
+            with contextlib.suppress(errors.ControlPlaneError):
+                actor = auth.build_principal(event).sub or "unknown"
+            audit.emit(
+                audit.event_from_request(
+                    event,
+                    action="team.access",
+                    actor=actor,
+                    resource=f"{method} {path}",
+                    decision="deny",
+                    status=exc.status,
+                    detail=exc.code,
+                )
+            )
+        return responses.error_response(exc)
+    except Exception:
+        log.exception("Unhandled error in team_registration: %s %s", method, path)
+        emit_metric("TeamRegistrationError", 1, dimensions={"Code": "internal_error"})
+        return responses.error_response(errors.ControlPlaneError("Internal error"))
