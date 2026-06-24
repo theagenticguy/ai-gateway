@@ -306,7 +306,17 @@ class TestMetrics:
         mock_rpm.side_effect = RuntimeError("ddb down")
         result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=-1)
         assert result.allowed is True
-        assert _emitted(mock_metric, "RateLimitDegraded")
+        assert _emitted(mock_metric, "RateLimitDegraded", {"Check": "rpm"})
+
+    @patch("rate_limiter.handler.emit_metric")
+    @patch("rate_limiter.handler._increment_daily_token_counter")
+    @patch("rate_limiter.handler._increment_rpm_counter")
+    def test_daily_token_degraded_emits_metric(self, mock_rpm: Any, mock_tokens: Any, mock_metric: Any) -> None:
+        mock_rpm.return_value = 1
+        mock_tokens.side_effect = RuntimeError("ddb down")
+        result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=1_000_000, estimated_tokens=10)
+        assert result.allowed is True
+        assert _emitted(mock_metric, "RateLimitDegraded", {"Check": "daily_tokens"})
 
     @patch("rate_limiter.handler.emit_metric")
     @patch("rate_limiter.handler._increment_daily_token_counter")
