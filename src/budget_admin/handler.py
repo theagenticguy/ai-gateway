@@ -1,12 +1,14 @@
-"""Budget Admin API — Lambda Function URL handler.
+"""Budget Admin API — Lambda handler, migrated onto gwcore (ADR-016).
 
-Provides a REST API for managing budgets and querying usage data.
-Parses the HTTP method and path from the Lambda Function URL event
-and routes to the appropriate function.  Admin scope validation is
-handled by the API Gateway Cognito authorizer.
+Authorization is now enforced here via gwcore (it previously was not —
+``budget_admin/auth.py`` was dead code, imported only by tests, so the handler
+relied entirely on the API Gateway Cognito authorizer with no in-handler
+defense in depth). Every request now builds a ``Principal`` and requires the
+admin scope; the legacy ``"admin"`` and canonical ``"https://gateway.internal/
+admin"`` strings are both accepted (the scope-divergence bug-fix).
 
 Endpoints:
-    GET    /budgets              — List all budgets (paginated)
+    GET    /budgets              — List all budgets (cursor-paginated)
     GET    /budgets/{id}         — Get budget + current usage
     POST   /budgets              — Create budget
     PUT    /budgets/{id}         — Update budget
@@ -17,8 +19,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 import re
 from typing import Any
@@ -33,24 +33,11 @@ from budget_admin.routes import (
     list_budgets,
     update_budget,
 )
+from gwcore import auth, errors, ok, responses
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.telemetry import Timer, emit_metric
 
-logger = logging.getLogger("budget_admin")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("budget_admin")
 
 # Initialize DynamoDB on cold start
 init_dynamodb(
@@ -67,127 +54,90 @@ _RE_USAGE = re.compile(r"^/usage/(?P<scope>[^/]+)/(?P<scope_id>[^/]+)/?$")
 _RE_USAGE_HISTORY = re.compile(r"^/usage/(?P<scope>[^/]+)/(?P<scope_id>[^/]+)/history/?$")
 
 
-# ── Response helpers ─────────────────────────────────────────────────────────
-
-
-def _json_response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
-    }
-
-
-def _error_response(status_code: int, message: str) -> dict[str, Any]:
-    return _json_response(status_code, {"error": message})
-
-
 # ── Request parsing ──────────────────────────────────────────────────────────
 
 
-def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    """Parse the JSON body from a Lambda Function URL event."""
-    body_str = event.get("body", "{}")
-    if event.get("isBase64Encoded"):
-        import base64  # noqa: PLC0415
-
-        body_str = base64.b64decode(body_str).decode()
-    if isinstance(body_str, str):
-        return json.loads(body_str)  # type: ignore[no-any-return]
-    return body_str  # type: ignore[return-value]
-
-
-def _get_query_params(event: dict[str, Any]) -> dict[str, str]:
-    """Extract query string parameters from the event."""
-    return event.get("queryStringParameters") or {}
-
-
 def _get_http_method(event: dict[str, Any]) -> str:
-    """Extract the HTTP method from the event."""
+    """Extract the HTTP method (REST proxy ``httpMethod`` or v2 ``http.method``)."""
+    if method := event.get("httpMethod"):
+        return str(method).upper()
     rc = event.get("requestContext", {})
-    http = rc.get("http", {})
-    return http.get("method", "GET").upper()
+    return str(rc.get("http", {}).get("method", "GET")).upper()
 
 
 def _get_path(event: dict[str, Any]) -> str:
-    """Extract the request path from the event."""
+    """Extract the request path across REST proxy / Function URL event shapes."""
     rc = event.get("requestContext", {})
     http = rc.get("http", {})
-    return http.get("path", event.get("rawPath", "/"))
+    return str(http.get("path") or event.get("path") or event.get("rawPath", "/"))
 
 
-# ── Request body parsing ─────────────────────────────────────────────────────
-
-
-def _safe_parse_body(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Parse JSON body, returning None on failure."""
-    try:
-        return _parse_body(event)
-    except (json.JSONDecodeError, Exception):
-        return None
+def _query_params(event: dict[str, Any]) -> dict[str, str]:
+    return event.get("queryStringParameters") or {}
 
 
 # ── Route dispatch ───────────────────────────────────────────────────────────
 
 
-def _dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0911
+def _dispatch(method: str, path: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """Match method+path and dispatch to the appropriate route handler."""
     if method == "GET" and _RE_BUDGETS_LIST.match(path):
-        return list_budgets(_get_query_params(event))
+        return list_budgets(_query_params(event))
 
     if method == "POST" and _RE_BUDGETS_LIST.match(path):
-        body = _safe_parse_body(event)
-        if body is None:
-            return _error_response(400, "Invalid JSON body")
-        return create_budget(body)
+        return create_budget(event, principal)
 
-    m = _RE_BUDGETS_DETAIL.match(path)
-    if m:
-        return _dispatch_budget_detail(method, m.group("budget_id"), event)
+    if m := _RE_BUDGETS_DETAIL.match(path):
+        return _dispatch_budget_detail(method, m.group("budget_id"), event, principal)
 
-    m_hist = _RE_USAGE_HISTORY.match(path)
-    if m_hist and method == "GET":
-        return get_usage_history(
-            m_hist.group("scope"),
-            m_hist.group("scope_id"),
-            _get_query_params(event),
-        )
+    if (m_hist := _RE_USAGE_HISTORY.match(path)) and method == "GET":
+        return get_usage_history(m_hist.group("scope"), m_hist.group("scope_id"), _query_params(event))
 
-    m_usage = _RE_USAGE.match(path)
-    if m_usage and method == "GET":
+    if (m_usage := _RE_USAGE.match(path)) and method == "GET":
         return get_usage(m_usage.group("scope"), m_usage.group("scope_id"))
 
-    return _error_response(404, f"Not found: {method} {path}")
+    raise errors.NotFoundError(f"Not found: {method} {path}")
 
 
-def _dispatch_budget_detail(method: str, budget_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch budget detail endpoints (GET/PUT/DELETE on a single budget)."""
+def _dispatch_budget_detail(
+    method: str, budget_id: str, event: dict[str, Any], principal: auth.Principal
+) -> dict[str, Any]:
+    """Dispatch single-budget endpoints (GET/PUT/DELETE)."""
     if method == "GET":
         return get_budget(budget_id)
-
     if method == "PUT":
-        body = _safe_parse_body(event)
-        if body is None:
-            return _error_response(400, "Invalid JSON body")
-        return update_budget(budget_id, body)
-
+        return update_budget(budget_id, event, principal)
     if method == "DELETE":
-        return delete_budget(budget_id)
-
-    return _error_response(404, f"Not found: {method} /budgets/{budget_id}")
+        return delete_budget(budget_id, event, principal)
+    raise errors.NotFoundError(f"Not found: {method} /budgets/{budget_id}")
 
 
 # ── Lambda entry point ───────────────────────────────────────────────────────
 
 
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
-    """Lambda Function URL handler — routes requests to budget admin endpoints."""
+    """Lambda handler — authorizes, then routes to budget admin endpoints."""
+    cid = correlation_id(event)
+    log = bind(logger, cid)
     method = _get_http_method(event)
     path = _get_path(event)
 
     if path == "/health" and method == "GET":
-        return _json_response(200, {"status": "healthy"})
+        return ok({"status": "healthy"})
 
-    logger.info("Admin request: %s %s", method, path)
-
-    return _dispatch(method, path, event)
+    try:
+        with Timer("RequestLatency", route="budget_admin"):
+            # AuthN + AuthZ: every non-health request requires the admin scope.
+            principal = auth.build_principal(event)
+            auth.require(principal, scopes=[auth.ADMIN_SCOPE])
+            log.info("admin request: %s %s by %s", method, path, principal.sub)
+            return _dispatch(method, path, event, principal)
+    except errors.ControlPlaneError as exc:
+        if exc.status in {401, 403}:
+            log.info("budget_admin authz rejected: %s %s (%s)", method, path, exc.code)
+            emit_metric("AuthzDenied", 1, dimensions={"Route": "budget_admin"})
+        return responses.error_response(exc)
+    except Exception:
+        log.exception("Unhandled error in budget_admin: %s %s", method, path)
+        emit_metric("BudgetAdminError", 1, dimensions={"Code": "internal_error"})
+        return responses.error_response(errors.ControlPlaneError("Internal error"))
