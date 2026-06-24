@@ -1036,9 +1036,7 @@ class TestObservability:
     @patch("cost_attribution.handler.check_and_publish_alerts")
     @patch("cost_attribution.handler.dynamodb")
     @patch("cost_attribution.handler.cloudwatch")
-    def test_processed_metric_emitted(
-        self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_metric: Any
-    ) -> None:
+    def test_processed_metric_emitted(self, mock_cw: Any, mock_ddb: Any, mock_alerts: Any, mock_metric: Any) -> None:
         mock_alerts.return_value = 0
         log_events = [
             {
