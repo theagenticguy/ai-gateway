@@ -278,3 +278,50 @@ class TestCombinedScenarios:
         assert "Daily token limit exceeded" in result.reason
         assert result.current_rpm == 5
         assert result.current_daily_tokens == 2000000
+
+
+def _emitted(mock_metric: Any, name: str, dimensions: dict[str, str] | None = None) -> bool:
+    """True if emit_metric was called with the given name (and dimensions, if given)."""
+    for c in mock_metric.call_args_list:
+        if c.args and c.args[0] == name and (dimensions is None or c.kwargs.get("dimensions") == dimensions):
+            return True
+    return False
+
+
+class TestMetrics:
+    """gwcore migration (ADR-016): deny + degraded emit EMF metrics. No audit
+    event is emitted here — the budget_enforcement caller audits the denial."""
+
+    @patch("rate_limiter.handler.emit_metric")
+    @patch("rate_limiter.handler._increment_rpm_counter")
+    def test_rpm_deny_emits_metric(self, mock_rpm: Any, mock_metric: Any) -> None:
+        mock_rpm.return_value = 101
+        result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=-1)
+        assert result.allowed is False
+        assert _emitted(mock_metric, "RateLimitDenied", {"Check": "rpm"})
+
+    @patch("rate_limiter.handler.emit_metric")
+    @patch("rate_limiter.handler._increment_rpm_counter")
+    def test_rpm_degraded_emits_metric(self, mock_rpm: Any, mock_metric: Any) -> None:
+        mock_rpm.side_effect = RuntimeError("ddb down")
+        result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=-1)
+        assert result.allowed is True
+        assert _emitted(mock_metric, "RateLimitDegraded")
+
+    @patch("rate_limiter.handler.emit_metric")
+    @patch("rate_limiter.handler._increment_daily_token_counter")
+    @patch("rate_limiter.handler._increment_rpm_counter")
+    def test_daily_token_deny_emits_metric(self, mock_rpm: Any, mock_tokens: Any, mock_metric: Any) -> None:
+        mock_rpm.return_value = 1
+        mock_tokens.return_value = 2_000_000
+        result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=1_000_000, estimated_tokens=10)
+        assert result.allowed is False
+        assert _emitted(mock_metric, "RateLimitDenied", {"Check": "daily_tokens"})
+
+    @patch("rate_limiter.handler.emit_metric")
+    @patch("rate_limiter.handler._increment_rpm_counter")
+    def test_allowed_emits_no_metric(self, mock_rpm: Any, mock_metric: Any) -> None:
+        mock_rpm.return_value = 5
+        result = check_rate_limit(team="t", rpm_limit=100, tokens_per_day_limit=-1)
+        assert result.allowed is True
+        mock_metric.assert_not_called()

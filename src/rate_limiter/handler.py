@@ -1,41 +1,35 @@
 """Rate limiting enforcement using DynamoDB atomic counters.
 
-Provides RPM (requests-per-minute) and daily token limit checks.
+Provides RPM (requests-per-minute) and daily token limit checks via the
+``check_rate_limit`` library function. This is a pure module — it has no Lambda
+handler, no request event, and performs no authorization; ``budget_enforcement``
+(the pre-request webhook) imports and calls it on the hot path, and that caller
+emits the deny-audit. So this module emits metrics and structured logs only,
+never an audit event (which would double-count the same denial).
+
 Uses the same usage table as budget enforcement with different PK prefixes.
 
-Graceful degradation: if DynamoDB is unreachable the request is allowed
-and a warning is logged.
+Graceful degradation: if DynamoDB is unreachable the request is allowed and a
+warning is logged — a rate-limit-store outage must never block traffic.
+
+Migrated onto gwcore (ADR-016): structured JSON logging + denial/degraded
+metrics. The ``check_rate_limit`` contract and degradation behavior are
+unchanged.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 from datetime import UTC, datetime
 
 import boto3
 from botocore.exceptions import ClientError
 
+from gwcore.logging import get_logger
+from gwcore.telemetry import emit_metric
 from rate_limiter.models import RateLimitResult
 
-logger = logging.getLogger("rate_limiter")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("rate_limiter")
 
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 
@@ -173,6 +167,7 @@ def check_rate_limit(
                 team,
                 exc_info=True,
             )
+            emit_metric("RateLimitDegraded", 1, dimensions={"Check": "rpm"})
             return RateLimitResult(allowed=True, reason="rate-limit-degraded")
 
         if current_rpm > rpm_limit:
@@ -182,6 +177,7 @@ def check_rate_limit(
                 current_rpm,
                 rpm_limit,
             )
+            emit_metric("RateLimitDenied", 1, dimensions={"Check": "rpm"})
             return RateLimitResult(
                 allowed=False,
                 reason=f"RPM limit exceeded ({current_rpm}/{rpm_limit} requests per minute)",
@@ -200,6 +196,7 @@ def check_rate_limit(
                 team,
                 exc_info=True,
             )
+            emit_metric("RateLimitDegraded", 1, dimensions={"Check": "daily_tokens"})
             return RateLimitResult(
                 allowed=True,
                 reason="rate-limit-degraded",
@@ -213,6 +210,7 @@ def check_rate_limit(
                 current_daily_tokens,
                 tokens_per_day_limit,
             )
+            emit_metric("RateLimitDenied", 1, dimensions={"Check": "daily_tokens"})
             return RateLimitResult(
                 allowed=False,
                 reason=f"Daily token limit exceeded ({current_daily_tokens:,}/{tokens_per_day_limit:,} tokens per day)",
