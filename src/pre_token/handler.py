@@ -3,36 +3,28 @@
 Extracts IdP group memberships from the trigger event and maps them
 to custom gateway claims (team, org_unit, cost_center, tenant_tier)
 using a configurable GROUP_MAPPING environment variable.
+
+This is a Cognito trigger, not an HTTP / Portkey webhook: it always returns the
+(possibly augmented) Cognito event, performs no authorization, and touches no
+DynamoDB. Migrated onto gwcore (ADR-016) for the lightest touch — structured
+JSON logging plus claim-mapping metrics. No audit events are emitted: the
+handler makes no allow/deny decision, and a token refresh happens on every
+login, which would flood the audit pipeline.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 from typing import Any
 
 from pydantic import ValidationError
 
+from gwcore.logging import get_logger
+from gwcore.telemetry import emit_metric
 from pre_token.models import GroupClaims, PreTokenGenerationEvent
 
-logger = logging.getLogger("pre_token")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("pre_token")
 
 
 def _load_group_mapping() -> dict[str, GroupClaims]:
@@ -85,6 +77,7 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         trigger = PreTokenGenerationEvent.model_validate(event)
     except ValidationError:
         logger.exception("Failed to validate trigger event")
+        emit_metric("PreTokenError", 1, dimensions={"Code": "invalid_event"})
         return event
 
     # Extract user groups from the groupConfiguration or SAML/OIDC assertions
@@ -107,11 +100,13 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     mapping = _load_group_mapping()
     if not mapping:
         logger.info("No group mapping configured, returning event unchanged")
+        emit_metric("ClaimsUnmapped", 1, dimensions={"Reason": "no_mapping"})
         return event
 
     claims = _resolve_claims(groups, mapping)
     if claims is None:
         logger.info("No matching group found for user '%s'", trigger.user_name)
+        emit_metric("ClaimsUnmapped", 1, dimensions={"Reason": "no_match"})
         return event
 
     logger.info(
@@ -120,6 +115,7 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         claims.team,
         claims.tenant_tier,
     )
+    emit_metric("ClaimsMapped", 1, dimensions={"Tier": claims.tenant_tier})
 
     claim_overrides = _build_claim_overrides(claims)
 

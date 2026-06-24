@@ -264,3 +264,57 @@ class TestHandler:
         assert result["version"] == "2"
         assert result["userName"] == "testuser"
         assert result["userPoolId"] == "us-east-1_TestPool"
+
+
+# ── gwcore observability (ADR-016) ───────────────────────────────────────────
+
+
+class TestMetrics:
+    """The migration adds claim-mapping metrics. No audit events (no allow/deny
+    decision; a token refresh on every login would flood the audit pipeline)."""
+
+    @patch("pre_token.handler.emit_metric")
+    @patch.dict("os.environ", {"GROUP_MAPPING": GROUP_MAPPING_ENV})
+    def test_mapped_emits_claims_mapped(self, mock_metric: Any) -> None:
+        handler(_make_trigger_event(groups=["aws-ai-gateway-admins"]))
+        assert any(
+            c.args and c.args[0] == "ClaimsMapped" and c.kwargs.get("dimensions") == {"Tier": "admin"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("pre_token.handler.emit_metric")
+    @patch.dict("os.environ", {"GROUP_MAPPING": GROUP_MAPPING_ENV})
+    def test_no_match_emits_unmapped(self, mock_metric: Any) -> None:
+        handler(_make_trigger_event(groups=["unknown-group"]))
+        assert any(
+            c.args and c.args[0] == "ClaimsUnmapped" and c.kwargs.get("dimensions") == {"Reason": "no_match"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("pre_token.handler.emit_metric")
+    @patch.dict("os.environ", {"GROUP_MAPPING": "{}"})
+    def test_no_mapping_emits_unmapped(self, mock_metric: Any) -> None:
+        handler(_make_trigger_event(groups=["aws-ai-gateway-admins"]))
+        assert any(
+            c.args and c.args[0] == "ClaimsUnmapped" and c.kwargs.get("dimensions") == {"Reason": "no_mapping"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("pre_token.handler.emit_metric")
+    def test_invalid_event_emits_error(self, mock_metric: Any) -> None:
+        # ``request`` must be an object; a string forces a ValidationError and
+        # the handler returns the event unchanged after emitting PreTokenError.
+        result = handler({"version": "2", "request": "not-an-object"})
+        assert result == {"version": "2", "request": "not-an-object"}
+        assert any(c.args and c.args[0] == "PreTokenError" for c in mock_metric.call_args_list)
+
+    @patch.dict("os.environ", {"GROUP_MAPPING": GROUP_MAPPING_ENV})
+    def test_falls_back_to_saml_cognito_groups(self) -> None:
+        # When groupConfiguration has no groups, the handler reads a comma-joined
+        # cognito:groups attribute (SAML-mapped) from userAttributes.
+        event = _make_trigger_event(groups=None)
+        event["request"]["userAttributes"]["cognito_groups"] = " aws-ml-engineers , other "
+        result = handler(event)
+        id_claims = result["response"]["claimsAndScopeOverrides"]["idTokenGeneration"]["claimsToAddOrOverride"]
+        by_key = {c["claimKey"]: c["claimValue"] for c in id_claims}
+        assert by_key["custom:team"] == "ml-eng"
