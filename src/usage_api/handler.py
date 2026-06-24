@@ -250,7 +250,6 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     except errors.ControlPlaneError as exc:
         if exc.status in {401, 403}:
             emit_metric("AuthzDenied", 1, dimensions={"Route": "usage_api"})
-            actor = "unknown"
             try:
                 actor = auth.build_principal(event).sub or "unknown"
             except errors.ControlPlaneError:
