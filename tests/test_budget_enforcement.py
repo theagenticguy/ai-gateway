@@ -647,6 +647,93 @@ class TestBudgetHandler:
         assert "budget_status" in body["data"]
 
 
+# ── gwcore observability (ADR-016) ───────────────────────────────────────────
+
+
+class TestObservability:
+    """The migration adds a deny-audit + metrics without changing the contract."""
+
+    @patch("budget_enforcement.handler.audit.emit")
+    @patch("budget_enforcement.handler.emit_metric")
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_deny_emits_audit_and_metric(
+        self, mock_budget: Any, mock_usage: Any, mock_metric: Any, mock_audit: Any
+    ) -> None:
+        mock_budget.return_value = {"monthly_budget_usd": "100", "warn_threshold_pct": 80, "hard_limit_pct": 100}
+        mock_usage.return_value = Decimal("150.00")
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        result = handler(_make_function_url_event({"jwt_token": jwt}))
+
+        assert json.loads(result["body"])["verdict"] is False
+        # A deny audit event was emitted with decision="deny" and the team.
+        assert mock_audit.call_count == 1
+        emitted = mock_audit.call_args.args[0]
+        assert emitted.decision == "deny"
+        assert emitted.team == "platform"
+        assert emitted.actor == "user1"
+        # The BudgetDenied metric fired.
+        assert any(c.args and c.args[0] == "BudgetDenied" for c in mock_metric.call_args_list)
+
+    @patch("budget_enforcement.handler.audit.emit")
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_allow_does_not_audit(self, mock_budget: Any, mock_usage: Any, mock_audit: Any) -> None:
+        mock_budget.return_value = {"monthly_budget_usd": "1000", "warn_threshold_pct": 80, "hard_limit_pct": 100}
+        mock_usage.return_value = Decimal("50.00")
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        result = handler(_make_function_url_event({"jwt_token": jwt}))
+
+        assert json.loads(result["body"])["verdict"] is True
+        mock_audit.assert_not_called()
+
+    @patch("budget_enforcement.handler.emit_metric")
+    def test_invalid_body_emits_error_metric(self, mock_metric: Any) -> None:
+        result = handler({"body": "not json!!!", "isBase64Encoded": False})
+        assert json.loads(result["body"])["verdict"] is False
+        assert any(c.args and c.args[0] == "BudgetEnforcementError" for c in mock_metric.call_args_list)
+
+    @patch("budget_enforcement.handler.emit_metric")
+    def test_validation_error_emits_error_metric(self, mock_metric: Any) -> None:
+        result = handler(_make_function_url_event({"model": "gpt-4"}))
+        assert json.loads(result["body"])["verdict"] is False
+        assert any(c.args and c.args[0] == "BudgetEnforcementError" for c in mock_metric.call_args_list)
+
+    @patch("budget_enforcement.handler.audit.emit")
+    @patch("budget_enforcement.handler.check_rate_limit")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_rate_limit_deny_audited(self, mock_budget: Any, mock_rate: Any, mock_audit: Any) -> None:
+        from rate_limiter.models import RateLimitResult
+
+        mock_budget.return_value = {"monthly_budget_usd": "1000", "warn_threshold_pct": 80, "hard_limit_pct": 100}
+        mock_rate.return_value = RateLimitResult(allowed=False, reason="RPM exceeded", retry_after_seconds=42)
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        result = handler(_make_function_url_event({"jwt_token": jwt}))
+
+        body = json.loads(result["body"])
+        assert body["verdict"] is False
+        assert body["data"]["retry_after_seconds"] == 42
+        assert mock_audit.call_args.args[0].decision == "deny"
+
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_malformed_monthly_budget_falls_back(self, mock_budget: Any, mock_usage: Any) -> None:
+        # A non-numeric monthly_budget_usd must fall back to the $1000 default,
+        # not crash the check.
+        mock_budget.return_value = {"monthly_budget_usd": "not-a-number", "warn_threshold_pct": 80}
+        mock_usage.return_value = Decimal("10.00")
+
+        jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
+        result = handler(_make_function_url_event({"jwt_token": jwt}))
+
+        body = json.loads(result["body"])
+        assert body["verdict"] is True
+        assert body["data"]["budget_status"]["monthly_budget_usd"] == "1000"
+
+
 # ── Seconds until period reset ───────────────────────────────────────────────
 
 
