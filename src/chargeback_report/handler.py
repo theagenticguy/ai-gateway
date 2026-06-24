@@ -2,12 +2,15 @@
 
 Triggered by Step Functions on the 1st of each month. Queries DynamoDB
 usage and budget tables, generates an HTML report, and uploads to S3.
+
+Step-Functions-invoked, not HTTP / Portkey: no request authorization, and the
+report lands in S3 rather than the audit pipeline. Migrated onto gwcore
+(ADR-016) for the lightest touch — structured JSON logging plus operational EMF
+metrics for the report-generation outcome (success / failures by stage).
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -19,24 +22,10 @@ from pydantic import ValidationError
 
 from chargeback_report.models import ReportData, ReportRequest, ReportResponse, TeamUsageSummary
 from chargeback_report.report_template import render_html
+from gwcore.logging import get_logger
+from gwcore.telemetry import Timer, emit_metric
 
-logger = logging.getLogger("chargeback_report")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("chargeback_report")
 
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
@@ -226,18 +215,28 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     Input:  {"month": "2026-03", "output_format": "html"}
     Output: {"s3_url": "s3://...", "summary": "...", "team_count": N, "total_cost_usd": "X.XX", "month": "2026-03"}
     """
-    logger.info("Received chargeback report request: %s", json.dumps(event))
+    with Timer("RequestLatency", route="chargeback_report"):
+        return _handle(event)
 
+
+def _handle(event: dict[str, Any]) -> dict[str, Any]:
     try:
         request = ReportRequest.model_validate(event)
     except ValidationError as e:
+        # Surface only the error count, never the exception text — a pydantic
+        # repr can echo input values.
+        count = e.error_count()
         logger.exception("Invalid report request")
-        return {"statusCode": 400, "error": f"Invalid request: {e}"}
+        emit_metric("ChargebackError", 1, dimensions={"Code": "bad_request"})
+        return {"statusCode": 400, "error": f"Invalid request: {count} validation error(s)"}
+
+    logger.info("Generating chargeback report for month=%s", request.month)
 
     try:
         report_data = _build_report(request)
     except Exception:
         logger.exception("Failed to build report for %s", request.month)
+        emit_metric("ChargebackError", 1, dimensions={"Code": "build_error"})
         return {"statusCode": 500, "error": f"Failed to build report for {request.month}"}
 
     if not report_data.teams:
@@ -247,12 +246,14 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         report_html = render_html(report_data)
     except Exception:
         logger.exception("Failed to render HTML report")
+        emit_metric("ChargebackError", 1, dimensions={"Code": "render_error"})
         return {"statusCode": 500, "error": "Failed to render HTML report"}
 
     try:
         s3_url = _upload_report(report_html, request.month)
     except Exception:
         logger.exception("Failed to upload report to S3")
+        emit_metric("ChargebackError", 1, dimensions={"Code": "upload_error"})
         return {"statusCode": 500, "error": "Failed to upload report to S3"}
 
     summary = (
@@ -270,5 +271,6 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         month=request.month,
     )
 
+    emit_metric("ReportGenerated", 1, dimensions={"Route": "chargeback_report"})
     logger.info("Report generated: %s", summary)
     return response.model_dump(mode="json")

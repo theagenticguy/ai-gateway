@@ -463,3 +463,63 @@ class TestHandler:
         assert "total_cost_usd" in result
         # Decimal serialized as string in JSON mode
         assert float(result["total_cost_usd"]) == pytest.approx(125.50, rel=1e-2)
+
+
+# -- gwcore observability (ADR-016) -------------------------------------------
+
+
+class TestObservability:
+    """The migration adds operational EMF metrics for the report-generation
+    outcome. No audit events — the report lands in S3, not the audit pipeline."""
+
+    @patch("chargeback_report.handler.emit_metric")
+    @patch("chargeback_report.handler.s3")
+    @patch("chargeback_report.handler.dynamodb")
+    def test_success_emits_report_generated(self, mock_ddb: Any, mock_s3: Any, mock_metric: Any) -> None:
+        mock_table = MagicMock()
+        mock_table.scan.side_effect = [
+            {"Items": [TEAM_ALPHA_USAGE]},
+            {"Items": []},
+            {"Items": []},
+        ]
+        mock_ddb.Table.return_value = mock_table
+
+        result = handler({"month": "2026-03"})
+        assert "s3_url" in result
+        assert any(c.args and c.args[0] == "ReportGenerated" for c in mock_metric.call_args_list)
+
+    @patch("chargeback_report.handler.emit_metric")
+    def test_bad_request_emits_error_metric(self, mock_metric: Any) -> None:
+        result = handler({"month": "invalid"})
+        assert result["statusCode"] == 400
+        assert any(
+            c.args and c.args[0] == "ChargebackError" and c.kwargs.get("dimensions") == {"Code": "bad_request"}
+            for c in mock_metric.call_args_list
+        )
+
+    def test_bad_request_does_not_echo_payload(self) -> None:
+        # The ValidationError text must not leak input values into the response.
+        secret = "super-secret-value-2026"
+        result = handler({"month": secret})
+        assert result["statusCode"] == 400
+        assert secret not in result["error"]
+        assert "validation error" in result["error"].lower()
+
+    @patch("chargeback_report.handler.emit_metric")
+    @patch("chargeback_report.handler.render_html")
+    @patch("chargeback_report.handler.s3")
+    @patch("chargeback_report.handler.dynamodb")
+    def test_render_error_emits_metric(
+        self, mock_ddb: Any, mock_s3: Any, mock_render: Any, mock_metric: Any
+    ) -> None:
+        mock_table = MagicMock()
+        mock_table.scan.return_value = {"Items": []}
+        mock_ddb.Table.return_value = mock_table
+        mock_render.side_effect = RuntimeError("template boom")
+
+        result = handler({"month": "2026-03"})
+        assert result["statusCode"] == 500
+        assert any(
+            c.args and c.args[0] == "ChargebackError" and c.kwargs.get("dimensions") == {"Code": "render_error"}
+            for c in mock_metric.call_args_list
+        )
