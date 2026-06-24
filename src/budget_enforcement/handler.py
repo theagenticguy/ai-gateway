@@ -1,17 +1,23 @@
 """Pre-request budget enforcement Lambda (Function URL).
 
-Called by the gateway before forwarding a request to the upstream LLM.
-Returns 200 with ``{"allowed": true}`` if the team/user is within budget,
-or 429 with a rich error body if the budget is exceeded.
+A Portkey plugin webhook: the gateway calls it before forwarding a request to
+the upstream LLM. It ALWAYS returns HTTP 200 with a ``verdict`` field — the
+verdict (true/false) carries the allow/deny decision, because a 4xx would be
+treated by Portkey as a hook *failure*, not a deny.
 
-Graceful degradation: if DynamoDB is unreachable the request is allowed
-and a warning is logged.
+Graceful degradation: if DynamoDB is unreachable the request is allowed and a
+warning is logged — a budget-check outage must never block traffic.
+
+Migrated onto gwcore (ADR-016): structured JSON logging with a correlation id,
+a latency Timer, deny metrics, and a deny-audit event on every block. The
+response contract and degradation behavior are unchanged. The JWT arrives in
+the request *body* (ALB pre-verifies its signature), so this handler does no
+in-handler authorization — ``gwcore.auth`` (header-based) does not apply here.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 from calendar import monthrange
 from datetime import UTC, datetime
@@ -37,25 +43,12 @@ from budget_enforcement.models import (
     ModelLimit,
     TierConfig,
 )
+from gwcore import audit
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.telemetry import Timer, emit_metric
 from rate_limiter.handler import check_rate_limit
 
-logger = logging.getLogger("budget_enforcement")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("budget_enforcement")
 
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
@@ -356,41 +349,68 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
 # ── Lambda entry point (Function URL) ────────────────────────────────────────
 
 
+def _audit_denial(event: dict[str, Any], request: BudgetCheckRequest, result: BudgetCheckResponse) -> None:
+    """Emit a deny metric + audit event for a blocked request (best-effort).
+
+    Only fires on a hard deny (``verdict`` false). Graceful-degradation allows
+    and warning-threshold allows are not denials, so they are not audited here.
+    """
+    if result.allowed:
+        return
+    claims = decode_jwt_payload(request.jwt_token)
+    team = extract_team(claims)
+    actor = extract_user(claims)
+    emit_metric("BudgetDenied", 1, dimensions={"Route": "budget_enforcement"})
+    audit.emit(
+        audit.event_from_request(
+            event,
+            action="budget.enforce",
+            actor=actor,
+            resource=request.model,
+            decision="deny",
+            status=result.status_code,
+            team=team,
+            detail=result.reason,
+        )
+    )
+
+
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     """Lambda Function URL handler.
 
     Expects a JSON body with ``jwt_token`` (and optionally ``model``,
     ``provider``, ``estimated_tokens``).
     """
-    try:
-        body_str = event.get("body", "{}")
-        if event.get("isBase64Encoded"):
-            import base64  # noqa: PLC0415
+    cid = correlation_id(event)
+    log = bind(logger, cid)
 
-            body_str = base64.b64decode(body_str).decode()
-        body = json.loads(body_str) if isinstance(body_str, str) else body_str
-    except (json.JSONDecodeError, Exception):
-        logger.exception("Failed to parse request body")
-        resp = BudgetCheckResponse(
-            allowed=False,
-            status_code=400,
-            reason="Invalid request body",
-        )
-        return _build_response(resp)
+    with Timer("RequestLatency", route="budget_enforcement"):
+        try:
+            body_str = event.get("body", "{}")
+            if event.get("isBase64Encoded"):
+                import base64  # noqa: PLC0415
 
-    try:
-        request = BudgetCheckRequest.model_validate(body)
-    except ValidationError as e:
-        logger.warning("Invalid budget check request: %s", e)
-        resp = BudgetCheckResponse(
-            allowed=False,
-            status_code=400,
-            reason=f"Validation error: {e.error_count()} errors",
-        )
-        return _build_response(resp)
+                body_str = base64.b64decode(body_str).decode()
+            body = json.loads(body_str) if isinstance(body_str, str) else body_str
+        except (json.JSONDecodeError, Exception):
+            log.exception("Failed to parse request body")
+            emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "bad_request"})
+            resp = BudgetCheckResponse(allowed=False, status_code=400, reason="Invalid request body")
+            return _build_response(resp)
 
-    result = _check_budget(request)
-    return _build_response(result)
+        try:
+            request = BudgetCheckRequest.model_validate(body)
+        except ValidationError as e:
+            log.warning("Invalid budget check request: %s", e)
+            emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "validation_error"})
+            resp = BudgetCheckResponse(
+                allowed=False, status_code=400, reason=f"Validation error: {e.error_count()} errors"
+            )
+            return _build_response(resp)
+
+        result = _check_budget(request)
+        _audit_denial(event, request, result)
+        return _build_response(result)
 
 
 def _build_response(result: BudgetCheckResponse) -> dict[str, Any]:
