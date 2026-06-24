@@ -1,16 +1,16 @@
-"""Real-time usage self-service API Lambda handler.
+"""Real-time usage self-service API — migrated onto gwcore (ADR-016).
 
-Provides read-only access to team usage data stored in DynamoDB:
-- Current period usage for a team
-- Trailing N months of usage history
-- Per-model usage breakdown for the current period
-- Budget utilization percentage (when a budget config exists)
+Read-only access to team usage data in DynamoDB (current period, trailing
+history, per-model breakdown, budget utilization).
+
+Tenant isolation is now enforced (it was not): a caller may read only their
+OWN team's usage — ``principal.team`` from the token must match the requested
+``team`` — unless they hold the admin scope. Previously any authenticated
+caller could read any team's usage/spend via the ``team`` query param.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -20,25 +20,12 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from gwcore import auth, errors, ok, responses
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.telemetry import Timer, emit_metric
 from usage_api.models import ModelUsage, UsagePeriod, UsageResponse
 
-logger = logging.getLogger("usage_api")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("usage_api")
 
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
@@ -156,66 +143,50 @@ def _safe_decimal(value: Any) -> Decimal:
         return Decimal("0.00")
 
 
-# -- Route handlers ------------------------------------------------------------
+# -- Route handler -------------------------------------------------------------
 
 
 def _handle_usage(team: str, history: int, models: bool) -> dict[str, Any]:
     """Core handler logic: fetch usage data and build the response."""
     period = _current_period()
 
-    # Fetch current period usage
     try:
         current_item = _get_team_usage(team, period)
-    except (ClientError, Exception):
-        logger.exception("Failed to query current usage for team=%s", team)
-        return _build_response(502, {"error": "Failed to query usage data"})
+    except ClientError as e:
+        raise errors.UpstreamError("Failed to query usage data") from e
 
     current_period = _item_to_usage_period(current_item, period) if current_item else None
 
-    # Fetch budget config for utilization calculation
     budget_utilization_pct: float | None = None
     monthly_budget_usd: Decimal | None = None
     try:
         budget_item = _get_budget_config(team)
         if budget_item:
-            raw_budget = budget_item.get("monthly_budget_usd", "0")
-            monthly_budget_usd = _safe_decimal(raw_budget)
+            monthly_budget_usd = _safe_decimal(budget_item.get("monthly_budget_usd", "0"))
             if monthly_budget_usd > 0 and current_period:
-                budget_utilization_pct = round(
-                    float(current_period.total_cost_usd / monthly_budget_usd * 100),
-                    1,
-                )
-    except (ClientError, Exception):
+                budget_utilization_pct = round(float(current_period.total_cost_usd / monthly_budget_usd * 100), 1)
+    except ClientError:
+        # Non-fatal: still return usage data without budget info.
         logger.exception("Failed to query budget config for team=%s", team)
-        # Non-fatal: we still return usage data without budget info
 
-    # Build history if requested
     usage_history: list[UsagePeriod] = []
     if history > 0:
-        periods = _trailing_periods(history)
-        for p in periods:
+        for p in _trailing_periods(history):
             try:
                 item = _get_team_usage(team, p)
-                if item:
-                    usage_history.append(_item_to_usage_period(item, p))
-            except (ClientError, Exception):
-                logger.exception("Failed to query usage for team=%s period=%s", team, p)
-                return _build_response(502, {"error": "Failed to query usage data"})
+            except ClientError as e:
+                raise errors.UpstreamError("Failed to query usage data") from e
+            if item:
+                usage_history.append(_item_to_usage_period(item, p))
 
-    # Build model breakdown if requested
     model_list: list[ModelUsage] = []
     if models:
         try:
             model_items = _get_model_usage_for_team(team, period)
-            for item in model_items:
-                mu = _item_to_model_usage(item)
-                if mu:
-                    model_list.append(mu)
-            # Sort by cost descending for convenience
-            model_list.sort(key=lambda m: m.total_cost_usd, reverse=True)
-        except (ClientError, Exception):
-            logger.exception("Failed to query model usage for team=%s", team)
-            return _build_response(502, {"error": "Failed to query usage data"})
+        except ClientError as e:
+            raise errors.UpstreamError("Failed to query usage data") from e
+        model_list = [mu for item in model_items if (mu := _item_to_model_usage(item))]
+        model_list.sort(key=lambda m: m.total_cost_usd, reverse=True)
 
     response = UsageResponse(
         team=team,
@@ -225,47 +196,59 @@ def _handle_usage(team: str, history: int, models: bool) -> dict[str, Any]:
         budget_utilization_pct=budget_utilization_pct,
         monthly_budget_usd=monthly_budget_usd,
     )
-
-    return _build_response(200, response.model_dump(mode="json"))
-
-
-# -- Response builder ----------------------------------------------------------
-
-
-def _build_response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
-    """Build a Lambda Function URL response."""
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body, default=str),
-    }
+    return ok(response.model_dump(mode="json"))
 
 
 # -- Lambda entry point --------------------------------------------------------
 
 
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
-    """Lambda Function URL handler for the usage self-service API.
+    """Lambda handler for the usage self-service API.
 
     Routes:
         GET /usage?team=X              -- current period usage for team X
         GET /usage?team=X&history=N    -- trailing N months of usage history
         GET /usage?team=X&models=true  -- per-model breakdown for current period
     """
-    params = event.get("queryStringParameters") or {}
-    team = params.get("team", "")
+    cid = correlation_id(event)
+    log = bind(logger, cid)
 
-    if not team:
-        return _build_response(400, {"error": "Missing required parameter: team"})
+    if (event.get("rawPath") or event.get("path") or "") == "/health":
+        return ok({"status": "healthy"})
 
-    history = 0
     try:
-        history = int(params.get("history", "0"))
-    except (ValueError, TypeError):
-        history = 0
+        with Timer("RequestLatency", route="usage_api"):
+            principal = auth.build_principal(event)
+            auth.require(principal, scopes=[auth.INVOKE_SCOPE])
 
-    models = params.get("models", "").lower() == "true"
+            params = event.get("queryStringParameters") or {}
+            team = params.get("team", "")
+            if not team:
+                msg = "Missing required parameter: team"
+                raise errors.ValidationFailedError(msg)  # noqa: TRY301 — direct request guard
 
-    logger.info("Usage request: team=%s history=%d models=%s", team, history, models)
+            # Tenant isolation: a caller may read only their own team's usage
+            # unless they hold the admin scope.
+            if not principal.is_admin and principal.team and principal.team != team:
+                emit_metric("AuthzDenied", 1, dimensions={"Route": "usage_api"})
+                msg = "Cannot read usage for another team"
+                raise errors.ForbiddenError(  # noqa: TRY301 — direct tenant-isolation guard
+                    msg, details={"requested": team, "your_team": principal.team}
+                )
 
-    return _handle_usage(team, history, models)
+            try:
+                history = int(params.get("history", "0"))
+            except (ValueError, TypeError):
+                history = 0
+            models = params.get("models", "").lower() == "true"
+
+            log.info("usage request: team=%s history=%d models=%s by=%s", team, history, models, principal.sub)
+            return _handle_usage(team, history, models)
+    except errors.ControlPlaneError as exc:
+        if exc.status in {401, 403}:
+            emit_metric("AuthzDenied", 1, dimensions={"Route": "usage_api"})
+        return responses.error_response(exc)
+    except Exception:
+        log.exception("Unhandled error in usage_api")
+        emit_metric("UsageApiError", 1, dimensions={"Code": "internal_error"})
+        return responses.error_response(errors.ControlPlaneError("Internal error"))

@@ -6,6 +6,7 @@ and handler routing for all HTTP methods.
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,9 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from routing_config.handler import (
-    _build_response,
-    _extract_config_name,
-    _extract_path_and_method,
+    _config_name,
     _load_builtin_configs,
+    _path_method,
     handler,
 )
 from routing_config.models import (
@@ -35,17 +35,30 @@ from routing_config.models import (
 
 # -- Helpers -------------------------------------------------------------------
 
+ADMIN_SCOPE = "https://gateway.internal/admin"
+
+
+def _make_jwt(claims: dict[str, Any]) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
+_ADMIN_JWT = _make_jwt({"sub": "admin-user", "scope": ADMIN_SCOPE})
+
 
 def _make_function_url_event(
     method: str = "GET",
     path: str = "/routing/configs",
     body: dict[str, Any] | None = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
-    """Build a Lambda Function URL event."""
+    """Build an API Gateway event with an admin bearer by default."""
     event: dict[str, Any] = {
-        "requestContext": {"http": {"method": method, "path": path}},
+        "requestContext": {"requestId": "rid-test", "http": {"method": method, "path": path}},
         "rawPath": path,
         "isBase64Encoded": False,
+        "headers": {"authorization": f"Bearer {token or _ADMIN_JWT}"},
     }
     if body is not None:
         event["body"] = json.dumps(body)
@@ -221,45 +234,48 @@ class TestRoutingConfigSummary:
 class TestExtractPathAndMethod:
     def test_standard_event(self) -> None:
         event = _make_function_url_event("GET", "/routing/configs")
-        path, method = _extract_path_and_method(event)
+        path, method = _path_method(event)
         assert path == "/routing/configs"
         assert method == "GET"
 
     def test_with_config_name(self) -> None:
         event = _make_function_url_event("DELETE", "/routing/configs/my-config")
-        path, method = _extract_path_and_method(event)
+        path, method = _path_method(event)
         assert path == "/routing/configs/my-config"
         assert method == "DELETE"
 
     def test_missing_context_defaults(self) -> None:
-        _path, method = _extract_path_and_method({})
+        _path, method = _path_method({})
         assert method == "GET"
 
 
 class TestExtractConfigName:
     def test_list_path(self) -> None:
-        assert _extract_config_name("/routing/configs") is None
+        assert _config_name("/routing/configs") is None
 
     def test_named_path(self) -> None:
-        assert _extract_config_name("/routing/configs/cost-optimized") == "cost-optimized"
+        assert _config_name("/routing/configs/cost-optimized") == "cost-optimized"
 
     def test_trailing_slash(self) -> None:
-        assert _extract_config_name("/routing/configs/ab-test/") == "ab-test"
+        assert _config_name("/routing/configs/ab-test/") == "ab-test"
 
     def test_root_path(self) -> None:
-        assert _extract_config_name("/") is None
+        assert _config_name("/") is None
 
     def test_empty(self) -> None:
-        assert _extract_config_name("") is None
+        assert _config_name("") is None
 
 
-class TestBuildResponse:
-    def test_format(self) -> None:
-        resp = _build_response(200, {"ok": True})
-        assert resp["statusCode"] == 200
-        assert resp["headers"]["Content-Type"] == "application/json"
-        body = json.loads(resp["body"])
-        assert body["ok"] is True
+class TestAuthorization:
+    def test_missing_auth_401(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/routing/configs"}}, "headers": {}}
+        assert handler(event)["statusCode"] == 401
+
+    def test_non_admin_403(self) -> None:
+        token = _make_jwt({"sub": "u", "scope": "https://gateway.internal/invoke"})
+        result = handler(_make_function_url_event("GET", "/routing/configs", token=token))
+        assert result["statusCode"] == 403
+        assert json.loads(result["body"])["error"]["code"] == "forbidden"
 
 
 # -- Built-in config loading ---------------------------------------------------
@@ -463,6 +479,7 @@ class TestHandlerCreateConfig:
     def test_create_invalid_json(self) -> None:
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/routing/configs"}},
+            "headers": {"authorization": f"Bearer {_ADMIN_JWT}"},
             "rawPath": "/routing/configs",
             "body": "not-json!!!",
             "isBase64Encoded": False,
@@ -558,7 +575,7 @@ class TestHandlerMethodNotAllowed:
     def test_patch_not_allowed(self) -> None:
         event = _make_function_url_event("PATCH", "/routing/configs/test")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
 
 
 # -- Property-based tests ------------------------------------------------------
@@ -578,9 +595,9 @@ class TestPropertyBased:
 
     @given(path=st.text(max_size=200))
     @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-    def test_extract_config_name_never_crashes(self, path: str) -> None:
+    def test_config_name_never_crashes(self, path: str) -> None:
         """Path extraction should never crash on any input."""
-        result = _extract_config_name(path)
+        result = _config_name(path)
         assert result is None or isinstance(result, str)
 
     @given(body_text=st.text(max_size=500))
@@ -589,6 +606,7 @@ class TestPropertyBased:
         """Handler should return a valid response for any body input."""
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/routing/configs"}},
+            "headers": {"authorization": f"Bearer {_ADMIN_JWT}"},
             "rawPath": "/routing/configs",
             "body": body_text,
             "isBase64Encoded": False,

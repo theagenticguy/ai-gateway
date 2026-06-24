@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import base64
 import json
 from decimal import Decimal
 from typing import Any
@@ -23,7 +24,6 @@ import pytest
 from botocore.exceptions import ClientError
 
 from usage_api.handler import (
-    _build_response,
     _current_period,
     _item_to_model_usage,
     _item_to_usage_period,
@@ -35,13 +35,29 @@ from usage_api.models import ModelUsage, UsagePeriod, UsageResponse
 
 # -- Helpers ------------------------------------------------------------------
 
+ADMIN_SCOPE = "https://gateway.internal/admin"
+INVOKE_SCOPE = "https://gateway.internal/invoke"
+
+
+def _make_jwt(claims: dict[str, Any]) -> str:
+    """Build a fake JWT (decoded, not verified) for the authorizer-context path."""
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
+# Default caller: holds both invoke + admin scope, so existing tests that read
+# arbitrary teams still pass (admin bypasses tenant isolation).
+_ADMIN_JWT = _make_jwt({"sub": "admin-user", "scope": f"{INVOKE_SCOPE} {ADMIN_SCOPE}"})
+
 
 def _make_event(
     team: str | None = None,
     history: str | None = None,
     models: str | None = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
-    """Build a Lambda Function URL event with query string parameters."""
+    """Build an API Gateway event with query params and an admin bearer by default."""
     params: dict[str, str] = {}
     if team is not None:
         params["team"] = team
@@ -51,8 +67,13 @@ def _make_event(
         params["models"] = models
     return {
         "queryStringParameters": params or None,
-        "requestContext": {"http": {"method": "GET", "path": "/usage"}},
+        "requestContext": {"requestId": "rid-test", "http": {"method": "GET", "path": "/usage"}},
+        "headers": {"authorization": f"Bearer {token or _ADMIN_JWT}"},
     }
+
+
+def _err(result: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(result["body"])["error"]
 
 
 def _make_usage_item(
@@ -312,19 +333,27 @@ class TestItemToModelUsage:
         assert _item_to_model_usage(item) is None
 
 
-class TestBuildResponse:
-    def test_format(self) -> None:
-        result = _build_response(200, {"ok": True})
-        assert result["statusCode"] == 200
-        assert result["headers"]["Content-Type"] == "application/json"
-        body = json.loads(result["body"])
-        assert body["ok"] is True
+# -- Authorization (now enforced via gwcore, ADR-016) -------------------------
 
-    def test_error_format(self) -> None:
-        result = _build_response(400, {"error": "bad request"})
-        assert result["statusCode"] == 400
-        body = json.loads(result["body"])
-        assert body["error"] == "bad request"
+
+class TestAuthorization:
+    def test_missing_auth_401(self) -> None:
+        event = {"queryStringParameters": {"team": "x"}, "requestContext": {"http": {"method": "GET"}}, "headers": {}}
+        assert handler(event)["statusCode"] == 401
+
+    def test_tenant_isolation_403(self) -> None:
+        # A non-admin caller scoped to team A cannot read team B's usage.
+        token = _make_jwt({"sub": "u", "scope": INVOKE_SCOPE, "custom:team": "team-a"})
+        result = handler(_make_event(team="team-b", token=token))
+        assert result["statusCode"] == 403
+        assert _err(result)["code"] == "forbidden"
+
+    @patch("usage_api.handler.dynamodb")
+    def test_own_team_allowed(self, mock_ddb: MagicMock) -> None:
+        mock_ddb.Table.return_value.get_item.return_value = {}
+        token = _make_jwt({"sub": "u", "scope": INVOKE_SCOPE, "custom:team": "team-a"})
+        result = handler(_make_event(team="team-a", token=token))
+        assert result["statusCode"] == 200
 
 
 # -- Handler: parameter validation --------------------------------------------
@@ -332,30 +361,28 @@ class TestBuildResponse:
 
 class TestHandlerParameterValidation:
     def test_missing_team_returns_400(self) -> None:
-        """Missing team parameter should return 400."""
-        event = _make_event()
-        result = handler(event)
+        """Missing team parameter should return 400 (after auth passes)."""
+        result = handler(_make_event())
         assert result["statusCode"] == 400
-        body = _parse_body(result)
-        assert "team" in body["error"].lower()
+        assert "team" in _err(result)["message"].lower()
 
     def test_empty_team_returns_400(self) -> None:
         """Empty team string should return 400."""
-        event = _make_event(team="")
-        result = handler(event)
-        assert result["statusCode"] == 400
+        assert handler(_make_event(team=""))["statusCode"] == 400
 
     def test_no_query_string_parameters_returns_400(self) -> None:
-        """Null queryStringParameters should return 400."""
-        event = {"queryStringParameters": None, "requestContext": {"http": {"method": "GET"}}}
-        result = handler(event)
-        assert result["statusCode"] == 400
+        """Null queryStringParameters should return 400 (admin caller)."""
+        event = {
+            "queryStringParameters": None,
+            "requestContext": {"http": {"method": "GET"}},
+            "headers": {"authorization": f"Bearer {_ADMIN_JWT}"},
+        }
+        assert handler(event)["statusCode"] == 400
 
     def test_missing_query_string_key_returns_400(self) -> None:
         """Missing queryStringParameters key entirely should return 400."""
-        event = {"requestContext": {"http": {"method": "GET"}}}
-        result = handler(event)
-        assert result["statusCode"] == 400
+        event = {"requestContext": {"http": {"method": "GET"}}, "headers": {"authorization": f"Bearer {_ADMIN_JWT}"}}
+        assert handler(event)["statusCode"] == 400
 
     @patch("usage_api.handler.dynamodb")
     def test_invalid_history_defaults_to_zero(self, mock_ddb: Any) -> None:
@@ -893,8 +920,8 @@ class TestHandlerDDBErrors:
         assert result["statusCode"] == 502
 
     @patch("usage_api.handler.dynamodb")
-    def test_generic_exception_current_usage_returns_502(self, mock_ddb: Any) -> None:
-        """Generic exception during current usage query should return 502."""
+    def test_generic_exception_current_usage_returns_500(self, mock_ddb: Any) -> None:
+        """A non-ClientError (unexpected) maps to 500 internal_error, not 502 upstream."""
         mock_table = MagicMock()
         mock_table.get_item.side_effect = RuntimeError("unexpected")
         mock_ddb.Table.return_value = mock_table
@@ -902,7 +929,7 @@ class TestHandlerDDBErrors:
         event = _make_event(team="test-team")
         result = handler(event)
 
-        assert result["statusCode"] == 502
+        assert result["statusCode"] == 500
 
 
 # -- Handler: combined scenarios ----------------------------------------------

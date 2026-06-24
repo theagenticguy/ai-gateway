@@ -1,14 +1,22 @@
-"""Routing config Lambda (Function URL).
+"""Routing config Lambda — Portkey routing strategies, migrated onto gwcore (ADR-016).
 
-Serves routing configurations dynamically:
-- Built-in configs are loaded from the portkey-configs directory (read-only).
-- Custom configs are stored in and served from DynamoDB.
+Built-in configs load from the portkey-configs directory (read-only); custom
+configs live in DynamoDB. Authorization is now enforced in-handler (it was not):
+every request requires the admin scope, and the create / update / delete
+mutations emit audit events.
+
+Routes:
+    GET    /routing/configs         -- list all configs
+    GET    /routing/configs/{name}  -- get a specific config
+    POST   /routing/configs         -- create a custom config
+    PUT    /routing/configs/{name}  -- update a custom config
+    DELETE /routing/configs/{name}  -- delete a custom config
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
-import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,29 +26,17 @@ import boto3
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
+from gwcore import audit, auth, errors, ok, responses
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.responses import request_body
+from gwcore.telemetry import Timer, emit_metric
 from routing_config.models import (
     _MIN_PATH_PARTS_WITH_NAME,
     RoutingConfig,
     RoutingConfigSummary,
 )
 
-logger = logging.getLogger("routing_config")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("routing_config")
 
 CONFIGS_TABLE = os.environ.get("ROUTING_CONFIGS_TABLE", "gateway-routing-configs")
 CONFIGS_DIR = os.environ.get(
@@ -65,11 +61,9 @@ def _load_builtin_configs() -> dict[str, dict[str, Any]]:
     for config_file in sorted(configs_path.glob("*.json")):
         try:
             data = json.loads(config_file.read_text())
-            name = config_file.stem
-            configs[name] = data
+            configs[config_file.stem] = data
         except (json.JSONDecodeError, OSError):
             logger.exception("Failed to load config file: %s", config_file)
-
     return configs
 
 
@@ -78,7 +72,7 @@ _BUILTIN_CONFIGS: dict[str, dict[str, Any]] | None = None
 
 def _get_builtin_configs() -> dict[str, dict[str, Any]]:
     """Get built-in configs (cached after first load)."""
-    global _BUILTIN_CONFIGS  # noqa: PLW0603
+    global _BUILTIN_CONFIGS  # noqa: PLW0603 — module-scoped cache for warm Lambda
     if _BUILTIN_CONFIGS is None:
         _BUILTIN_CONFIGS = _load_builtin_configs()
     return _BUILTIN_CONFIGS
@@ -88,17 +82,15 @@ def _get_builtin_configs() -> dict[str, dict[str, Any]]:
 
 
 def _get_custom_config(name: str) -> dict[str, Any] | None:
-    """Fetch a custom routing config from DynamoDB."""
     table = dynamodb.Table(CONFIGS_TABLE)
-    resp = table.get_item(Key={"config_name": name})
-    item = resp.get("Item")
+    item = table.get_item(Key={"config_name": name}).get("Item")
     if not item:
         return None
-    return json.loads(item["config_json"]) if isinstance(item.get("config_json"), str) else item.get("config_json")
+    cfg = item.get("config_json")
+    return json.loads(cfg) if isinstance(cfg, str) else cfg
 
 
 def _list_custom_configs() -> list[dict[str, Any]]:
-    """List all custom routing configs from DynamoDB."""
     table = dynamodb.Table(CONFIGS_TABLE)
     resp = table.scan(
         ProjectionExpression="config_name, strategy_mode, target_count, description, created_by, updated_at",
@@ -107,7 +99,6 @@ def _list_custom_configs() -> list[dict[str, Any]]:
 
 
 def _put_custom_config(name: str, config: RoutingConfig) -> None:
-    """Store a custom routing config in DynamoDB."""
     table = dynamodb.Table(CONFIGS_TABLE)
     now = datetime.now(tz=UTC).isoformat()
     table.put_item(
@@ -126,72 +117,66 @@ def _put_custom_config(name: str, config: RoutingConfig) -> None:
 
 
 def _delete_custom_config(name: str) -> bool:
-    """Delete a custom routing config from DynamoDB. Returns True if it existed."""
+    """Delete a custom routing config. Returns True if it existed."""
     table = dynamodb.Table(CONFIGS_TABLE)
     try:
-        table.delete_item(
-            Key={"config_name": name},
-            ConditionExpression="attribute_exists(config_name)",
-        )
+        table.delete_item(Key={"config_name": name}, ConditionExpression="attribute_exists(config_name)")
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "")
-        if error_code == "ConditionalCheckFailedException":
+        if e.response.get("Error", {}).get("Code", "") == "ConditionalCheckFailedException":
             return False
         raise
-    else:
-        return True
+    return True
 
 
-# -- Route handling ------------------------------------------------------------
+# -- Route helpers -------------------------------------------------------------
 
 
-def _extract_path_and_method(event: dict[str, Any]) -> tuple[str, str]:
-    """Extract HTTP method and path from a Lambda Function URL event."""
-    request_context = event.get("requestContext", {})
-    http = request_context.get("http", {})
-    method = http.get("method", "GET").upper()
-    raw_path = http.get("path", event.get("rawPath", "/"))
-    return raw_path, method
+def _path_method(event: dict[str, Any]) -> tuple[str, str]:
+    http = event.get("requestContext", {}).get("http", {})
+    method = event.get("httpMethod") or http.get("method", "GET")
+    path = http.get("path") or event.get("path") or event.get("rawPath", "/")
+    return str(path), str(method).upper()
 
 
-def _parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    """Parse JSON body from Lambda Function URL event."""
-    body_str = event.get("body", "{}")
-    if event.get("isBase64Encoded"):
-        import base64  # noqa: PLC0415
-
-        body_str = base64.b64decode(body_str).decode()
-    return json.loads(body_str) if isinstance(body_str, str) else body_str
-
-
-def _extract_config_name(path: str) -> str | None:
-    """Extract config name from path (e.g. /routing/configs/cost-optimized)."""
+def _config_name(path: str) -> str | None:
     parts = [p for p in path.strip("/").split("/") if p]
     if len(parts) >= _MIN_PATH_PARTS_WITH_NAME and parts[0] == "routing" and parts[1] == "configs":
         return parts[2]
     return None
 
 
-def _handle_list_configs() -> dict[str, Any]:
-    """GET /routing/configs -- list all available routing strategies."""
-    builtin = _get_builtin_configs()
-    summaries: list[dict[str, Any]] = []
+def _audit(event: dict[str, Any], principal: auth.Principal, **kw: Any) -> None:
+    audit.emit(audit.event_from_request(event, actor=principal.sub, team=principal.team, **kw))
 
-    for name, config_data in sorted(builtin.items()):
+
+def _validate_body(event: dict[str, Any]) -> dict[str, Any]:
+    try:
+        body = json.loads(request_body(event))
+    except (json.JSONDecodeError, ValueError) as e:
+        raise errors.ValidationFailedError("Invalid JSON body") from e
+    if not isinstance(body, dict):
+        raise errors.ValidationFailedError("Request body must be a JSON object")
+    return body
+
+
+# -- Route handlers ------------------------------------------------------------
+
+
+def _list_configs() -> dict[str, Any]:
+    """GET /routing/configs — built-in + custom config summaries."""
+    summaries: list[dict[str, Any]] = []
+    for name, config_data in sorted(_get_builtin_configs().items()):
         strategy = config_data.get("strategy", {})
-        targets = config_data.get("targets", [])
         summaries.append(
             RoutingConfigSummary(
                 name=name,
                 mode=strategy.get("mode", "unknown"),
-                target_count=len(targets),
+                target_count=len(config_data.get("targets", [])),
                 builtin=True,
                 description=f"Built-in {strategy.get('mode', '')} routing config",
             ).model_dump()
         )
-
     try:
-        custom_items = _list_custom_configs()
         summaries.extend(
             RoutingConfigSummary(
                 name=item["config_name"],
@@ -200,202 +185,154 @@ def _handle_list_configs() -> dict[str, Any]:
                 builtin=False,
                 description=item.get("description", ""),
             ).model_dump()
-            for item in custom_items
+            for item in _list_custom_configs()
         )
-    except Exception:
+    except ClientError:
         logger.exception("Failed to list custom configs from DynamoDB")
+    return ok({"configs": summaries, "total": len(summaries)})
 
-    return _build_response(200, {"configs": summaries, "total": len(summaries)})
 
-
-def _handle_get_config(name: str) -> dict[str, Any]:
-    """GET /routing/configs/{name} -- get a specific config."""
+def _get_config(name: str) -> dict[str, Any]:
+    """GET /routing/configs/{name} — built-in first, then custom."""
     builtin = _get_builtin_configs()
     if name in builtin:
-        return _build_response(
-            200,
-            {
-                "name": name,
-                "builtin": True,
-                "config": builtin[name],
-            },
-        )
-
+        return ok({"name": name, "builtin": True, "config": builtin[name]})
     try:
         custom = _get_custom_config(name)
-        if custom:
-            return _build_response(
-                200,
-                {
-                    "name": name,
-                    "builtin": False,
-                    "config": custom,
-                },
-            )
-    except Exception:
-        logger.exception("Failed to fetch custom config: %s", name)
-        return _build_response(500, {"error": "Failed to fetch config from storage"})
-
-    return _build_response(404, {"error": f"Routing config not found: {name}"})
+    except ClientError as e:
+        raise errors.UpstreamError("Failed to fetch config from storage") from e
+    if custom:
+        return ok({"name": name, "builtin": False, "config": custom})
+    raise errors.NotFoundError(f"Routing config not found: {name}")
 
 
-def _handle_create_config(event: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0911
-    """POST /routing/configs -- create a new custom config."""
-    try:
-        body = _parse_body(event)
-    except Exception:
-        return _build_response(400, {"error": "Invalid JSON body"})
-
-    if not isinstance(body, dict):
-        return _build_response(400, {"error": "Request body must be a JSON object"})
-
+def _create_config(event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """POST /routing/configs — create a new custom config."""
+    body = _validate_body(event)
     name = body.pop("name", None)
     if not name or not isinstance(name, str):
-        return _build_response(400, {"error": "Missing required field: name"})
-
+        raise errors.ValidationFailedError("Missing required field: name")
     if name in _get_builtin_configs():
-        return _build_response(409, {"error": f"Cannot create config with built-in name: {name}"})
-
+        raise errors.ConflictError(f"Cannot create config with built-in name: {name}")
     try:
-        existing = _get_custom_config(name)
-        if existing:
-            return _build_response(409, {"error": f"Config already exists: {name}. Use PUT to update."})
-    except Exception:
-        logger.exception("Failed to check existing config: %s", name)
-        return _build_response(500, {"error": "Storage error during conflict check"})
+        if _get_custom_config(name):
+            raise errors.ConflictError(f"Config already exists: {name}. Use PUT to update.")
+    except ClientError as e:
+        raise errors.UpstreamError("Storage error during conflict check") from e
 
     try:
         config = RoutingConfig.model_validate(body)
     except ValidationError as e:
-        return _build_response(400, {"error": f"Validation failed: {e.error_count()} errors", "details": e.errors()})
+        raise errors.ValidationFailedError("Invalid routing config", details={"errors": e.errors()}) from e
 
     now = datetime.now(tz=UTC).isoformat()
     config.metadata.created_at = now
     config.metadata.updated_at = now
-
     try:
         _put_custom_config(name, config)
-    except Exception:
-        logger.exception("Failed to store config: %s", name)
-        return _build_response(500, {"error": "Failed to store config"})
+    except ClientError as e:
+        raise errors.UpstreamError("Failed to store config") from e
 
     logger.info("Created custom routing config: %s", name)
-    return _build_response(
-        201,
-        {
-            "name": name,
-            "config": config.to_portkey_config(),
-            "message": "Config created successfully",
-        },
+    _audit(event, principal, action="routing.create", resource=name, status=201)
+    return ok(
+        {"name": name, "config": config.to_portkey_config(), "message": "Config created successfully"},
+        status=201,
     )
 
 
-def _handle_update_config(name: str, event: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0911
-    """PUT /routing/configs/{name} -- update a custom config."""
+def _update_config(name: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """PUT /routing/configs/{name} — update a custom config."""
     if name in _get_builtin_configs():
-        return _build_response(403, {"error": f"Cannot modify built-in config: {name}"})
-
-    try:
-        body = _parse_body(event)
-    except Exception:
-        return _build_response(400, {"error": "Invalid JSON body"})
-
-    if not isinstance(body, dict):
-        return _build_response(400, {"error": "Request body must be a JSON object"})
-
+        raise errors.ForbiddenError(f"Cannot modify built-in config: {name}")
+    body = _validate_body(event)
     try:
         config = RoutingConfig.model_validate(body)
     except ValidationError as e:
-        return _build_response(400, {"error": f"Validation failed: {e.error_count()} errors", "details": e.errors()})
+        raise errors.ValidationFailedError("Invalid routing config", details={"errors": e.errors()}) from e
 
     try:
-        existing = _get_custom_config(name)
-        if not existing:
-            return _build_response(404, {"error": f"Config not found: {name}. Use POST to create."})
-    except Exception:
-        logger.exception("Failed to check config existence: %s", name)
-        return _build_response(500, {"error": "Storage error during existence check"})
+        if not _get_custom_config(name):
+            raise errors.NotFoundError(f"Config not found: {name}. Use POST to create.")
+    except ClientError as e:
+        raise errors.UpstreamError("Storage error during existence check") from e
 
-    now = datetime.now(tz=UTC).isoformat()
-    config.metadata.updated_at = now
+    config.metadata.updated_at = datetime.now(tz=UTC).isoformat()
     config.metadata.version += 1
-
     try:
         _put_custom_config(name, config)
-    except Exception:
-        logger.exception("Failed to update config: %s", name)
-        return _build_response(500, {"error": "Failed to update config"})
+    except ClientError as e:
+        raise errors.UpstreamError("Failed to update config") from e
 
     logger.info("Updated custom routing config: %s (v%d)", name, config.metadata.version)
-    return _build_response(
-        200,
-        {
-            "name": name,
-            "config": config.to_portkey_config(),
-            "message": "Config updated successfully",
-        },
-    )
+    _audit(event, principal, action="routing.update", resource=name, detail=f"v{config.metadata.version}")
+    return ok({"name": name, "config": config.to_portkey_config(), "message": "Config updated successfully"})
 
 
-def _handle_delete_config(name: str) -> dict[str, Any]:
-    """DELETE /routing/configs/{name} -- delete a custom config."""
+def _delete_config(name: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
+    """DELETE /routing/configs/{name} — delete a custom config."""
     if name in _get_builtin_configs():
-        return _build_response(403, {"error": f"Cannot delete built-in config: {name}"})
-
+        raise errors.ForbiddenError(f"Cannot delete built-in config: {name}")
     try:
         deleted = _delete_custom_config(name)
-    except Exception:
-        logger.exception("Failed to delete config: %s", name)
-        return _build_response(500, {"error": "Failed to delete config"})
-
+    except ClientError as e:
+        raise errors.UpstreamError("Failed to delete config") from e
     if not deleted:
-        return _build_response(404, {"error": f"Config not found: {name}"})
+        raise errors.NotFoundError(f"Config not found: {name}")
 
     logger.info("Deleted custom routing config: %s", name)
-    return _build_response(200, {"message": f"Config deleted: {name}"})
-
-
-# -- Response builder ----------------------------------------------------------
-
-
-def _build_response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
-    """Build a Lambda Function URL response."""
-    return {
-        "statusCode": status_code,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body, default=str),
-    }
+    _audit(event, principal, action="routing.delete", resource=name)
+    return ok({"message": f"Config deleted: {name}"})
 
 
 # -- Lambda entry point --------------------------------------------------------
 
 
-def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
-    """Lambda Function URL handler for routing config CRUD.
+def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:  # noqa: PLR0911 — one return per CRUD route
+    """Lambda handler for routing config CRUD (admin scope required)."""
+    cid = correlation_id(event)
+    log = bind(logger, cid)
+    path, method = _path_method(event)
 
-    Routes:
-        GET  /routing/configs         -- list all configs
-        GET  /routing/configs/{name}  -- get a specific config
-        POST /routing/configs         -- create a custom config
-        PUT  /routing/configs/{name}  -- update a custom config
-        DELETE /routing/configs/{name} -- delete a custom config
-    """
-    path, method = _extract_path_and_method(event)
-    config_name = _extract_config_name(path)
+    if path == "/health" and method == "GET":
+        return ok({"status": "healthy"})
 
-    if method == "GET" and config_name is None:
-        return _handle_list_configs()
+    try:
+        with Timer("RequestLatency", route="routing_config"):
+            principal = auth.build_principal(event)
+            auth.require(principal, scopes=[auth.ADMIN_SCOPE])
+            name = _config_name(path)
 
-    if method == "GET" and config_name is not None:
-        return _handle_get_config(config_name)
-
-    if method == "POST" and config_name is None:
-        return _handle_create_config(event)
-
-    if method == "PUT" and config_name is not None:
-        return _handle_update_config(config_name, event)
-
-    if method == "DELETE" and config_name is not None:
-        return _handle_delete_config(config_name)
-
-    return _build_response(405, {"error": f"Method not allowed: {method} {path}"})
+            if method == "GET" and name is None:
+                return _list_configs()
+            if method == "GET" and name is not None:
+                return _get_config(name)
+            if method == "POST" and name is None:
+                return _create_config(event, principal)
+            if method == "PUT" and name is not None:
+                return _update_config(name, event, principal)
+            if method == "DELETE" and name is not None:
+                return _delete_config(name, event, principal)
+            raise errors.NotFoundError(f"Not found: {method} {path}")  # noqa: TRY301 — dispatch fallthrough
+    except errors.ControlPlaneError as exc:
+        if exc.status in {401, 403}:
+            emit_metric("AuthzDenied", 1, dimensions={"Route": "routing_config"})
+            actor = "unknown"
+            with contextlib.suppress(errors.ControlPlaneError):
+                actor = auth.build_principal(event).sub or "unknown"
+            audit.emit(
+                audit.event_from_request(
+                    event,
+                    action="routing.access",
+                    actor=actor,
+                    resource=f"{method} {path}",
+                    decision="deny",
+                    status=exc.status,
+                    detail=exc.code,
+                )
+            )
+        return responses.error_response(exc)
+    except Exception:
+        log.exception("Unhandled error in routing_config: %s %s", method, path)
+        emit_metric("RoutingConfigError", 1, dimensions={"Code": "internal_error"})
+        return responses.error_response(errors.ControlPlaneError("Internal error"))
