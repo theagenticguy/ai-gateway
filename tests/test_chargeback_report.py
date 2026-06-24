@@ -509,9 +509,7 @@ class TestObservability:
     @patch("chargeback_report.handler.render_html")
     @patch("chargeback_report.handler.s3")
     @patch("chargeback_report.handler.dynamodb")
-    def test_render_error_emits_metric(
-        self, mock_ddb: Any, mock_s3: Any, mock_render: Any, mock_metric: Any
-    ) -> None:
+    def test_render_error_emits_metric(self, mock_ddb: Any, mock_s3: Any, mock_render: Any, mock_metric: Any) -> None:
         mock_table = MagicMock()
         mock_table.scan.return_value = {"Items": []}
         mock_ddb.Table.return_value = mock_table
