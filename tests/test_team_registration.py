@@ -198,7 +198,7 @@ class TestRegisterTeam:
         assert result["statusCode"] == 201
         assert body["team_name"] == "new-team"
         assert body["credentials"]["client_id"] == "new-client-id"
-        assert body["credentials"]["client_secret"] == "new-secret"  # noqa: S105
+        assert body["credentials"]["client_secret"] == "new-secret"
         assert "setup_instructions" in body
 
         # Verify Cognito was called
@@ -406,7 +406,7 @@ class TestRotateCredentials:
         mock_dynamodb.Table.return_value = mock_table
         mock_cognito.create_user_pool_client.return_value = _make_cognito_response(
             client_id="rotated-client-id",
-            client_secret="rotated-secret",  # noqa: S106
+            client_secret="rotated-secret",
         )
 
         event = _make_event("POST", f"/teams/{SAMPLE_TEAM_ID}/rotate")
@@ -415,7 +415,7 @@ class TestRotateCredentials:
 
         assert result["statusCode"] == 200
         assert body["client_id"] == "rotated-client-id"
-        assert body["client_secret"] == "rotated-secret"  # noqa: S105
+        assert body["client_secret"] == "rotated-secret"
 
         # Old client should have been deleted
         mock_cognito.delete_user_pool_client.assert_called_once()
@@ -582,8 +582,8 @@ class TestModels:
     def test_credentials_response(self) -> None:
         resp = CredentialsResponse(
             client_id="abc",
-            client_secret="def",  # noqa: S106
-            token_endpoint="https://example.com/oauth2/token",  # noqa: S106
+            client_secret="def",
+            token_endpoint="https://example.com/oauth2/token",
         )
         dumped = resp.model_dump()
         assert dumped["client_id"] == "abc"

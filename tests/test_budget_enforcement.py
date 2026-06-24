@@ -661,7 +661,7 @@ class TestSecondsUntilPeriodReset:
 
 class TestBudgetModels:
     def test_budget_check_request_defaults(self) -> None:
-        req = BudgetCheckRequest(jwt_token="a.b.c")  # noqa: S106
+        req = BudgetCheckRequest(jwt_token="a.b.c")
         assert req.model == "unknown"
         assert req.provider == "unknown"
         assert req.estimated_tokens == 0

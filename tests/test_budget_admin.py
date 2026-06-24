@@ -1,8 +1,9 @@
-"""Tests for the Budget Admin REST API.
+"""Tests for the Budget Admin REST API (migrated onto gwcore, ADR-016).
 
-Covers all 7 routes, admin JWT auth (valid, missing, wrong scope),
-pagination, validation errors, and 404 responses.
-Uses mocked DynamoDB via unittest.mock.
+Covers all 7 routes, real in-handler authorization (admin allowed, non-admin
+403, missing auth 401 — previously NOT enforced), gwcore cursor pagination,
+the gwcore error envelope, validation errors, audit emission on mutations,
+and 404 routing.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from unittest.mock import patch
 
 from botocore.exceptions import ClientError
 
-from budget_admin.auth import decode_jwt_payload, validate_admin_scope
 from budget_admin.handler import handler
 from budget_admin.models import (
     BudgetPeriod,
@@ -27,12 +27,13 @@ from budget_admin.models import (
     UpdateBudgetRequest,
     UsageResponse,
 )
+from gwcore.responses import encode_cursor
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _make_jwt(claims: dict[str, Any]) -> str:
-    """Build a fake JWT with the given payload claims."""
+    """Build a fake JWT with the given payload claims (decoded, not verified)."""
     header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).decode().rstrip("=")
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
     signature = base64.urlsafe_b64encode(b"fakesig").decode().rstrip("=")
@@ -40,12 +41,11 @@ def _make_jwt(claims: dict[str, Any]) -> str:
 
 
 def _admin_jwt() -> str:
-    """Return a JWT with admin scope."""
+    """A JWT carrying the legacy admin scope (accepted via gwcore alias)."""
     return _make_jwt({"sub": "admin-user", "scope": "admin openid"})
 
 
 def _non_admin_jwt() -> str:
-    """Return a JWT without admin scope."""
     return _make_jwt({"sub": "regular-user", "scope": "openid profile"})
 
 
@@ -53,130 +53,79 @@ def _make_event(
     method: str = "GET",
     path: str = "/budgets",
     body: dict[str, Any] | None = None,
-    authorization: str = "",
+    authorization: str | None = None,
     query_params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build a Lambda Function URL event."""
+    """Build an API Gateway request event. Defaults to an admin bearer."""
+    if authorization is None:
+        authorization = f"Bearer {_admin_jwt()}"
     event: dict[str, Any] = {
-        "requestContext": {"http": {"method": method, "path": path}},
+        "requestContext": {"requestId": "rid-test", "http": {"method": method, "path": path}},
         "rawPath": path,
         "headers": {"authorization": authorization} if authorization else {},
         "isBase64Encoded": False,
+        "body": json.dumps(body) if body is not None else "{}",
     }
-    if body is not None:
-        event["body"] = json.dumps(body)
-    else:
-        event["body"] = "{}"
     if query_params:
         event["queryStringParameters"] = query_params
     return event
 
 
-# ── Auth tests ───────────────────────────────────────────────────────────────
+def _err(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract the gwcore error envelope: body['error'] is {code, message, ...}."""
+    return json.loads(result["body"])["error"]
 
 
-class TestDecodeJwtPayload:
-    def test_valid_jwt(self) -> None:
-        claims = {"sub": "user-123", "scope": "admin"}
-        token = _make_jwt(claims)
-        decoded = decode_jwt_payload(token)
-        assert decoded["sub"] == "user-123"
-        assert decoded["scope"] == "admin"
-
-    def test_empty_string(self) -> None:
-        assert decode_jwt_payload("") == {}
-
-    def test_single_part(self) -> None:
-        assert decode_jwt_payload("noperiods") == {}
-
-    def test_invalid_base64(self) -> None:
-        assert decode_jwt_payload("a.!!!invalid!!!.c") == {}
-
-    def test_non_dict_payload(self) -> None:
-        payload = base64.urlsafe_b64encode(json.dumps([1, 2]).encode()).decode()
-        assert decode_jwt_payload(f"h.{payload}.s") == {}
+# ── Authorization (the security fix — previously NOT enforced) ─────────────────
 
 
-class TestValidateAdminScope:
-    def test_valid_admin_bearer(self) -> None:
-        token = _admin_jwt()
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is not None
-        assert result["sub"] == "admin-user"
-
-    def test_valid_admin_without_bearer_prefix(self) -> None:
-        token = _admin_jwt()
-        result = validate_admin_scope(token)
-        assert result is not None
-
-    def test_non_admin_scope(self) -> None:
-        token = _non_admin_jwt()
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is None
-
-    def test_empty_authorization(self) -> None:
-        result = validate_admin_scope("")
-        assert result is None
-
-    def test_bearer_only(self) -> None:
-        result = validate_admin_scope("Bearer ")
-        assert result is None
-
-    def test_invalid_jwt(self) -> None:
-        result = validate_admin_scope("Bearer not-a-jwt")
-        assert result is None
-
-    def test_admin_via_role_claim(self) -> None:
-        token = _make_jwt({"sub": "admin", "role": "admin"})
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is not None
-
-    def test_admin_via_custom_role_claim(self) -> None:
-        token = _make_jwt({"sub": "admin", "custom:role": "Admin"})
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is not None
-
-    def test_scope_as_list(self) -> None:
-        token = _make_jwt({"sub": "admin", "scope": ["admin", "openid"]})
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is not None
-
-    def test_scope_as_list_without_admin(self) -> None:
-        token = _make_jwt({"sub": "user", "scope": ["openid", "profile"]})
-        result = validate_admin_scope(f"Bearer {token}")
-        assert result is None
-
-
-# ── Handler auth integration ─────────────────────────────────────────────────
-
-
-class TestHandlerAuth:
+class TestAuthorization:
     def test_health_check_no_auth_required(self) -> None:
-        event = _make_event(method="GET", path="/health")
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/health", authorization=""))
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["status"] == "healthy"
+        assert json.loads(result["body"])["status"] == "healthy"
+
+    def test_missing_auth_rejected_401(self) -> None:
+        result = handler(_make_event(method="GET", path="/budgets", authorization=""))
+        assert result["statusCode"] == 401
+        assert _err(result)["code"] == "unauthorized"
+
+    def test_non_admin_rejected_403(self) -> None:
+        result = handler(_make_event(method="GET", path="/budgets", authorization=f"Bearer {_non_admin_jwt()}"))
+        assert result["statusCode"] == 403
+        assert _err(result)["code"] == "forbidden"
+
+    @patch("budget_admin.routes._budgets_table")
+    def test_canonical_admin_scope_accepted(self, mock_table: Any) -> None:
+        mock_table.return_value.scan.return_value = {"Items": [], "Count": 0}
+        token = _make_jwt({"sub": "u", "scope": "https://gateway.internal/admin"})
+        result = handler(_make_event(method="GET", path="/budgets", authorization=f"Bearer {token}"))
+        assert result["statusCode"] == 200
+
+    @patch("budget_admin.handler.audit.emit")
+    def test_denial_emits_audit_event(self, mock_audit: Any) -> None:
+        # A 403 (non-admin) must be audited as a deny decision (ADR-016).
+        result = handler(_make_event(method="GET", path="/budgets", authorization=f"Bearer {_non_admin_jwt()}"))
+        assert result["statusCode"] == 403
+        mock_audit.assert_called_once()
+        ev = mock_audit.call_args[0][0]
+        assert ev.decision == "deny"
+        assert ev.actor == "regular-user"  # actor derived from the token, not "unknown"
 
 
-# ── List budgets ─────────────────────────────────────────────────────────────
+# ── List budgets (gwcore cursor pagination) ────────────────────────────────────
 
 
 class TestListBudgets:
     @patch("budget_admin.routes._budgets_table")
     def test_list_empty(self, mock_table: Any) -> None:
         mock_table.return_value.scan.return_value = {"Items": [], "Count": 0}
-
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/budgets"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["items"] == []
         assert body["count"] == 0
+        assert body["next_cursor"] is None
 
     @patch("budget_admin.routes._budgets_table")
     def test_list_with_items(self, mock_table: Any) -> None:
@@ -187,80 +136,47 @@ class TestListBudgets:
             ],
             "Count": 2,
         }
-
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/budgets"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["count"] == 2
         assert len(body["items"]) == 2
 
     @patch("budget_admin.routes._budgets_table")
-    def test_list_with_pagination(self, mock_table: Any) -> None:
+    def test_list_emits_next_cursor(self, mock_table: Any) -> None:
         last_key = {"budget_id": "b25", "scope": "CONFIG"}
         mock_table.return_value.scan.return_value = {
             "Items": [{"budget_id": "b1"}],
             "Count": 1,
             "LastEvaluatedKey": last_key,
         }
-
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
-        assert result["statusCode"] == 200
+        result = handler(_make_event(method="GET", path="/budgets"))
         body = json.loads(result["body"])
-        assert body["last_key"] == last_key
+        # next_cursor is opaque; it must round-trip back to the DynamoDB key.
+        assert body["next_cursor"] == encode_cursor(last_key)
 
     @patch("budget_admin.routes._budgets_table")
-    def test_list_with_last_key_param(self, mock_table: Any) -> None:
+    def test_list_consumes_cursor_param(self, mock_table: Any) -> None:
         mock_table.return_value.scan.return_value = {"Items": [], "Count": 0}
-
-        last_key = json.dumps({"budget_id": "b10", "scope": "CONFIG"})
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-            query_params={"last_key": last_key},
-        )
-        result = handler(event)
+        cursor = encode_cursor({"budget_id": "b10", "scope": "CONFIG"})
+        result = handler(_make_event(method="GET", path="/budgets", query_params={"cursor": cursor}))
         assert result["statusCode"] == 200
-
-        # Verify scan was called with ExclusiveStartKey
         call_kwargs = mock_table.return_value.scan.call_args[1]
-        assert "ExclusiveStartKey" in call_kwargs
+        assert call_kwargs["ExclusiveStartKey"] == {"budget_id": "b10", "scope": "CONFIG"}
 
-    @patch("budget_admin.routes._budgets_table")
-    def test_list_invalid_last_key(self, mock_table: Any) -> None:
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-            query_params={"last_key": "not-json"},
-        )
-        result = handler(event)
+    def test_list_invalid_cursor_400(self) -> None:
+        result = handler(_make_event(method="GET", path="/budgets", query_params={"cursor": "!!!not-base64!!!"}))
         assert result["statusCode"] == 400
+        assert _err(result)["code"] == "validation_failed"
 
     @patch("budget_admin.routes._budgets_table")
-    def test_list_dynamodb_error(self, mock_table: Any) -> None:
+    def test_list_dynamodb_error_502(self, mock_table: Any) -> None:
         mock_table.return_value.scan.side_effect = ClientError(
-            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}},
-            "Scan",
+            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}}, "Scan"
         )
-
-        event = _make_event(
-            method="GET",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/budgets"))
         assert result["statusCode"] == 502
+        assert _err(result)["code"] == "upstream_error"
 
 
 # ── Get budget ───────────────────────────────────────────────────────────────
@@ -292,13 +208,7 @@ class TestGetBudget:
                 "total_tokens": 50000,
             }
         }
-
-        event = _make_event(
-            method="GET",
-            path="/budgets/abc-123",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/budgets/abc-123"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["budget_id"] == "abc-123"
@@ -306,18 +216,11 @@ class TestGetBudget:
         assert body["current_tokens"] == 50000
 
     @patch("budget_admin.routes._budgets_table")
-    def test_get_nonexistent_budget(self, mock_table: Any) -> None:
+    def test_get_nonexistent_budget_404(self, mock_table: Any) -> None:
         mock_table.return_value.get_item.return_value = {}
-
-        event = _make_event(
-            method="GET",
-            path="/budgets/doesnt-exist",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/budgets/doesnt-exist"))
         assert result["statusCode"] == 404
-        body = json.loads(result["body"])
-        assert "not found" in body["error"].lower()
+        assert "not found" in _err(result)["message"].lower()
 
     @patch("budget_admin.routes._usage_table")
     @patch("budget_admin.routes._budgets_table")
@@ -333,30 +236,21 @@ class TestGetBudget:
             }
         }
         mock_usage.return_value.get_item.side_effect = ClientError(
-            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}},
-            "GetItem",
+            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}}, "GetItem"
         )
-
-        event = _make_event(
-            method="GET",
-            path="/budgets/abc-123",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
-        # Should still return the budget, just without usage data
-        assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["budget_id"] == "abc-123"
+        result = handler(_make_event(method="GET", path="/budgets/abc-123"))
+        assert result["statusCode"] == 200  # budget still returned, usage omitted
+        assert json.loads(result["body"])["budget_id"] == "abc-123"
 
 
-# ── Create budget ────────────────────────────────────────────────────────────
+# ── Create budget (audited) ────────────────────────────────────────────────────
 
 
 class TestCreateBudget:
+    @patch("budget_admin.routes.audit.emit")
     @patch("budget_admin.routes._budgets_table")
-    def test_create_valid_budget(self, mock_table: Any) -> None:
+    def test_create_valid_budget_emits_audit(self, mock_table: Any, mock_audit: Any) -> None:
         mock_table.return_value.put_item.return_value = {}
-
         body = {
             "scope": "team",
             "scope_id": "platform-eng",
@@ -365,203 +259,113 @@ class TestCreateBudget:
             "tier": "premium",
             "alert_thresholds": [50, 80, 100],
         }
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets", body=body))
         assert result["statusCode"] == 201
         resp_body = json.loads(result["body"])
         assert "budget_id" in resp_body
         assert resp_body["message"] == "Budget created"
+        mock_audit.assert_called_once()  # mutation audited
 
+    @patch("budget_admin.routes.audit.emit")
     @patch("budget_admin.routes._budgets_table")
-    def test_create_minimal_budget(self, mock_table: Any) -> None:
+    def test_create_minimal_budget(self, mock_table: Any, _audit: Any) -> None:
         mock_table.return_value.put_item.return_value = {}
-
         body = {"scope": "user", "scope_id": "user-42", "budget_usd": "100"}
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets", body=body))
         assert result["statusCode"] == 201
 
-    def test_create_missing_required_fields(self) -> None:
-        body = {"scope": "team"}  # missing scope_id and budget_usd
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+    def test_create_missing_required_fields_400(self) -> None:
+        result = handler(_make_event(method="POST", path="/budgets", body={"scope": "team"}))
         assert result["statusCode"] == 400
-        body_resp = json.loads(result["body"])
-        assert "error" in body_resp
+        assert _err(result)["code"] == "validation_failed"
 
-    def test_create_invalid_scope(self) -> None:
+    def test_create_invalid_scope_400(self) -> None:
         body = {"scope": "invalid", "scope_id": "x", "budget_usd": "100"}
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets", body=body))
         assert result["statusCode"] == 400
 
-    def test_create_negative_budget(self) -> None:
+    def test_create_negative_budget_400(self) -> None:
         body = {"scope": "team", "scope_id": "x", "budget_usd": "-100"}
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets", body=body))
         assert result["statusCode"] == 400
 
-    def test_create_invalid_json_body(self) -> None:
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
+    def test_create_invalid_json_body_400(self) -> None:
+        event = _make_event(method="POST", path="/budgets")
         event["body"] = "not valid json!!!"
         result = handler(event)
         assert result["statusCode"] == 400
 
     @patch("budget_admin.routes._budgets_table")
-    def test_create_conflict(self, mock_table: Any) -> None:
+    def test_create_conflict_409(self, mock_table: Any) -> None:
         mock_table.return_value.put_item.side_effect = ClientError(
-            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}},
-            "PutItem",
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}}, "PutItem"
         )
-
         body = {"scope": "team", "scope_id": "platform", "budget_usd": "1000"}
-        event = _make_event(
-            method="POST",
-            path="/budgets",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets", body=body))
         assert result["statusCode"] == 409
+        assert _err(result)["code"] == "conflict"
 
 
-# ── Update budget ────────────────────────────────────────────────────────────
+# ── Update budget (audited) ────────────────────────────────────────────────────
 
 
 class TestUpdateBudget:
+    @patch("budget_admin.routes.audit.emit")
     @patch("budget_admin.routes._budgets_table")
-    def test_update_existing_budget(self, mock_table: Any) -> None:
+    def test_update_existing_budget_emits_audit(self, mock_table: Any, mock_audit: Any) -> None:
         mock_table.return_value.update_item.return_value = {
             "Attributes": {"budget_id": "abc-123", "budget_usd": Decimal(7500)}
         }
-
-        body = {"budget_usd": "7500.00"}
-        event = _make_event(
-            method="PUT",
-            path="/budgets/abc-123",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="PUT", path="/budgets/abc-123", body={"budget_usd": "7500.00"}))
         assert result["statusCode"] == 200
-        resp_body = json.loads(result["body"])
-        assert resp_body["message"] == "Budget updated"
+        assert json.loads(result["body"])["message"] == "Budget updated"
+        mock_audit.assert_called_once()
 
+    @patch("budget_admin.routes.audit.emit")
     @patch("budget_admin.routes._budgets_table")
-    def test_update_multiple_fields(self, mock_table: Any) -> None:
+    def test_update_multiple_fields(self, mock_table: Any, _audit: Any) -> None:
         mock_table.return_value.update_item.return_value = {"Attributes": {}}
-
         body = {"budget_usd": "3000", "tier": "enterprise", "alert_thresholds": [60, 90, 100]}
-        event = _make_event(
-            method="PUT",
-            path="/budgets/abc-123",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="PUT", path="/budgets/abc-123", body=body))
         assert result["statusCode"] == 200
 
-    def test_update_empty_body(self) -> None:
-        event = _make_event(
-            method="PUT",
-            path="/budgets/abc-123",
-            body={},
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+    def test_update_empty_body_400(self) -> None:
+        result = handler(_make_event(method="PUT", path="/budgets/abc-123", body={}))
         assert result["statusCode"] == 400
-        body = json.loads(result["body"])
-        assert "no fields" in body["error"].lower()
+        assert "no fields" in _err(result)["message"].lower()
 
     @patch("budget_admin.routes._budgets_table")
-    def test_update_nonexistent_budget(self, mock_table: Any) -> None:
+    def test_update_nonexistent_budget_404(self, mock_table: Any) -> None:
         mock_table.return_value.update_item.side_effect = ClientError(
-            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "not found"}},
-            "UpdateItem",
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "not found"}}, "UpdateItem"
         )
-
-        body = {"budget_usd": "500"}
-        event = _make_event(
-            method="PUT",
-            path="/budgets/doesnt-exist",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="PUT", path="/budgets/doesnt-exist", body={"budget_usd": "500"}))
         assert result["statusCode"] == 404
 
-    def test_update_invalid_budget_usd(self) -> None:
-        body = {"budget_usd": "-100"}
-        event = _make_event(
-            method="PUT",
-            path="/budgets/abc-123",
-            body=body,
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+    def test_update_invalid_budget_usd_400(self) -> None:
+        result = handler(_make_event(method="PUT", path="/budgets/abc-123", body={"budget_usd": "-100"}))
         assert result["statusCode"] == 400
 
 
-# ── Delete budget ────────────────────────────────────────────────────────────
+# ── Delete budget (audited) ────────────────────────────────────────────────────
 
 
 class TestDeleteBudget:
+    @patch("budget_admin.routes.audit.emit")
     @patch("budget_admin.routes._budgets_table")
-    def test_delete_existing_budget(self, mock_table: Any) -> None:
+    def test_delete_existing_budget_emits_audit(self, mock_table: Any, mock_audit: Any) -> None:
         mock_table.return_value.delete_item.return_value = {}
-
-        event = _make_event(
-            method="DELETE",
-            path="/budgets/abc-123",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="DELETE", path="/budgets/abc-123"))
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert "deleted" in body["message"].lower()
+        assert "deleted" in json.loads(result["body"])["message"].lower()
+        mock_audit.assert_called_once()
 
     @patch("budget_admin.routes._budgets_table")
-    def test_delete_nonexistent_budget(self, mock_table: Any) -> None:
+    def test_delete_nonexistent_budget_404(self, mock_table: Any) -> None:
         mock_table.return_value.delete_item.side_effect = ClientError(
-            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "not found"}},
-            "DeleteItem",
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "not found"}}, "DeleteItem"
         )
-
-        event = _make_event(
-            method="DELETE",
-            path="/budgets/doesnt-exist",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="DELETE", path="/budgets/doesnt-exist"))
         assert result["statusCode"] == 404
 
 
@@ -583,13 +387,7 @@ class TestGetUsage:
                 "request_count": 150,
             }
         }
-
-        event = _make_event(
-            method="GET",
-            path="/usage/team/platform",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/usage/team/platform"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["total_cost_usd"] == "2345.67"
@@ -598,13 +396,7 @@ class TestGetUsage:
     @patch("budget_admin.routes._usage_table")
     def test_get_nonexistent_usage_returns_zeroes(self, mock_table: Any) -> None:
         mock_table.return_value.get_item.return_value = {}
-
-        event = _make_event(
-            method="GET",
-            path="/usage/user/new-user",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/usage/user/new-user"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["total_cost_usd"] == "0.00"
@@ -642,11 +434,9 @@ class TestGetUsageHistory:
                 },
             ]
         }
-
         event = _make_event(
             method="GET",
             path="/usage/team/platform/history",
-            authorization=f"Bearer {_admin_jwt()}",
             query_params={"start_date": "2026-03-01", "end_date": "2026-03-31"},
         )
         result = handler(event)
@@ -658,31 +448,18 @@ class TestGetUsageHistory:
     @patch("budget_admin.routes._usage_table")
     def test_get_history_empty(self, mock_table: Any) -> None:
         mock_table.return_value.query.return_value = {"Items": []}
-
-        event = _make_event(
-            method="GET",
-            path="/usage/team/new-team/history",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/usage/team/new-team/history"))
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["count"] == 0
         assert body["items"] == []
 
     @patch("budget_admin.routes._usage_table")
-    def test_get_history_dynamodb_error(self, mock_table: Any) -> None:
+    def test_get_history_dynamodb_error_502(self, mock_table: Any) -> None:
         mock_table.return_value.query.side_effect = ClientError(
-            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}},
-            "Query",
+            {"Error": {"Code": "InternalServerError", "Message": "DDB down"}}, "Query"
         )
-
-        event = _make_event(
-            method="GET",
-            path="/usage/team/platform/history",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/usage/team/platform/history"))
         assert result["statusCode"] == 502
 
 
@@ -691,34 +468,19 @@ class TestGetUsageHistory:
 
 class TestRouting:
     def test_unknown_path_returns_404(self) -> None:
-        event = _make_event(
-            method="GET",
-            path="/unknown/path",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="GET", path="/unknown/path"))
         assert result["statusCode"] == 404
 
     def test_wrong_method_returns_404(self) -> None:
-        event = _make_event(
-            method="PATCH",
-            path="/budgets/abc-123",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="PATCH", path="/budgets/abc-123"))
         assert result["statusCode"] == 404
 
     def test_post_to_budgets_detail_returns_404(self) -> None:
-        event = _make_event(
-            method="POST",
-            path="/budgets/abc-123",
-            authorization=f"Bearer {_admin_jwt()}",
-        )
-        result = handler(event)
+        result = handler(_make_event(method="POST", path="/budgets/abc-123"))
         assert result["statusCode"] == 404
 
 
-# ── Model validation tests ──────────────────────────────────────────────────
+# ── Model validation tests (unchanged) ────────────────────────────────────────
 
 
 class TestModels:
