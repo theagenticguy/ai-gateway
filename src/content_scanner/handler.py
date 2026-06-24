@@ -1,19 +1,22 @@
 """Lambda handler for the AI Gateway content scanner.
 
-Exposed via a Lambda Function URL. Accepts POST requests with a JSON body
-containing the content to scan, team ID, model, and request ID.
+A Portkey plugin webhook (Function URL). Accepts POST requests with a JSON body
+containing the content to scan, team ID, model, and request ID, and ALWAYS
+returns HTTP 200 with a ``verdict`` field — a 4xx would be treated by Portkey as
+a hook *failure*, not a block.
 
-Scan failures are treated as *allow* — a broken scanner must never block
-legitimate traffic.
+Scan failures are treated as *allow* (fail-open) — a broken scanner must never
+block legitimate traffic. The handler does no authorization; it scans the
+content carried in the request body, keyed by ``team_id``.
 
-Response format follows the Portkey PluginHandlerResponse contract so the
-scanner can be wired as a ``default.webhook`` hook.
+Migrated onto gwcore (ADR-016): structured JSON logging with a correlation id,
+a latency Timer, scan-verdict metrics, and a deny-audit on every block. The
+Portkey response contract and fail-open behavior are unchanged.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import urllib.request
 from typing import Any
@@ -32,24 +35,11 @@ from content_scanner.models import (
 )
 from content_scanner.patterns import scan_injection
 from content_scanner.pii import scan_pii
+from gwcore import audit
+from gwcore.logging import bind, correlation_id, get_logger
+from gwcore.telemetry import Timer, emit_metric
 
-logger = logging.getLogger("content_scanner")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(
-        logging.Formatter(
-            json.dumps(
-                {
-                    "timestamp": "%(asctime)s",
-                    "level": "%(levelname)s",
-                    "logger": "%(name)s",
-                    "message": "%(message)s",
-                }
-            )
-        )
-    )
-    logger.addHandler(_h)
+logger = get_logger("content_scanner")
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -141,53 +131,100 @@ def _build_portkey_response(verdict: bool, scan_response: ScanResponse) -> dict[
 # ── Handler ──────────────────────────────────────────────────────────────────
 
 
+def _audit_block(event: dict[str, Any], request: ScanRequest, scan_response: ScanResponse) -> None:
+    """Emit a deny metric + audit event for a blocked request (best-effort).
+
+    The audit detail records *what kind* of detection fired and how many, never
+    the matched text — PII / injection payloads must never land in the audit
+    trail. PII detections carry an ``entity_type``; injection detections carry a
+    ``pattern_name``.
+    """
+    categories: dict[str, int] = {}
+    for d in scan_response.detections:
+        key = d.entity_type if isinstance(d, PiiDetection) else d.pattern_name
+        categories[key] = categories.get(key, 0) + 1
+    detail = ",".join(f"{k}={v}" for k, v in sorted(categories.items()))
+    emit_metric("ContentBlocked", 1, dimensions={"Route": "content_scanner"})
+    audit.emit(
+        audit.event_from_request(
+            event,
+            action="content.scan",
+            actor=request.team_id,
+            resource=request.model or request.request_id,
+            decision="deny",
+            status=200,
+            team=request.team_id,
+            detail=detail,
+        )
+    )
+
+
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     """Lambda Function URL handler for content scanning.
 
     Returns a Portkey ``PluginHandlerResponse`` (always HTTP 200).
     On any internal error the scanner fails open (verdict=True / allow).
     """
-    try:
-        body = event.get("body", "")
-        if isinstance(body, str):
-            body = json.loads(body)
-        request = ScanRequest.model_validate(body)
-    except (json.JSONDecodeError, ValidationError) as exc:
-        logger.warning("Invalid request body: %s", exc)
-        return _build_portkey_response(
-            True,
-            ScanResponse(verdict="allow", error=f"Invalid request: {exc}"),
-        )
+    cid = correlation_id(event)
+    log = bind(logger, cid)
 
-    # ── AppConfig kill-switch ─────────────────────────────────────────────
-    app_config = _load_appconfig()
-    if not app_config.enabled:
-        logger.info("Scanner globally disabled via AppConfig")
-        return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+    with Timer("RequestLatency", route="content_scanner"):
+        try:
+            body = event.get("body", "")
+            if isinstance(body, str):
+                body = json.loads(body)
+            request = ScanRequest.model_validate(body)
+        except json.JSONDecodeError:
+            # Never echo the exception text — a JSON error can quote the payload,
+            # which may carry PII. Log/return a generic message only.
+            log.warning("Invalid request body: malformed JSON")
+            emit_metric("ContentScannerError", 1, dimensions={"Code": "bad_request"})
+            return _build_portkey_response(
+                True,
+                ScanResponse(verdict="allow", error="Invalid request: malformed JSON"),
+            )
+        except ValidationError as exc:
+            # A pydantic ValidationError repr can include the offending input
+            # value (e.g. ``content``, which may be PII). Surface only the error
+            # COUNT, never the field values.
+            count = exc.error_count()
+            log.warning("Invalid request body: %d validation error(s)", count)
+            emit_metric("ContentScannerError", 1, dimensions={"Code": "bad_request"})
+            return _build_portkey_response(
+                True,
+                ScanResponse(verdict="allow", error=f"Invalid request: {count} validation error(s)"),
+            )
 
-    team_enabled = app_config.team_overrides.get(request.team_id)
-    if team_enabled is False:
-        logger.info("Scanner disabled for team %s via AppConfig", request.team_id)
-        return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+        # ── AppConfig kill-switch ─────────────────────────────────────────────
+        app_config = _load_appconfig()
+        if not app_config.enabled:
+            log.info("Scanner globally disabled via AppConfig")
+            return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
 
-    # ── Run scans ─────────────────────────────────────────────────────────
-    try:
-        return _scan(request)
-    except Exception:
-        # Scan failure = allow (fail-open). Never block on scanner errors.
-        logger.exception("Scan failed for request %s, failing open", request.request_id)
-        return _build_portkey_response(
-            True,
-            ScanResponse(
-                verdict="allow",
-                request_id=request.request_id,
-                content=request.content,
-                error="Internal scan error — request allowed",
-            ),
-        )
+        team_enabled = app_config.team_overrides.get(request.team_id)
+        if team_enabled is False:
+            log.info("Scanner disabled for team %s via AppConfig", request.team_id)
+            return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+
+        # ── Run scans ─────────────────────────────────────────────────────────
+        try:
+            return _scan(request, event)
+        except Exception:
+            # Scan failure = allow (fail-open). Never block on scanner errors.
+            log.exception("Scan failed for request %s, failing open", request.request_id)
+            emit_metric("ContentScannerError", 1, dimensions={"Code": "scan_error"})
+            return _build_portkey_response(
+                True,
+                ScanResponse(
+                    verdict="allow",
+                    request_id=request.request_id,
+                    content=request.content,
+                    error="Internal scan error — request allowed",
+                ),
+            )
 
 
-def _scan(request: ScanRequest) -> dict[str, Any]:
+def _scan(request: ScanRequest, event: dict[str, Any] | None = None) -> dict[str, Any]:
     """Orchestrate PII + injection scans and determine verdict."""
     config = _load_team_config(request.team_id)
 
@@ -232,12 +269,12 @@ def _scan(request: ScanRequest) -> dict[str, Any]:
                     verdict = "block"
 
     portkey_verdict = verdict != "block"
-    return _build_portkey_response(
-        portkey_verdict,
-        ScanResponse(
-            verdict=verdict,  # type: ignore[arg-type]
-            request_id=request.request_id,
-            content=final_content,
-            detections=all_detections,
-        ),
+    scan_response = ScanResponse(
+        verdict=verdict,  # type: ignore[arg-type]
+        request_id=request.request_id,
+        content=final_content,
+        detections=all_detections,
     )
+    if not portkey_verdict and event is not None:
+        _audit_block(event, request, scan_response)
+    return _build_portkey_response(portkey_verdict, scan_response)
