@@ -254,7 +254,7 @@ The project uses 12 security tools across development, CI, and deployment phases
 | [TFLint](https://github.com/terraform-linters/tflint) | IaC | Terraform linting with AWS ruleset | CI |
 
 :::caution[Trivy supply chain advisory]
-CVE-2026-28353 affected the trivy Go module (Feb-Mar 2026). The CLI binary was unaffected. Mitigation: pin trivy versions in `mise.toml` and verify checksums. See [ADR-004](adr-index.md) for details.
+CVE-2026-28353 affected the trivy Go module (Feb-Mar 2026). The CLI binary was unaffected. Mitigation: pin trivy versions in `mise.toml` and verify checksums. See [ADR-004](../adrs/004-security-pipeline-composition.md) for details.
 :::
 
 
