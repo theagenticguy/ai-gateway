@@ -521,3 +521,33 @@ class TestObservability:
             c.args and c.args[0] == "ChargebackError" and c.kwargs.get("dimensions") == {"Code": "render_error"}
             for c in mock_metric.call_args_list
         )
+
+    @patch("chargeback_report.handler.emit_metric")
+    @patch("chargeback_report.handler.dynamodb")
+    def test_build_error_emits_metric(self, mock_ddb: Any, mock_metric: Any) -> None:
+        mock_table = MagicMock()
+        mock_table.scan.side_effect = Exception("DynamoDB timeout")
+        mock_ddb.Table.return_value = mock_table
+
+        result = handler({"month": "2026-03"})
+        assert result["statusCode"] == 500
+        assert any(
+            c.args and c.args[0] == "ChargebackError" and c.kwargs.get("dimensions") == {"Code": "build_error"}
+            for c in mock_metric.call_args_list
+        )
+
+    @patch("chargeback_report.handler.emit_metric")
+    @patch("chargeback_report.handler.s3")
+    @patch("chargeback_report.handler.dynamodb")
+    def test_upload_error_emits_metric(self, mock_ddb: Any, mock_s3: Any, mock_metric: Any) -> None:
+        mock_table = MagicMock()
+        mock_table.scan.return_value = {"Items": [TEAM_ALPHA_USAGE]}
+        mock_ddb.Table.return_value = mock_table
+        mock_s3.put_object.side_effect = Exception("S3 access denied")
+
+        result = handler({"month": "2026-03"})
+        assert result["statusCode"] == 500
+        assert any(
+            c.args and c.args[0] == "ChargebackError" and c.kwargs.get("dimensions") == {"Code": "upload_error"}
+            for c in mock_metric.call_args_list
+        )

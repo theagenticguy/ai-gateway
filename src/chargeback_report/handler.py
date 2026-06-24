@@ -223,10 +223,11 @@ def _handle(event: dict[str, Any]) -> dict[str, Any]:
     try:
         request = ReportRequest.model_validate(event)
     except ValidationError as e:
-        # Surface only the error count, never the exception text — a pydantic
-        # repr can echo input values.
+        # Surface only the error count, never the exception text — a pydantic v2
+        # repr can echo input values (input_value), so we must NOT log it via
+        # exc_info either. Log the count alone.
         count = e.error_count()
-        logger.exception("Invalid report request")
+        logger.warning("Invalid report request: %d validation error(s)", count)
         emit_metric("ChargebackError", 1, dimensions={"Code": "bad_request"})
         return {"statusCode": 400, "error": f"Invalid request: {count} validation error(s)"}
 
