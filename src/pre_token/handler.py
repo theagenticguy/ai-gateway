@@ -88,10 +88,13 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     if group_config.groups_to_override:
         groups = group_config.groups_to_override
 
-    # Also check for cognito:groups in user attributes (SAML mapped)
-    user_attrs = trigger.request.user_attributes
-    if hasattr(user_attrs, "cognito_groups") and not groups:
-        cognito_groups = getattr(user_attrs, "cognito_groups", "")
+    # Also check for cognito:groups in user attributes (SAML mapped). Cognito's
+    # canonical key is ``cognito:groups`` (with a colon), which pydantic stores
+    # in ``model_extra`` since it can't be a Python attribute name; accept the
+    # underscore form too for resilience.
+    if not groups:
+        extra = trigger.request.user_attributes.model_extra or {}
+        cognito_groups = extra.get("cognito:groups") or extra.get("cognito_groups") or ""
         if cognito_groups:
             groups = [g.strip() for g in cognito_groups.split(",") if g.strip()]
 

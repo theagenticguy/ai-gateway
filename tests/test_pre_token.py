@@ -311,9 +311,20 @@ class TestMetrics:
     @patch.dict("os.environ", {"GROUP_MAPPING": GROUP_MAPPING_ENV})
     def test_falls_back_to_saml_cognito_groups(self) -> None:
         # When groupConfiguration has no groups, the handler reads a comma-joined
-        # cognito:groups attribute (SAML-mapped) from userAttributes.
+        # cognito:groups attribute (SAML-mapped) from userAttributes. The real
+        # Cognito key uses a colon, which lands in pydantic's model_extra.
         event = _make_trigger_event(groups=None)
-        event["request"]["userAttributes"]["cognito_groups"] = " aws-ml-engineers , other "
+        event["request"]["userAttributes"]["cognito:groups"] = " aws-ml-engineers , other "
+        result = handler(event)
+        id_claims = result["response"]["claimsAndScopeOverrides"]["idTokenGeneration"]["claimsToAddOrOverride"]
+        by_key = {c["claimKey"]: c["claimValue"] for c in id_claims}
+        assert by_key["custom:team"] == "ml-eng"
+
+    @patch.dict("os.environ", {"GROUP_MAPPING": GROUP_MAPPING_ENV})
+    def test_falls_back_to_underscore_cognito_groups_alias(self) -> None:
+        # The underscore form is tolerated as an alias for resilience.
+        event = _make_trigger_event(groups=None)
+        event["request"]["userAttributes"]["cognito_groups"] = "aws-ml-engineers"
         result = handler(event)
         id_claims = result["response"]["claimsAndScopeOverrides"]["idTokenGeneration"]["claimsToAddOrOverride"]
         by_key = {c["claimKey"]: c["claimValue"] for c in id_claims}
