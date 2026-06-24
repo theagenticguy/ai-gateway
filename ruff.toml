@@ -43,7 +43,7 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ARG", "PLR2004", "PLR0913", "PLC0415"]
+"tests/**/*.py" = ["S101", "S105", "S106", "ARG", "PLR2004", "PLR0913", "PLC0415", "SLF001", "PT019"]
 "src/budget_enforcement/handler.py" = ["PLR0911"]  # multi-gate enforcement logic requires 7 return paths
 
 [lint.isort]
