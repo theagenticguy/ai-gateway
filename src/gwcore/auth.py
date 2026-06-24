@@ -22,7 +22,6 @@ import base64
 import binascii
 import json
 import logging
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -240,15 +239,3 @@ def require(
     if not authorize(principal, scopes=scopes, tiers=tiers, require_all_scopes=require_all_scopes):
         msg = "Insufficient privileges"
         raise ForbiddenError(msg, details={"required_scopes": scopes or [], "required_tiers": tiers or []})
-
-
-def fetch_jwks(jwks_url: str, *, timeout: float = 3.0) -> dict[str, Any]:
-    """Fetch a JWKS document directly (escape hatch / diagnostics).
-
-    Normal verification uses the cached ``PyJWKClient`` in ``verify_token``;
-    this is for tooling that needs the raw key set.
-    """
-    req = urllib.request.Request(jwks_url, headers={"Accept": "application/json"})  # noqa: S310 — fixed https IdP URL
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-        data: Any = json.loads(resp.read())
-    return data if isinstance(data, dict) else {}
