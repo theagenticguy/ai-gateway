@@ -36,9 +36,10 @@ resource "aws_cloudwatch_log_group" "access" {
 # Stage — method cache + access logging + X-Ray
 # -----------------------------------------------------------------------------
 
-#checkov:skip=CKV2_AWS_29:WAF is associated below via aws_wafv2_web_acl_association
-#checkov:skip=CKV2_AWS_4:Logging level is set on the method settings below
-#checkov:skip=CKV_AWS_120:Caching is enabled on idempotent GET routes via method settings, not stage-wide
+#checkov:skip=CKV2_AWS_29:WAF is associated via aws_wafv2_web_acl_association in waf.tf
+#checkov:skip=CKV2_AWS_4:Logging level (INFO) is set on aws_api_gateway_method_settings below
+#checkov:skip=CKV_AWS_120:Caching is enabled per idempotent GET route via method settings, not stage-wide
+#checkov:skip=CKV2_AWS_75:No CORS on this server-to-server admin API (CLIs/portal use bearer tokens)
 resource "aws_api_gateway_stage" "control" {
   count                 = var.enable_api_foundation ? 1 : 0
   rest_api_id           = var.rest_api_id
@@ -71,6 +72,10 @@ resource "aws_api_gateway_stage" "control" {
 # Method settings — default throttle + logging/metrics; cache on GET routes
 # -----------------------------------------------------------------------------
 
+# Default settings cover ALL methods; caching is deliberately off here and
+# enabled per idempotent GET route below (mutations must never be cached).
+#checkov:skip=CKV_AWS_225:Caching is enabled per-GET-route in cached_gets, not stage-wide (mutations must not cache)
+#checkov:skip=CKV_AWS_308:The cached GET routes set cache_data_encrypted=true; this default block has caching off
 resource "aws_api_gateway_method_settings" "default" {
   count       = var.enable_api_foundation ? 1 : 0
   rest_api_id = var.rest_api_id
@@ -101,6 +106,7 @@ resource "aws_api_gateway_method_settings" "cached_gets" {
     cache_data_encrypted = true
     metrics_enabled      = true
     logging_level        = "INFO"
+    data_trace_enabled   = false # never log request/response bodies (may carry PII)
   }
 }
 

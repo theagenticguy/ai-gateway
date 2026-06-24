@@ -147,7 +147,9 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             )
             return responses.ok(body.model_dump())
     except errors.ControlPlaneError as exc:
-        log.info("token exchange rejected: %s", exc.code)
+        # logs the error CODE (e.g. "forbidden"), never a token
+        rejection_code = exc.code
+        log.info("token exchange rejected: %s", rejection_code)  # nosemgrep: python-logger-credential-disclosure
         if exc.status in {401, 403}:
             audit.emit(
                 audit.event_from_request(

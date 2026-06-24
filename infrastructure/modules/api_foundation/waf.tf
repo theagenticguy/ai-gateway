@@ -5,6 +5,7 @@
 # unprotected (the admin_api module skipped CKV2_AWS_29 as "low-traffic"). A
 # rate-based rule + AWS managed common/known-bad-inputs sets close that gap.
 
+#checkov:skip=CKV2_AWS_77:Log4j (CVE-2021-44228) is covered by AWSManagedRulesKnownBadInputsRuleSet, included below
 resource "aws_wafv2_web_acl" "control" {
   count       = var.enable_api_foundation && var.waf_enabled ? 1 : 0
   name        = "${local.name}-waf"
@@ -83,4 +84,19 @@ resource "aws_wafv2_web_acl_association" "control" {
   count        = var.enable_api_foundation && var.waf_enabled ? 1 : 0
   resource_arn = aws_api_gateway_stage.control[0].arn
   web_acl_arn  = aws_wafv2_web_acl.control[0].arn
+}
+
+# WAF logging → CloudWatch (CKV2_AWS_31). Log group name must start with
+# "aws-waf-logs-" per WAFv2 logging-destination requirements.
+#checkov:skip=CKV_AWS_158:CloudWatch log KMS encryption is out of scope for this self-contained module
+resource "aws_cloudwatch_log_group" "waf" {
+  count             = var.enable_api_foundation && var.waf_enabled ? 1 : 0
+  name              = "aws-waf-logs-${local.name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "control" {
+  count                   = var.enable_api_foundation && var.waf_enabled ? 1 : 0
+  resource_arn            = aws_wafv2_web_acl.control[0].arn
+  log_destination_configs = [aws_cloudwatch_log_group.waf[0].arn]
 }

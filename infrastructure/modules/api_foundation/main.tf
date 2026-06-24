@@ -58,44 +58,41 @@ resource "aws_secretsmanager_secret_version" "token_signing" {
 # admin_token Lambda — POST /auth/token
 # -----------------------------------------------------------------------------
 
-data "aws_iam_policy_document" "lambda_assume" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_iam_role" "admin_token" {
-  count              = var.enable_api_foundation ? 1 : 0
-  name               = "${local.name}-admin-token"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  count = var.enable_api_foundation ? 1 : 0
+  name  = "${local.name}-admin-token"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
 }
 
-data "aws_iam_policy_document" "admin_token" {
-  statement {
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.token_signing[0].arn]
-  }
-  dynamic "statement" {
-    for_each = var.audit_firehose_arn == "" ? [] : [1]
-    content {
-      effect    = "Allow"
-      actions   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
-      resources = [var.audit_firehose_arn]
-    }
-  }
-}
-
+# Inline jsonencode policy (repo convention) so checkov resolves the concrete
+# resource ARNs. Every statement is scoped — secret read to one secret ARN,
+# firehose writes to the audit stream ARN — never "*".
 resource "aws_iam_role_policy" "admin_token" {
-  count  = var.enable_api_foundation ? 1 : 0
-  name   = "admin-token"
-  role   = aws_iam_role.admin_token[0].id
-  policy = data.aws_iam_policy_document.admin_token.json
+  count = var.enable_api_foundation ? 1 : 0
+  name  = "admin-token"
+  role  = aws_iam_role.admin_token[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [{
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_secretsmanager_secret.token_signing[0].arn
+      }],
+      var.audit_firehose_arn == "" ? [] : [{
+        Effect   = "Allow"
+        Action   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
+        Resource = var.audit_firehose_arn
+      }],
+    )
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "admin_token_basic" {

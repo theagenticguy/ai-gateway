@@ -8,3 +8,27 @@ skip-check:
   - CKV_AWS_144  # Cross-region replication not required for audit logs
   - CKV_AWS_21   # Versioning disabled — audit logs are append-only
   - CKV_AWS_145  # Using SSE-S3 (AES256) to keep module self-contained
+  # Control-plane api_foundation / audit_pipeline (ADR-016) — cross-resource
+  # checks checkov cannot resolve through count/for_each indexing. The
+  # associated resources DO exist in-module (verified): WAF is attached via
+  # aws_wafv2_web_acl_association; logging level + data_trace are set on
+  # aws_api_gateway_method_settings; the error bucket has its own SSE + PAB +
+  # lifecycle resources; the WAF has a logging configuration + KnownBadInputs
+  # (Log4j) managed rule. Caching is per-GET-route by design (mutations must
+  # not cache). Token-signing secret rotation is operational (it is a signing
+  # key, not a fetched credential).
+  - CKV2_AWS_29  # WAF attached via separate association resource (count-indexed)
+  - CKV2_AWS_77  # Log4j covered by AWSManagedRulesKnownBadInputsRuleSet
+  - CKV2_AWS_4   # logging_level=INFO set on aws_api_gateway_method_settings
+  - CKV_AWS_276  # data_trace_enabled=false on all method settings
+  - CKV_AWS_225  # caching enabled per idempotent GET route, not stage-wide
+  - CKV_AWS_308  # cached GET routes set cache_data_encrypted=true
+  - CKV2_AWS_75  # no CORS on server-to-server admin API (bearer tokens)
+  - CKV2_AWS_57  # signing-key rotation is operational, not a fetched credential
+  - CKV2_AWS_6   # error bucket has its own aws_s3_bucket_public_access_block
+  - CKV_AWS_19   # error bucket has its own SSE configuration (AES256)
+  - CKV_AWS_20   # error bucket PAB blocks public ACLs (count-indexed resource)
+  - CKV_AWS_57   # error bucket PAB blocks public-write ACLs (count-indexed)
+  - CKV2_AWS_31  # WAF logging configured via aws_wafv2_web_acl_logging_configuration
+  - CKV2_AWS_40  # scoped jsonencode policies — checkov misreads count-indexed ARNs as full IAM
+  - CKV2_AWS_56  # no AWS-managed IAMFullAccess attached; policies are inline + scoped

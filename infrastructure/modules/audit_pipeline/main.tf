@@ -103,66 +103,66 @@ resource "aws_s3_bucket_lifecycle_configuration" "errors" {
 # Firehose delivery role
 # -----------------------------------------------------------------------------
 
-data "aws_iam_policy_document" "firehose_assume" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["firehose.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_iam_role" "firehose" {
-  count              = var.enable_audit_pipeline ? 1 : 0
-  name               = "${local.name}-firehose"
-  assume_role_policy = data.aws_iam_policy_document.firehose_assume.json
+  count = var.enable_audit_pipeline ? 1 : 0
+  name  = "${local.name}-firehose"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "firehose.amazonaws.com" }
+    }]
+  })
 }
 
-data "aws_iam_policy_document" "firehose" {
-  # S3 Tables (Iceberg) write + catalog access.
-  statement {
-    effect = "Allow"
-    actions = [
-      "s3tables:GetTableBucket",
-      "s3tables:GetNamespace",
-      "s3tables:GetTable",
-      "s3tables:GetTableData",
-      "s3tables:PutTableData",
-      "s3tables:UpdateTableMetadataLocation",
-      "s3tables:GetTableMetadataLocation",
-    ]
-    resources = [
-      aws_s3tables_table_bucket.audit[0].arn,
-      "${aws_s3tables_table_bucket.audit[0].arn}/*",
-    ]
-  }
-  # Glue catalog federation for the S3 Tables catalog.
-  statement {
-    effect    = "Allow"
-    actions   = ["glue:GetTable", "glue:GetDatabase", "glue:UpdateTable"]
-    resources = ["*"]
-  }
-  # Error-spillover bucket.
-  statement {
-    effect    = "Allow"
-    actions   = ["s3:PutObject", "s3:GetBucketLocation"]
-    resources = [aws_s3_bucket.errors[0].arn, "${aws_s3_bucket.errors[0].arn}/*"]
-  }
-  # Firehose's own CloudWatch logging.
-  statement {
-    effect    = "Allow"
-    actions   = ["logs:PutLogEvents"]
-    resources = ["arn:aws:logs:${var.aws_region}:*:log-group:/aws/firehose/${local.name}:*"]
-  }
-}
-
+# Inline jsonencode policy (repo convention). Every statement is scoped to a
+# concrete ARN — S3 Tables bucket, the audit namespace's Glue catalog/db/table,
+# the error bucket, and this stream's log group — never "*".
 resource "aws_iam_role_policy" "firehose" {
-  count  = var.enable_audit_pipeline ? 1 : 0
-  name   = "firehose-iceberg"
-  role   = aws_iam_role.firehose[0].id
-  policy = data.aws_iam_policy_document.firehose.json
+  count = var.enable_audit_pipeline ? 1 : 0
+  name  = "firehose-iceberg"
+  role  = aws_iam_role.firehose[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3tables:GetTableBucket",
+          "s3tables:GetNamespace",
+          "s3tables:GetTable",
+          "s3tables:GetTableData",
+          "s3tables:PutTableData",
+          "s3tables:UpdateTableMetadataLocation",
+          "s3tables:GetTableMetadataLocation",
+        ]
+        Resource = [
+          aws_s3tables_table_bucket.audit[0].arn,
+          "${aws_s3tables_table_bucket.audit[0].arn}/*",
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["glue:GetCatalog", "glue:GetTable", "glue:GetDatabase", "glue:UpdateTable"]
+        Resource = [
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${local.namespace}",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${local.namespace}/${local.table}",
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetBucketLocation"]
+        Resource = [aws_s3_bucket.errors[0].arn, "${aws_s3_bucket.errors[0].arn}/*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = "logs:PutLogEvents"
+        Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/aws/firehose/${local.name}:*"
+      },
+    ]
+  })
 }
 
 # -----------------------------------------------------------------------------
