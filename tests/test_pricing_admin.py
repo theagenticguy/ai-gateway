@@ -24,16 +24,30 @@ from pricing_admin.models import PriceEntry, PriceSummary
 # -- Helpers ------------------------------------------------------------------
 
 
+ADMIN_SCOPE = "https://gateway.internal/admin"
+
+
+def _make_jwt(claims: dict[str, Any]) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).decode().rstrip("=")
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
+_ADMIN_JWT = _make_jwt({"sub": "admin-user", "scope": ADMIN_SCOPE})
+
+
 def _make_event(
     method: str = "GET",
     path: str = "/pricing",
     body: dict[str, Any] | str | None = None,
     is_base64: bool = False,
+    token: str | None = None,
 ) -> dict[str, Any]:
-    """Build a Lambda Function URL event."""
+    """Build an API Gateway event with an admin bearer by default."""
     event: dict[str, Any] = {
-        "requestContext": {"http": {"method": method, "path": path}},
+        "requestContext": {"requestId": "rid-test", "http": {"method": method, "path": path}},
         "isBase64Encoded": is_base64,
+        "headers": {"authorization": f"Bearer {token or _ADMIN_JWT}"},
     }
     if body is not None:
         event["body"] = json.dumps(body) if isinstance(body, dict) else body
@@ -45,6 +59,21 @@ def _make_event(
 def _parse_body(response: dict[str, Any]) -> dict[str, Any]:
     """Parse the JSON body from a Lambda response."""
     return json.loads(response["body"])
+
+
+# -- Authorization (now enforced via gwcore, ADR-016) -------------------------
+
+
+class TestAuthorization:
+    def test_missing_auth_401(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/pricing"}}, "headers": {}, "body": ""}
+        assert handler(event)["statusCode"] == 401
+
+    def test_non_admin_403(self) -> None:
+        token = _make_jwt({"sub": "u", "scope": "https://gateway.internal/invoke"})
+        result = handler(_make_event(method="GET", path="/pricing", token=token))
+        assert result["statusCode"] == 403
+        assert _parse_body(result)["error"]["code"] == "forbidden"
 
 
 # -- Model tests --------------------------------------------------------------
@@ -263,7 +292,7 @@ class TestGetPrice:
         assert result["statusCode"] == 404
 
         body = _parse_body(result)
-        assert "not found" in body["error"].lower()
+        assert "not found" in body["error"]["message"].lower()
 
     @patch("pricing_admin.handler.dynamodb")
     def test_get_ddb_error_returns_500(self, mock_ddb: Any) -> None:
@@ -277,7 +306,7 @@ class TestGetPrice:
 
         event = _make_event(method="GET", path="/pricing/anthropic/claude-sonnet-4")
         result = handler(event)
-        assert result["statusCode"] == 500
+        assert result["statusCode"] == 502
 
         body = _parse_body(result)
         assert "error" in body
@@ -377,7 +406,7 @@ class TestUpsertPrice:
         assert result["statusCode"] == 400
 
         body = _parse_body(result)
-        assert "invalid json" in body["error"].lower()
+        assert body["error"]["code"] == "validation_failed"
 
     def test_upsert_validation_error_negative_price(self) -> None:
         event = _make_event(
@@ -389,7 +418,7 @@ class TestUpsertPrice:
         assert result["statusCode"] == 400
 
         body = _parse_body(result)
-        assert "validation" in body["error"].lower()
+        assert body["error"]["code"] == "validation_failed"
 
     def test_upsert_missing_required_fields(self) -> None:
         event = _make_event(
@@ -401,7 +430,7 @@ class TestUpsertPrice:
         assert result["statusCode"] == 400
 
         body = _parse_body(result)
-        assert "validation" in body["error"].lower()
+        assert body["error"]["code"] == "validation_failed"
 
     def test_upsert_body_not_object(self) -> None:
         """Body is valid JSON but not an object (e.g. a list)."""
@@ -414,7 +443,7 @@ class TestUpsertPrice:
         assert result["statusCode"] == 400
 
         body = _parse_body(result)
-        assert "json object" in body["error"].lower()
+        assert body["error"]["code"] == "validation_failed"
 
     @patch("pricing_admin.handler.dynamodb")
     def test_upsert_ddb_error_returns_500(self, mock_ddb: Any) -> None:
@@ -431,7 +460,7 @@ class TestUpsertPrice:
             body={"input_per_1k": 0.003, "output_per_1k": 0.015},
         )
         result = handler(event)
-        assert result["statusCode"] == 500
+        assert result["statusCode"] == 502
 
         body = _parse_body(result)
         assert "error" in body
@@ -494,7 +523,7 @@ class TestDeletePrice:
         assert result["statusCode"] == 404
 
         body = _parse_body(result)
-        assert "not found" in body["error"].lower()
+        assert "not found" in body["error"]["message"].lower()
 
     @patch("pricing_admin.handler.dynamodb")
     def test_delete_ddb_error_returns_500(self, mock_ddb: Any) -> None:
@@ -507,7 +536,7 @@ class TestDeletePrice:
 
         event = _make_event(method="DELETE", path="/pricing/anthropic/claude-sonnet-4")
         result = handler(event)
-        assert result["statusCode"] == 500
+        assert result["statusCode"] == 502
 
         body = _parse_body(result)
         assert "error" in body
@@ -534,27 +563,44 @@ class TestUnsupportedMethod:
     def test_post_returns_405(self) -> None:
         event = _make_event(method="POST", path="/pricing/anthropic/claude-sonnet-4")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
 
         body = _parse_body(result)
-        assert "not allowed" in body["error"].lower()
+        assert "not found" in body["error"]["message"].lower()
 
     def test_patch_returns_405(self) -> None:
         event = _make_event(method="PATCH", path="/pricing/anthropic/claude-sonnet-4")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
 
     def test_put_without_provider_model_returns_405(self) -> None:
         """PUT /pricing (no provider/model) is not a valid route."""
         event = _make_event(method="PUT", path="/pricing")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
 
     def test_delete_without_provider_model_returns_405(self) -> None:
         """DELETE /pricing (no provider/model) is not a valid route."""
         event = _make_event(method="DELETE", path="/pricing")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
+
+
+class TestHandlerInfra:
+    """Health route and the catch-all (non-ControlPlaneError → 500)."""
+
+    def test_health_check(self) -> None:
+        event = {"requestContext": {"http": {"method": "GET", "path": "/health"}}, "rawPath": "/health"}
+        result = handler(event)
+        assert result["statusCode"] == 200
+        assert _parse_body(result)["status"] == "healthy"
+
+    @patch("pricing_admin.handler._list_prices")
+    def test_unhandled_error_returns_500(self, mock_list: Any) -> None:
+        mock_list.side_effect = RuntimeError("boom")
+        result = handler(_make_event(method="GET", path="/pricing"))
+        assert result["statusCode"] == 500
+        assert _parse_body(result)["error"]["code"] == "internal_error"
 
 
 # -- Response format -----------------------------------------------------------
@@ -603,7 +649,7 @@ class TestPathExtraction:
         """Path /pricing/anthropic (no model) should be 405 for non-GET."""
         event = _make_event(method="PUT", path="/pricing/anthropic")
         result = handler(event)
-        assert result["statusCode"] == 405
+        assert result["statusCode"] == 404
 
 
 # -- Base64 encoded body ------------------------------------------------------
@@ -623,6 +669,7 @@ class TestBase64Body:
             "requestContext": {"http": {"method": "PUT", "path": "/pricing/anthropic/claude-sonnet-4"}},
             "body": encoded,
             "isBase64Encoded": True,
+            "headers": {"authorization": f"Bearer {_ADMIN_JWT}"},
         }
         result = handler(event)
         assert result["statusCode"] == 200
