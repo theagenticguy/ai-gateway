@@ -13,7 +13,6 @@ Routes:
 
 from __future__ import annotations
 
-import contextlib
 import os
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -270,9 +269,10 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:  # n
     except errors.ControlPlaneError as exc:
         if exc.status in {401, 403}:
             emit_metric("AuthzDenied", 1, dimensions={"Route": "pricing_admin"})
-            actor = "unknown"
-            with contextlib.suppress(errors.ControlPlaneError):
+            try:
                 actor = auth.build_principal(event).sub or "unknown"
+            except errors.ControlPlaneError:
+                actor = "unknown"
             audit.emit(
                 audit.event_from_request(
                     event,

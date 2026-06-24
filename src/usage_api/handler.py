@@ -20,7 +20,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from gwcore import auth, errors, ok, responses
+from gwcore import audit, auth, errors, ok, responses
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
 from usage_api.models import ModelUsage, UsagePeriod, UsageResponse
@@ -213,7 +213,9 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     cid = correlation_id(event)
     log = bind(logger, cid)
 
-    if (event.get("rawPath") or event.get("path") or "") == "/health":
+    method = (event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod") or "GET").upper()
+    path = event.get("rawPath") or event.get("path") or ""
+    if path == "/health" and method == "GET":
         return ok({"status": "healthy"})
 
     try:
@@ -227,10 +229,11 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
                 msg = "Missing required parameter: team"
                 raise errors.ValidationFailedError(msg)  # noqa: TRY301 — direct request guard
 
-            # Tenant isolation: a caller may read only their own team's usage
-            # unless they hold the admin scope.
-            if not principal.is_admin and principal.team and principal.team != team:
-                emit_metric("AuthzDenied", 1, dimensions={"Route": "usage_api"})
+            # Tenant isolation: a non-admin may read only their OWN team's usage.
+            # A non-admin whose token carries a different (or empty) team claim is
+            # denied — an empty claim must not bypass the check, or it would grant
+            # cross-team reads via the ?team= param.
+            if not principal.is_admin and principal.team != team:
                 msg = "Cannot read usage for another team"
                 raise errors.ForbiddenError(  # noqa: TRY301 — direct tenant-isolation guard
                     msg, details={"requested": team, "your_team": principal.team}
@@ -247,6 +250,22 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     except errors.ControlPlaneError as exc:
         if exc.status in {401, 403}:
             emit_metric("AuthzDenied", 1, dimensions={"Route": "usage_api"})
+            actor = "unknown"
+            try:
+                actor = auth.build_principal(event).sub or "unknown"
+            except errors.ControlPlaneError:
+                actor = "unknown"
+            audit.emit(
+                audit.event_from_request(
+                    event,
+                    action="usage.access",
+                    actor=actor,
+                    resource=f"{method} {path or '/usage'}",
+                    decision="deny",
+                    status=exc.status,
+                    detail=exc.code,
+                )
+            )
         return responses.error_response(exc)
     except Exception:
         log.exception("Unhandled error in usage_api")

@@ -355,6 +355,14 @@ class TestAuthorization:
         result = handler(_make_event(team="team-a", token=token))
         assert result["statusCode"] == 200
 
+    def test_empty_team_claim_cannot_read_arbitrary_team(self) -> None:
+        # A non-admin whose token carries NO team claim must not read another
+        # team via ?team= — an empty claim must not bypass tenant isolation.
+        token = _make_jwt({"sub": "u", "scope": INVOKE_SCOPE})
+        result = handler(_make_event(team="team-b", token=token))
+        assert result["statusCode"] == 403
+        assert _err(result)["code"] == "forbidden"
+
 
 # -- Handler: parameter validation --------------------------------------------
 
