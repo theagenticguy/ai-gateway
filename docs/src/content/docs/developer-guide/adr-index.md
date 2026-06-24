@@ -29,6 +29,7 @@ ADRs are stored in the `adr/` directory at the repository root.
 | [013](/ai-gateway/adrs/013-identity-center-saml-federation/) | Identity Center SAML/OIDC Federation | Proposed | SAML 2.0 and OIDC federation with the Cognito User Pool, plus a Pre-Token-Generation V2 Lambda for IdP group-to-claim mapping. |
 | [014](/ai-gateway/adrs/014-two-plane-architecture-split/) | Two-Plane Architecture Split | Accepted | ALB stays on the inference path; admin APIs (teams, budgets, routing, scanner, pricing, usage) move behind API Gateway with a Cognito authorizer. Eliminates duplicated JWT validation across handlers. |
 | [015](/ai-gateway/adrs/015-openai-responses-bedrock-mantle-proxy/) | OpenAI Responses → Bedrock mantle proxy | Accepted | Codex + GPT-5.5/5.4 (Responses-only) route through the gateway via the `openai` provider with a `custom_host` pointed at the Bedrock mantle endpoint — a proxy, not a fork or a bypass. Amends ADR-006; retracts the earlier "bypass the gateway / fork a `bedrock-responses` provider" framing. |
+| [016](/ai-gateway/adrs/016-control-plane-api-foundation/) | Control-Plane API Foundation (`gwcore`) | Accepted | A shared `src/gwcore/` package gives all control-plane Lambdas one auth path (two verification modes, one `Principal`), a consistent response/error/cursor-pagination contract, in-process + ETag caching, an append-only audit trail (Firehose → Iceberg), and uniform EMF + structured-log observability. Closes the divergent-scope auth bug surfaced under ADR-014; handlers migrate incrementally. |
 
 ## Creating a New ADR
 

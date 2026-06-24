@@ -1,10 +1,49 @@
 import { defineConfig } from "astro/config";
+import path from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
 import mermaid from "astro-mermaid";
 import starlightPageActions from "starlight-page-actions";
 import starlightLlmsTxt from "starlight-llms-txt";
 import remarkGfm from "remark-gfm";
+
+const SITE_BASE = "/ai-gateway";
+const DOCS_ROOT = "src/content/docs";
+
+/**
+ * Integration: fix the home page's "copy as markdown" action URL.
+ *
+ * starlight-page-actions builds the markdown href as
+ * `Astro.url.pathname.replace(/\/$/, "") + ".md"`. For every page that yields a
+ * real file (`/ai-gateway/user-guide/` -> `/ai-gateway/user-guide.md`), but for
+ * the site root it collapses `/ai-gateway/` -> `/ai-gateway` -> `/ai-gateway.md`,
+ * which sits OUTSIDE the base path and cannot be served by a project Pages site.
+ * The actual home markdown lives at `/ai-gateway/index.md`. Rewrite just that one
+ * href in the built home page. Self-contained, no node_modules patch.
+ */
+function fixHomeMarkdownActionUrl() {
+  return {
+    name: "fix-home-markdown-action-url",
+    hooks: {
+      "astro:build:done": async ({ dir, logger }) => {
+        const home = fileURLToPath(new URL("./index.html", dir));
+        const bad = `href="${SITE_BASE}.md"`;
+        const good = `href="${SITE_BASE}/index.md"`;
+        try {
+          const html = await readFile(home, "utf-8");
+          if (html.includes(bad)) {
+            await writeFile(home, html.split(bad).join(good));
+            logger.info(`Rewrote home markdown action: ${bad} -> ${good}`);
+          }
+        } catch (err) {
+          logger.warn(`Could not post-process home page: ${err}`);
+        }
+      },
+    },
+  };
+}
 
 export default defineConfig({
   site: "https://theagenticguy.github.io",
@@ -89,6 +128,7 @@ export default defineConfig({
       ],
     }),
     sitemap(),
+    fixHomeMarkdownActionUrl(),
   ],
 
   markdown: {
@@ -102,30 +142,60 @@ export default defineConfig({
 });
 
 /**
- * Remark plugin: rewrites relative .md/.mdx links to trailing-slash URLs.
- * Keeps raw markdown links working on GitHub while producing correct URLs
- * for the built Starlight site.
+ * Remark plugin: rewrites relative .md/.mdx links to site-absolute,
+ * trailing-slash Starlight URLs.
+ *
+ * Why site-absolute and not just `.md` -> `/`: Starlight serves every page as
+ * a trailing-slash directory (`/admin-guide/deployment/`). A *relative* target
+ * like `environments/` then resolves against the current directory in the
+ * browser -> `/admin-guide/deployment/environments/` (a 404). Relative links
+ * only happened to work from index pages. Resolving each link against the
+ * page's own route and emitting an absolute `/ai-gateway/...` URL fixes leaf
+ * pages and is position-independent. Raw `.md` links still work on GitHub
+ * because this rewrite only runs at build time.
  */
 function remarkStripMdLinks() {
-  return (tree) => {
-    visitLinks(tree);
+  return (tree, file) => {
+    // Directory of the source file relative to src/content/docs. Relative
+    // markdown links resolve against the *source file's directory*, not the
+    // rendered route — e.g. a link from "getting-started/prerequisites.mdx" to
+    // "authentication.md" targets the sibling "getting-started/authentication",
+    // not "getting-started/prerequisites/authentication".
+    const abs = (file?.path ?? "").replace(/\\/g, "/");
+    const idx = abs.indexOf(`${DOCS_ROOT}/`);
+    let pageDir = "";
+    if (idx !== -1) {
+      const relFromDocs = abs.slice(idx + DOCS_ROOT.length + 1);
+      const dir = path.posix.dirname(relFromDocs);
+      pageDir = dir === "." ? "" : dir;
+    }
+    visitLinks(tree, pageDir);
   };
 }
 
-function visitLinks(node) {
+function visitLinks(node, pageDir) {
   if (node.type === "link" && node.url) {
-    // Only process relative links (not http://, mailto:, etc.)
-    if (!/^[a-z]+:/i.test(node.url)) {
-      const [path, fragment] = node.url.split("#");
-      if (path.endsWith(".md") || path.endsWith(".mdx")) {
-        const stripped = path.replace(/\.mdx?$/, "/");
-        node.url = fragment ? `${stripped}#${fragment}` : stripped;
+    // Only process relative links (not http://, mailto:, anchors, etc.)
+    if (!/^[a-z]+:/i.test(node.url) && !node.url.startsWith("/") && !node.url.startsWith("#")) {
+      const [rawPath, fragment] = node.url.split("#");
+      if (rawPath.endsWith(".md") || rawPath.endsWith(".mdx")) {
+        const stripped = rawPath.replace(/\.mdx?$/, "");
+        // Resolve the link target against the page's own source directory, then
+        // make it site-absolute with the configured base and a trailing slash.
+        let resolved = path.posix.normalize(
+          path.posix.join("/", pageDir, stripped),
+        );
+        // An index page renders at its directory route, so a link to index.md
+        // maps to the containing dir (e.g. "index" -> "/", "x/index" -> "/x").
+        resolved = resolved.replace(/(^|\/)index$/, "$1");
+        const url = `${SITE_BASE}${resolved}/`.replace(/\/{2,}/g, "/");
+        node.url = fragment ? `${url}#${fragment}` : url;
       }
     }
   }
   if (node.children) {
     for (const child of node.children) {
-      visitLinks(child);
+      visitLinks(child, pageDir);
     }
   }
 }

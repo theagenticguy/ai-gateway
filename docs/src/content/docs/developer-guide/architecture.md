@@ -139,6 +139,8 @@ The data plane handles high-volume, latency-sensitive LLM API requests. Every re
 
 The control plane handles low-volume, correctness-sensitive configuration and management operations. All admin endpoints sit behind a single API Gateway REST API with a shared Cognito authorizer, gated by the `enable_admin_api` feature flag.
 
+**Shared foundation (`gwcore`).** Every control-plane Lambda imports the shared `src/gwcore/` package instead of re-implementing primitives. `gwcore` provides one authentication path (two verification modes -- `trusted_edge` reads claims behind the Cognito authorizer, `verify` does full RS256 against cached JWKS -- both yielding one `Principal`), a unified `require(...)` authorization gate, a consistent response/error envelope with opaque-cursor pagination, in-process TTL + ETag caching, an append-only audit trail, and uniform EMF metrics + structured logging. All twelve services run on it. See [ADR-016](/ai-gateway/adrs/016-control-plane-api-foundation/).
+
 **Admin API routes:**
 
 | Route | Module | Lambda Source | Purpose |
@@ -156,13 +158,13 @@ The control plane handles low-volume, correctness-sensitive configuration and ma
 |---|---|---|
 | State storage | DynamoDB | Budget definitions, usage counters (atomic), team configs, routing rules |
 | Chargeback reports | Step Functions + Lambda | Monthly cost reports per team (`modules/chargeback`) |
-| Audit trail | Kinesis Firehose → S3 (Parquet) | Hive-partitioned compliance audit log (`modules/audit_log`) |
+| Audit trail | Kinesis Firehose → Apache Iceberg on S3 Tables | `gwcore.audit` records every mutation and authz decision; Firehose lands them in an Iceberg table for ACID + Athena queries (`modules/audit_pipeline`, ADR-016). The earlier Parquet + Glue path (`modules/audit_log`) remains for compatibility. |
 | Cost attribution | CloudWatch subscription + Lambda | Parses gateway logs, emits per-team/model cost metrics (`modules/cost_attribution`) |
 | Feature flags | AppConfig | Hot-path toggles (content scanner on/off) without redeployment (`modules/appconfig`) |
 | Budget alerts | SNS | Notifications when teams hit warning (80%) or hard (100%) budget thresholds |
 | CVE monitoring | Amazon Inspector | Continuous vulnerability scanning of ECR images (`modules/inspector`) |
 
-**Terraform modules** backing the control plane: `admin_api`, `team_registration`, `routing`, `budgets`, `chargeback`, `audit_log`, `cost_attribution`, `inspector`.
+**Terraform modules** backing the control plane: `admin_api`, `api_foundation`, `team_registration`, `routing`, `budgets`, `chargeback`, `audit_log`, `audit_pipeline`, `cost_attribution`, `inspector`.
 
 ### Why Two Planes
 
@@ -234,7 +236,7 @@ flowchart TD
 
 ### Module Responsibilities
 
-The infrastructure is organized into 17 modules. The table below groups them by plane.
+The infrastructure is organized into 19 modules. The table below groups them by plane.
 
 **Foundation modules** (shared by both planes):
 
@@ -260,12 +262,14 @@ The infrastructure is organized into 17 modules. The table below groups them by 
 | Module | Resources | Key Outputs |
 |--------|-----------|---------|
 | **admin_api** | API Gateway REST API, Cognito authorizer, per-path Lambda integrations, CloudWatch access logging | `api_url`, `api_execution_arn` |
+| **api_foundation** | Deployed control-plane stage (method-level GET cache + throttling), per-tenant usage plans + API keys, regional WAF, JSON access logging, the token-exchange route, and alarms + dashboard for the `gwcore` EMF metrics (ADR-016) | `stage_invoke_url`, `dashboard_name` |
 | **team_registration** | Lambda + DynamoDB for self-service team onboarding | `function_url` |
 | **routing** | Lambda + DynamoDB for dynamic routing config management | `function_url` |
 | **budgets** | DynamoDB tables (budget definitions + usage counters), SNS budget alerts topic | `budgets_table_name`, `usage_table_name`, `budget_alerts_topic_arn` |
 | **cost_attribution** | CloudWatch subscription filter, Lambda (log parser → custom metrics), budget alert integration | -- |
 | **chargeback** | Step Functions state machine, Lambda for monthly cost report generation | -- |
 | **audit_log** | Kinesis Firehose (Parquet), S3 bucket (Hive-partitioned), Glue catalog | `s3_bucket_name`, `firehose_stream_name` |
+| **audit_pipeline** | Kinesis Firehose → Apache Iceberg on S3 Tables — the `gwcore.audit` sink (ACID commits, Athena/Spark, no Glue crawler). Successor to `audit_log` (ADR-016) | `firehose_stream_name`, `firehose_stream_arn`, `table_bucket_arn` |
 | **inspector** | Amazon Inspector enhanced scanning for ECR repositories | -- |
 
 ### Why This Order
