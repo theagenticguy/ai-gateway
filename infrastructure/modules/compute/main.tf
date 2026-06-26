@@ -179,6 +179,13 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         Resource = [
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/ai-gateway/*"
         ]
+      },
+      {
+        # Secrets are encrypted with a customer-managed CMK; the ECS agent must
+        # be able to decrypt them when injecting container `secrets`.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = [aws_kms_key.secrets.arn]
       }
     ]
   })
@@ -362,7 +369,16 @@ module "ecs_service" {
       cpu       = local.gateway_cpu
       memory    = local.gateway_memory
 
-      port_mappings = [{
+      # Keep the root filesystem read-only; Portkey only needs a writable /tmp,
+      # provided by the ephemeral `gateway-tmp` task volume mounted below.
+      readonlyRootFilesystem = true
+      mountPoints = [{
+        sourceVolume  = "gateway-tmp"
+        containerPath = "/tmp"
+        readOnly      = false
+      }]
+
+      portMappings = [{
         containerPort = 8787
         protocol      = "tcp"
       }]
@@ -395,7 +411,7 @@ module "ecs_service" {
         { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
       ]
 
-      health_check = {
+      healthCheck = {
         command     = ["CMD-SHELL", "wget -q --spider http://localhost:8787/ || exit 1"]
         interval    = 15
         timeout     = 5
@@ -403,7 +419,11 @@ module "ecs_service" {
         startPeriod = 30
       }
 
-      log_configuration = {
+      # Log group is pre-created by the observability module; disable the
+      # module's auto-creation so it reuses ours instead of erroring.
+      enable_cloudwatch_logging   = false
+      create_cloudwatch_log_group = false
+      logConfiguration = {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = var.gateway_log_group_name
@@ -419,11 +439,25 @@ module "ecs_service" {
       cpu       = 256
       memory    = 256
 
+      # ADOT writes its working files under /tmp; keep the root FS read-only
+      # and back /tmp with an ephemeral task volume.
+      readonlyRootFilesystem = true
+      mountPoints = [{
+        sourceVolume  = "otel-tmp"
+        containerPath = "/tmp"
+        readOnly      = false
+      }]
+
       environment = [
         { name = "AOT_CONFIG_CONTENT", value = var.otel_config_content },
+        # ADOT config references ${env:AWS_REGION} for every AWS exporter; the
+        # ECS agent does not inject it automatically, so set it explicitly.
+        { name = "AWS_REGION", value = var.aws_region },
       ]
 
-      log_configuration = {
+      enable_cloudwatch_logging   = false
+      create_cloudwatch_log_group = false
+      logConfiguration = {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = var.otel_log_group_name
@@ -434,15 +468,23 @@ module "ecs_service" {
     }
   }
 
+  # Ephemeral writable scratch volumes so containers can keep a read-only root
+  # filesystem while still writing to /tmp. Fargate does not support
+  # linuxParameters.tmpfs, so we use empty task volumes instead.
+  volume = {
+    gateway-tmp = {}
+    otel-tmp    = {}
+  }
+
   # Network
   subnet_ids = var.private_subnets
 
   security_group_ingress_rules = {
     alb = {
-      from_port                = 8787
-      to_port                  = 8787
-      ip_protocol              = "tcp"
-      source_security_group_id = var.alb_security_group_id
+      from_port                    = 8787
+      to_port                      = 8787
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = var.alb_security_group_id
     }
   }
 
