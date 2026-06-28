@@ -35,7 +35,7 @@ from content_scanner.models import (
 )
 from content_scanner.patterns import scan_injection
 from content_scanner.pii import scan_pii
-from gwcore import audit
+from gwcore import agentgateway, audit
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
 
@@ -173,7 +173,12 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             body = event.get("body", "")
             if isinstance(body, str):
                 body = json.loads(body)
-            request = ScanRequest.model_validate(body)
+            contract = agentgateway.detect_contract(body)
+            request = (
+                _request_from_agentgateway(body, event)
+                if contract is agentgateway.Contract.AGENTGATEWAY
+                else ScanRequest.model_validate(body)
+            )
         except json.JSONDecodeError:
             # Never echo the exception text — a JSON error can quote the payload,
             # which may carry PII. Log/return a generic message only.
@@ -199,21 +204,22 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
         app_config = _load_appconfig()
         if not app_config.enabled:
             log.info("Scanner globally disabled via AppConfig")
-            return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+            return _respond(contract, True, ScanResponse(verdict="allow", request_id=request.request_id))
 
         team_enabled = app_config.team_overrides.get(request.team_id)
         if team_enabled is False:
             log.info("Scanner disabled for team %s via AppConfig", request.team_id)
-            return _build_portkey_response(True, ScanResponse(verdict="allow", request_id=request.request_id))
+            return _respond(contract, True, ScanResponse(verdict="allow", request_id=request.request_id))
 
         # ── Run scans ─────────────────────────────────────────────────────────
         try:
-            return _scan(request, event)
+            return _scan(request, event, contract)
         except Exception:
             # Scan failure = allow (fail-open). Never block on scanner errors.
             log.exception("Scan failed for request %s, failing open", request.request_id)
             emit_metric("ContentScannerError", 1, dimensions={"Code": "scan_error"})
-            return _build_portkey_response(
+            return _respond(
+                contract,
                 True,
                 ScanResponse(
                     verdict="allow",
@@ -224,7 +230,74 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             )
 
 
-def _scan(request: ScanRequest, event: dict[str, Any] | None = None) -> dict[str, Any]:
+def _request_from_agentgateway(body: dict[str, Any], event: dict[str, Any]) -> ScanRequest:
+    """Build a ScanRequest from an agentgateway guardrail call.
+
+    Content is the flattened message text; team is derived from the forwarded
+    ``x-amzn-oidc-data`` JWT (``custom:team`` claim); model/request id come from
+    forwarded headers when present.
+    """
+    messages = agentgateway.extract_messages(body)
+    jwt = agentgateway.header_lookup(event, "x-amzn-oidc-data")
+    team = _team_from_jwt(jwt)
+    return ScanRequest(
+        content=agentgateway.messages_to_text(messages),
+        team_id=team,
+        model=agentgateway.header_lookup(event, "x-model") or "",
+        request_id=agentgateway.header_lookup(event, "x-request-id") or "",
+    )
+
+
+def _team_from_jwt(jwt_token: str) -> str:
+    """Extract the team claim from an ALB-forwarded JWT (base64, no verify)."""
+    if not jwt_token:
+        return "default"
+    try:
+        import base64  # noqa: PLC0415
+
+        parts = jwt_token.split(".")
+        if len(parts) < 2:  # noqa: PLR2004
+            return "default"
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return str(claims.get("custom:team", claims.get("team", "default"))) or "default"
+    except Exception:
+        return "default"
+
+
+def _respond(contract: agentgateway.Contract, verdict: bool, scan_response: ScanResponse) -> dict[str, Any]:
+    """Shape the scanner verdict for whichever data-plane contract called us."""
+    if contract is agentgateway.Contract.AGENTGATEWAY:
+        return _build_agentgateway_response(verdict, scan_response)
+    return _build_portkey_response(verdict, scan_response)
+
+
+def _build_agentgateway_response(verdict: bool, scan_response: ScanResponse) -> dict[str, Any]:
+    """Map a scan verdict onto agentgateway's action envelope.
+
+    Allow maps to ``pass``. A redact verdict maps to ``mask`` carrying the
+    redacted content as a single user message. A block maps to ``reject`` 400.
+    """
+    if verdict and scan_response.verdict == "redact" and scan_response.content:
+        return agentgateway.mask_action(
+            [{"role": "user", "content": scan_response.content}],
+            reason="PII redacted",
+        )
+    if verdict:
+        return agentgateway.pass_action()
+    return agentgateway.reject_action(
+        status_code=400,
+        body=json.dumps({"error": "content policy violation"}),
+        reason=scan_response.error or "content blocked",
+    )
+
+
+def _scan(
+    request: ScanRequest,
+    event: dict[str, Any] | None = None,
+    contract: agentgateway.Contract = agentgateway.Contract.PORTKEY,
+) -> dict[str, Any]:
     """Orchestrate PII + injection scans and determine verdict."""
     config = _load_team_config(request.team_id)
 
@@ -277,4 +350,4 @@ def _scan(request: ScanRequest, event: dict[str, Any] | None = None) -> dict[str
     )
     if not portkey_verdict and event is not None:
         _audit_block(event, request, scan_response)
-    return _build_portkey_response(portkey_verdict, scan_response)
+    return _respond(contract, portkey_verdict, scan_response)

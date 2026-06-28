@@ -43,7 +43,7 @@ from budget_enforcement.models import (
     ModelLimit,
     TierConfig,
 )
-from gwcore import audit
+from gwcore import agentgateway, audit
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
 from rate_limiter.handler import check_rate_limit
@@ -378,8 +378,17 @@ def _audit_denial(event: dict[str, Any], request: BudgetCheckRequest, result: Bu
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
     """Lambda Function URL handler.
 
-    Expects a JSON body with ``jwt_token`` (and optionally ``model``,
-    ``provider``, ``estimated_tokens``).
+    Speaks two data-plane contracts (ADR-017):
+
+    - **agentgateway** posts ``{"body": {"messages": [...]}}`` and expects an
+      ``action`` envelope back; the JWT arrives as the forwarded
+      ``x-amzn-oidc-data`` header and the request model/tokens are derived from
+      the messages + headers.
+    - **Portkey** (legacy) posts ``{"jwt_token": ..., "model": ...,
+      "estimated_tokens": ...}`` and expects a ``verdict`` envelope.
+
+    The budget logic is identical; only the request parse and response shape
+    differ. Retaining both keeps rollback to a routing flip.
     """
     cid = correlation_id(event)
     log = bind(logger, cid)
@@ -398,19 +407,66 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             resp = BudgetCheckResponse(allowed=False, status_code=400, reason="Invalid request body")
             return _build_response(resp)
 
-        try:
-            request = BudgetCheckRequest.model_validate(body)
-        except ValidationError as e:
-            log.warning("Invalid budget check request: %s", e)
-            emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "validation_error"})
-            resp = BudgetCheckResponse(
-                allowed=False, status_code=400, reason=f"Validation error: {e.error_count()} errors"
-            )
-            return _build_response(resp)
+        contract = agentgateway.detect_contract(body)
+
+        if contract is agentgateway.Contract.AGENTGATEWAY:
+            request = _request_from_agentgateway(body, event)
+        else:
+            try:
+                request = BudgetCheckRequest.model_validate(body)
+            except ValidationError as e:
+                log.warning("Invalid budget check request: %s", e)
+                emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "validation_error"})
+                resp = BudgetCheckResponse(
+                    allowed=False, status_code=400, reason=f"Validation error: {e.error_count()} errors"
+                )
+                return _build_response(resp)
 
         result = _check_budget(request)
         _audit_denial(event, request, result)
+
+        if contract is agentgateway.Contract.AGENTGATEWAY:
+            return _build_agentgateway_response(result)
         return _build_response(result)
+
+
+def _request_from_agentgateway(body: dict[str, Any], event: dict[str, Any]) -> BudgetCheckRequest:
+    """Build a BudgetCheckRequest from an agentgateway guardrail call.
+
+    The JWT is the forwarded ``x-amzn-oidc-data`` header. agentgateway does not
+    send the resolved model or a token count, so tokens are estimated from the
+    message text and the model is read from a forwarded ``x-model`` header when
+    present (else ``unknown``, which disables only per-model caps, not the
+    team-level hard stop).
+    """
+    messages = agentgateway.extract_messages(body)
+    jwt = agentgateway.header_lookup(event, "x-amzn-oidc-data")
+    model = agentgateway.header_lookup(event, "x-model") or "unknown"
+    return BudgetCheckRequest(
+        jwt_token=jwt,
+        model=model,
+        estimated_tokens=agentgateway.estimate_tokens(messages),
+    )
+
+
+def _build_agentgateway_response(result: BudgetCheckResponse) -> dict[str, Any]:
+    """Map a budget decision onto agentgateway's action envelope.
+
+    Allow (including the warn-threshold and graceful-degradation allows) maps to
+    ``pass``. A hard deny maps to ``reject`` with the budget's status code and a
+    JSON body carrying the reason + retry-after, so the client sees the same
+    429 it sees under Portkey today.
+    """
+    if result.allowed:
+        return agentgateway.pass_action()
+    payload: dict[str, Any] = {"error": result.reason or "budget exceeded"}
+    if result.retry_after_seconds:
+        payload["retry_after_seconds"] = result.retry_after_seconds
+    return agentgateway.reject_action(
+        status_code=result.status_code or 429,
+        body=json.dumps(payload),
+        reason=result.reason or "budget exceeded",
+    )
 
 
 def _build_response(result: BudgetCheckResponse) -> dict[str, Any]:
