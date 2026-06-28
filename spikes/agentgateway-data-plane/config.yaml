@@ -1,0 +1,130 @@
+# agentgateway data-plane PoC config
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# Proves agentgateway can fill Portkey's slot in the ai-gateway solution.
+# Every block is annotated with its Portkey equivalent.
+#
+# Grounded in:
+#   agentgateway/examples/ai-prompt-guard/config.yaml         (promptGuard + AI backend shape)
+#   agentgateway/examples/ai-prompt-guard/bedrock-config.yaml (Bedrock provider + guardrail auth)
+#   agentgateway/controller/.../testdata/backends/llm-multi-priority.yaml (priority-group failover)
+#   agentgateway/crates/agentgateway/src/llm/policy/webhook.rs (webhook guardrail contract)
+#   agentgateway/crates/agentgateway/src/types/local.rs:575-664 (provider keys: openAI/anthropic/bedrock)
+#
+# NOTE: agentgateway's local-config surface is evolving. Fields marked [VERIFY]
+# are inferred from source + controller testdata and must be checked against
+# `agentgateway --help` / the JSON schema at the pinned version before any deploy.
+
+binds:
+  # Portkey listens on 8787; this PoC uses 3000 (agentgateway example default).
+  # In ECS, set this to 8787 so the ALB target group is unchanged. [VERIFY port override]
+  - port: 3000
+    listeners:
+      - routes:
+          # ── Route 1: OpenAI chat completions + Anthropic messages ────────────
+          # Portkey serves both /v1/chat/completions and /v1/messages on one port
+          # (ADR-006). agentgateway picks the route type from the path suffix
+          # (RouteType::Completions vs RouteType::Messages, llm/mod.rs:111-133),
+          # so a single backend serves both surfaces.
+          - matches:
+              - path:
+                  pathPrefix: /v1
+            backends:
+              - ai:
+                  # Priority-group failover mirrors Portkey fallback-anthropic.json
+                  # (Bedrock primary -> Anthropic-direct on 429/5xx). Priority 0 is
+                  # tried first; priority 1 is the fallback group.
+                  # Source: controller/.../llm-multi-priority.yaml
+                  groups:
+                    # Priority 0 - primary (Bedrock Claude Sonnet, via task IAM role)
+                    - providers:
+                        - name: bedrock-sonnet
+                          bedrock:
+                            model: "anthropic.claude-sonnet-4-20250514-v1:0"
+                            region: "us-east-1"
+                          # Bedrock SigV4 via ambient ECS task-role creds.
+                          # Default BackendAuth::Aws (llm/mod.rs:357-365); no static key.
+                          policies:
+                            auth:
+                              aws: {}
+                    # Priority 1 - fallback (Anthropic direct API)
+                    - providers:
+                        - name: anthropic-direct
+                          anthropic:
+                            model: "claude-sonnet-4-20250514"
+                          # Key injected from Secrets Manager as an env var, same as
+                          # Portkey today. [VERIFY env-var auth ref syntax]
+                          # policies: { auth: { key: { env: ANTHROPIC_API_KEY } } }
+            policies:
+              ai:
+                # ── Model aliases ────────────────────────────────────────────
+                # Rewrites requested model names. Portkey did this via
+                # override_params per target; agentgateway does it natively
+                # (llm/policy/mod.rs model_aliases, wildcard-capable).
+                modelAliases:
+                  "gpt-4o": "anthropic.claude-sonnet-4-20250514-v1:0"
+                  "claude-*": "anthropic.claude-sonnet-4-20250514-v1:0"
+
+                # ── Guardrail webhooks (THE make-or-break seam) ──────────────
+                # Portkey wired budget_enforcement + content_scanner as
+                # before_request_hooks. agentgateway posts {body:{messages}} to
+                # the webhook /request path and reads {action: pass|mask|reject}
+                # (llm/policy/webhook.rs:13-47). The existing Lambdas speak the
+                # Portkey {verdict} shape, so each webhook points at an ADAPTER
+                # that translates both directions. See webhook-adapter.md.
+                promptGuard:
+                  request:
+                    # Budget enforcement (via adapter -> budget_enforcement Lambda)
+                    - webhook:
+                        # In the PoC this is the mock; in AWS it is the adapter
+                        # Function URL / API Gateway in front of the Lambda.
+                        host: webhook-adapter
+                        port: 8088
+                        path: /budget/request   # [VERIFY path field name]
+                      # failClosed is the safe default for budgets: if the
+                      # adapter is unreachable, reject. (Portkey budget Lambda
+                      # itself fails OPEN on DynamoDB outage; that logic stays in
+                      # the Lambda. failClosed here guards the transport only.)
+                      failureMode: failClosed
+                    # Content scanning (via adapter -> content_scanner Lambda)
+                    - webhook:
+                        host: webhook-adapter
+                        port: 8088
+                        path: /scan/request     # [VERIFY path field name]
+                      # content_scanner is fail-open by design (a broken scanner
+                      # must not block traffic), so failOpen matches its intent.
+                      failureMode: failOpen
+
+                # ── Provider cache markers (NOT a response cache) ────────────
+                # Portkey had an exact-match Redis RESPONSE cache (ADR-012).
+                # agentgateway has no response cache. This only inserts provider
+                # cache POINTS (Anthropic/Bedrock prompt caching). The Redis
+                # response-cache savings are a REGRESSION; see ADR-017.
+                promptCaching:
+                  cacheSystem: true
+                  cacheMessages: true
+                  minTokens: 1024
+
+# ── Telemetry ──────────────────────────────────────────────────────────────
+# agentgateway emits OTel gen_ai metrics natively (telemetry/metrics.rs:
+# gen_ai_client_token_usage etc.) and exposes token/identity fields to the
+# access log via CEL (cel/types.rs:1203-1262). The ADOT sidecar scrapes these,
+# same pattern as today.
+#
+# CRITICAL for cost_attribution: the access log MUST carry the JWT and token
+# fields the Lambda parses. cost_attribution reads req.headers["x-amzn-oidc-data"]
+# and usage.{prompt,completion,total}_tokens (cost_attribution/models.py:11-85).
+# agentgateway's field names differ (input_tokens/output_tokens), so the access
+# log needs a CEL-shaped record that re-keys them. [VERIFY access-log CEL syntax]
+#
+# config:                                    # [VERIFY top-level telemetry block]
+#   tracing: { ... otel ... }
+#   logging:
+#     fields:
+#       add:
+#         prompt_tokens: 'llm.inputTokens'
+#         completion_tokens: 'llm.outputTokens'
+#         total_tokens: 'llm.totalTokens'
+#         model: 'llm.requestModel'
+#         provider: 'llm.provider'
+#         "req.headers.x-amzn-oidc-data": 'request.headers["x-amzn-oidc-data"]'

@@ -1,0 +1,7 @@
+# Mock webhook adapter for the PoC. Uses uv to run the PEP 723 inline script.
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+WORKDIR /app
+COPY mock_adapter.py /app/mock_adapter.py
+EXPOSE 8088
+# uv resolves the inline dependencies (fastapi, uvicorn) on first run.
+CMD ["uv", "run", "mock_adapter.py"]

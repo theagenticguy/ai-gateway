@@ -1,0 +1,47 @@
+# Local PoC: agentgateway data plane + a mock webhook adapter.
+# No AWS. Proves the container runs, serves both API surfaces, calls the
+# guardrail webhook, and that the adapter translates the contract both ways.
+#
+#   docker compose up
+#   # then send a request (see README.md)
+
+services:
+  agentgateway:
+    # Pin to a released tag before any real use. The repo builds from
+    # cgr.dev/chainguard/glibc-dynamic with ENTRYPOINT /app/agentgateway
+    # (agentgateway/Dockerfile:95,106). [VERIFY published image ref + tag]
+    image: ghcr.io/agentgateway/agentgateway:latest
+    command: ["-f", "/config/config.yaml"]   # [VERIFY flag: -f / --file]
+    ports:
+      - "3000:3000"     # data-plane listener (maps to 8787 in ECS)
+      - "15000:15000"   # admin/metrics, if exposed [VERIFY admin port]
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    environment:
+      # Provider keys would come from Secrets Manager in ECS; here they are
+      # dummies because the mock webhook short-circuits before any LLM call
+      # in the contract test.
+      ANTHROPIC_API_KEY: "sk-ant-dummy"
+      OPENAI_API_KEY: "sk-dummy"
+      # Bedrock uses ambient AWS creds in ECS (task role). For a real upstream
+      # test, mount ~/.aws and set AWS_REGION.
+      AWS_REGION: "us-east-1"
+    depends_on:
+      - webhook-adapter
+
+  webhook-adapter:
+    # Stands in for the adapter that fronts budget_enforcement + content_scanner.
+    # Implements POST /budget/request and /scan/request, translating
+    # agentgateway's {body:{messages}} <-> the Lambda {verdict} shape.
+    # See webhook-adapter.md and ./mock_adapter.py (write before running).
+    build:
+      context: .
+      dockerfile: Dockerfile.mock-adapter
+    image: agentgateway-poc-mock-adapter
+    ports:
+      - "8088:8088"
+    environment:
+      # Flip these to exercise allow vs deny paths without real Lambdas.
+      MOCK_BUDGET_VERDICT: "true"      # set "false" to test 429 reject mapping
+      MOCK_SCAN_VERDICT: "true"        # set "false" to test content block mapping
+      MOCK_RETRY_AFTER: "172800"
