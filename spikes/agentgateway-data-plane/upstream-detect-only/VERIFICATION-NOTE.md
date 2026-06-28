@@ -25,13 +25,34 @@ the compiler-caught fixes).
 
 Commits are **DCO-signed** (`Signed-off-by: Laith Al-Saadoon`).
 
+## Full `make test` — RUN, green (2026-06-28)
+
+`cargo test --all-targets` (== `make test`) on Rust 1.96: **1242 passed in the
+main lib bin, 0 failed**, plus all other test bins 0-failed. No snapshot changes
+(the new field defaults false, so existing insta snapshots are unaffected).
+
+One environmental note (not a code issue): `http::auth::tests::test_aws_sign_request_no_region_error`
+fails on this host because `~/.aws/config` sets `region = us-east-1`, which the
+AWS SDK region-provider chain reads even with `AWS_REGION` unset, so the test's
+"no region → error" assertion doesn't hold. It is **unrelated to this change**
+(the branch does not touch `http/auth`) and **passes in a clean env**, matching
+CI:
+
+```bash
+env -u AWS_BEARER_TOKEN_BEDROCK AWS_CONFIG_FILE=/dev/null \
+    AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+    cargo +1.96 test --all-targets    # fully green
+```
+
+The keycloak example-validation tests (`tests/validate_examples.rs`) skip
+cleanly without `KEYCLOAK_AVAILABLE=1` (CI only sets it on blacksmith runners),
+so they need no docker here and are unaffected by this change.
+
 ## Remaining before opening the PR
 
-- `make test` was run scoped to `llm::policy`; run the **full** `make test` on a
-  dev box for the complete insta-snapshot suite (no snapshot changes expected —
-  the new field defaults false, so existing snapshots are unaffected).
 - `make generate-apis check-clean-repo` to confirm the committed generated files
   match a fresh regen (they were generated here, so this should be a no-op).
+- Push the fork branch and open the issue/PR (awaiting go-ahead).
 
 ## Likely compile nits to watch (low risk, but where they'd surface)
 
