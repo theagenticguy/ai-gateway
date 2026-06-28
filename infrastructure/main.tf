@@ -154,7 +154,7 @@ module "compute" {
   project_name             = var.project_name
   environment              = var.environment
   aws_region               = var.aws_region
-  portkey_image            = var.portkey_image
+  gateway_image            = var.gateway_image
   gateway_desired_count    = var.gateway_desired_count
   gateway_cpu              = var.gateway_cpu
   gateway_memory           = var.gateway_memory
@@ -172,16 +172,11 @@ module "compute" {
   otel_log_group_name    = module.observability.otel_log_group_name
   otel_config_content    = file("${path.module}/otel-config.yaml")
 
-  # Routing
-  portkey_routing_configs = var.enable_provider_fallback ? {
-    for name, config in var.routing_configs : name => base64encode(config)
-  } : {}
+  # ADR-017: routing now lives in the rendered agentgateway config; the LLM
+  # response cache (Redis) is removed. Per-team dynamic routing is a follow-up
+  # (xDS or a config-render-and-reload path); see ADR-017 migration notes.
 
-  # Cache
-  cache_enabled = var.enable_cache
-  redis_url     = var.enable_cache ? module.cache.redis_connection_url : ""
-
-  # Webhook URLs for pre-request hooks
+  # Guardrail Lambdas, wired as agentgateway promptGuard webhooks.
   budget_enforcement_webhook_url = var.enable_budgets ? module.budgets[0].function_url : ""
   content_scanner_webhook_url    = var.enable_content_scanner ? module.content_scanner.function_url : ""
 }
@@ -261,21 +256,13 @@ module "guardrails" {
 }
 
 # -----------------------------------------------------------------------------
-# Cache (ElastiCache Redis for response caching)
+# Cache: DECOMMISSIONED (ADR-017, supersedes ADR-012).
 # -----------------------------------------------------------------------------
-
-module "cache" {
-  source = "./modules/cache"
-
-  project_name    = var.project_name
-  environment     = var.environment
-  enable_cache    = var.enable_cache
-  cache_node_type = var.cache_node_type
-
-  private_subnet_ids    = module.networking.private_subnets
-  vpc_id                = module.networking.vpc_id
-  ecs_security_group_id = module.compute.ecs_security_group_id
-}
+# The LLM exact-match response cache (ElastiCache Redis) is removed with the
+# Portkey-to-agentgateway data-plane swap. agentgateway has no response cache,
+# and response caching is explicitly out of scope. The ./modules/cache code is
+# retained on disk for history but is no longer instantiated. var.enable_cache
+# is forced false (see variables_cache.tf); the dashboard cache widgets are off.
 
 # -----------------------------------------------------------------------------
 # Budgets (DynamoDB tables for budget definitions and usage tracking)

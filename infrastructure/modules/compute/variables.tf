@@ -13,8 +13,8 @@ variable "aws_region" {
   type        = string
 }
 
-variable "portkey_image" {
-  description = "Docker image for the Portkey AI Gateway"
+variable "gateway_image" {
+  description = "Docker image for the agentgateway data-plane proxy (ADR-017)"
   type        = string
 }
 
@@ -88,32 +88,18 @@ variable "otel_config_content" {
   type        = string
 }
 
-variable "portkey_routing_configs" {
-  description = "Map of named Portkey routing configurations (base64-encoded JSON)."
-  type        = map(string)
-  default     = {}
-}
-
-variable "cache_enabled" {
-  description = "Whether response caching via Redis is enabled"
-  type        = bool
-  default     = false
-}
-
-variable "redis_url" {
-  description = "Redis connection URL (rediss:// for TLS). Required when cache_enabled is true."
-  type        = string
-  default     = ""
-}
+# ADR-017: routing now lives in the rendered agentgateway config, not in
+# Portkey env configs; the LLM response cache (Redis) is removed entirely. The
+# portkey_routing_configs / cache_enabled / redis_url variables were dropped.
 
 variable "budget_enforcement_webhook_url" {
-  description = "Function URL for the budget enforcement Lambda (Portkey webhook hook)"
+  description = "Function URL for the budget enforcement Lambda (agentgateway promptGuard webhook)"
   type        = string
   default     = ""
 }
 
 variable "content_scanner_webhook_url" {
-  description = "Function URL for the content scanner Lambda (Portkey webhook hook)"
+  description = "Function URL for the content scanner Lambda (agentgateway promptGuard webhook)"
   type        = string
   default     = ""
 }

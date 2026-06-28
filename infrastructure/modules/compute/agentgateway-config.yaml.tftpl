@@ -1,0 +1,101 @@
+# agentgateway data-plane config (ADR-017). Rendered by templatefile() in
+# compute/main.tf and passed to the container via `-c <inline>` (mirrors how
+# Portkey took base64 PORTKEY_CONFIG). Schema:
+# https://agentgateway.dev/schema/config
+#
+# Field shapes are grounded in agentgateway schema/config.json + Rust source:
+#   - frontendPolicies.accessLog.add: CEL field map (cost_attribution reads these)
+#   - promptGuard.webhook.target: SimpleBackendReference {host:"h:port"}
+#   - backendAuth.aws: {} -> ambient ECS task-role SigV4 (Bedrock)
+#   - llm CEL fields are camelCase: llm.inputTokens, llm.outputTokens, etc.
+
+# Runtime addresses. statsAddr is scraped by the ADOT sidecar for Prometheus
+# metrics; readinessAddr backs the ECS container health check.
+config:
+  statsAddr: "0.0.0.0:15020"
+  readinessAddr: "0.0.0.0:15021"
+  adminAddr: "off"
+
+# Access log + tracing. The accessLog.add map is the contract cost_attribution
+# depends on: it re-keys agentgateway's camelCase CEL token fields to the flat
+# names LogRecord parses (prompt_tokens/completion_tokens/...), and emits the
+# ALB JWT as a flat `oidc_data` field for identity attribution.
+frontendPolicies:
+  tracing:
+    host: localhost:4317        # ADOT sidecar OTLP gRPC receiver
+    protocol: grpc
+    randomSampling: true
+  accessLog:
+    add:
+      prompt_tokens: 'llm.inputTokens'
+      completion_tokens: 'llm.outputTokens'
+      total_tokens: 'llm.totalTokens'
+      cached_input_tokens: 'llm.cachedInputTokens'
+      cache_creation_input_tokens: 'llm.cacheCreationInputTokens'
+      model: 'llm.requestModel'
+      provider: 'llm.provider'
+      oidc_data: 'request.headers["x-amzn-oidc-data"]'
+
+binds:
+- port: 8787
+  listeners:
+  - routes:
+    # Single route serves both OpenAI /v1/chat/completions and Anthropic
+    # /v1/messages; agentgateway selects the route type from the path suffix.
+    - matches:
+      - path:
+          pathPrefix: /v1
+      backends:
+      - ai:
+          # Priority-group failover: Bedrock primary, then Anthropic-direct.
+          # Mirrors the Portkey fallback-anthropic.json strategy. Bedrock uses
+          # ambient ECS task-role credentials (no static key), same as today.
+          groups:
+          - providers:
+            - name: bedrock-primary
+              provider:
+                bedrock:
+                  model: anthropic.claude-sonnet-4-20250514-v1:0
+                  region: ${aws_region}
+              policies:
+                backendAuth:
+                  aws: {}
+          - providers:
+            - name: anthropic-fallback
+              provider:
+                anthropic:
+                  model: claude-sonnet-4-20250514
+              policies:
+                backendAuth:
+                  key: $${ANTHROPIC_API_KEY}
+      policies:
+        ai:
+          modelAliases:
+            "gpt-4*": anthropic.claude-sonnet-4-20250514-v1:0
+          promptGuard:
+            request:
+%{ if budget_enforcement_webhook_host != "" ~}
+            # budget_enforcement Lambda (now speaks the agentgateway {action}
+            # contract). failClosed guards the transport; the Lambda itself
+            # fails open on a DynamoDB outage.
+            - webhook:
+                target:
+                  host: ${budget_enforcement_webhook_host}
+                forwardHeaderMatches:
+                - name: x-amzn-oidc-data
+                  value:
+                    regex: ".*"
+                failureMode: failClosed
+%{ endif ~}
+%{ if content_scanner_webhook_host != "" ~}
+            # content_scanner Lambda (agentgateway {action} contract).
+            # failOpen matches its fail-open-on-error design.
+            - webhook:
+                target:
+                  host: ${content_scanner_webhook_host}
+                forwardHeaderMatches:
+                - name: x-amzn-oidc-data
+                  value:
+                    regex: ".*"
+                failureMode: failOpen
+%{ endif ~}

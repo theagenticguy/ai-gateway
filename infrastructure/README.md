@@ -47,7 +47,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.51.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.52.0 |
 | <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
 
 ## Modules
@@ -59,7 +59,6 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="module_audit_log"></a> [audit\_log](#module\_audit\_log) | ./modules/audit_log | n/a |
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
-| <a name="module_cache"></a> [cache](#module\_cache) | ./modules/cache | n/a |
 | <a name="module_chargeback"></a> [chargeback](#module\_chargeback) | ./modules/chargeback | n/a |
 | <a name="module_clients"></a> [clients](#module\_clients) | ./modules/clients | n/a |
 | <a name="module_compute"></a> [compute](#module\_compute) | ./modules/compute | n/a |
@@ -89,7 +88,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into | `string` | `"us-east-1"` | no |
 | <a name="input_budget_alarm_threshold_pct"></a> [budget\_alarm\_threshold\_pct](#input\_budget\_alarm\_threshold\_pct) | Percentage of daily budget that triggers the budget utilization alarm | `number` | `80` | no |
 | <a name="input_budget_limit_daily_usd"></a> [budget\_limit\_daily\_usd](#input\_budget\_limit\_daily\_usd) | Daily budget limit in USD for dashboard gauge and budget alarm | `number` | `1000` | no |
-| <a name="input_cache_node_type"></a> [cache\_node\_type](#input\_cache\_node\_type) | ElastiCache node instance type | `string` | `"cache.t4g.micro"` | no |
+| <a name="input_cache_node_type"></a> [cache\_node\_type](#input\_cache\_node\_type) | DECOMMISSIONED (ADR-017): unused; the cache module is no longer instantiated. | `string` | `"cache.t4g.micro"` | no |
 | <a name="input_callback_urls"></a> [callback\_urls](#input\_callback\_urls) | List of allowed callback URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/callback"<br/>]</pre> | no |
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ACM certificate ARN for HTTPS listener | `string` | `""` | no |
 | <a name="input_client_configs"></a> [client\_configs](#input\_client\_configs) | Map of team configurations for per-team Cognito app clients.<br/>Each key is the team identifier; value specifies allowed OAuth scopes<br/>and a human-readable description.<br/><br/>Example:<br/>  client\_configs = {<br/>    platform = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke"]<br/>      description    = "Platform engineering team"<br/>    }<br/>    ml-ops = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]<br/>      description    = "ML Operations team"<br/>    }<br/>  } | <pre>map(object({<br/>    allowed_scopes = list(string)<br/>    description    = string<br/>  }))</pre> | `{}` | no |
@@ -101,7 +100,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_enable_appconfig"></a> [enable\_appconfig](#input\_enable\_appconfig) | Enable AWS AppConfig for feature flag management (scanner toggle) | `bool` | `false` | no |
 | <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
-| <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | Whether to deploy an ElastiCache Redis cluster for response caching | `bool` | `false` | no |
+| <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | DECOMMISSIONED (ADR-017): LLM response cache removed. Must be false. | `bool` | `false` | no |
 | <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
 | <a name="input_enable_content_scanner"></a> [enable\_content\_scanner](#input\_enable\_content\_scanner) | Whether to deploy the content scanner Lambda (PII redaction + injection detection) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
@@ -115,6 +114,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_error_rate_threshold_pct"></a> [error\_rate\_threshold\_pct](#input\_error\_rate\_threshold\_pct) | Error rate percentage threshold that triggers the high error rate alarm | `number` | `5` | no |
 | <a name="input_gateway_cpu"></a> [gateway\_cpu](#input\_gateway\_cpu) | Total CPU units for the gateway ECS task | `number` | `1024` | no |
 | <a name="input_gateway_desired_count"></a> [gateway\_desired\_count](#input\_gateway\_desired\_count) | Desired number of gateway ECS tasks | `number` | `2` | no |
+| <a name="input_gateway_image"></a> [gateway\_image](#input\_gateway\_image) | Docker image URI for the AI Gateway data plane (agentgateway, ADR-017; pinned + mirrored to ECR by the release workflow) | `string` | `"ghcr.io/agentgateway/agentgateway:latest"` | no |
 | <a name="input_gateway_memory"></a> [gateway\_memory](#input\_gateway\_memory) | Total memory (MiB) for the gateway ECS task | `number` | `2048` | no |
 | <a name="input_group_mapping"></a> [group\_mapping](#input\_group\_mapping) | Mapping from IdP group names to gateway claims (team, org\_unit, cost\_center, tenant\_tier) | <pre>map(object({<br/>    team        = string<br/>    org_unit    = string<br/>    cost_center = string<br/>    tenant_tier = string<br/>  }))</pre> | `{}` | no |
 | <a name="input_guardrails_blocked_topics"></a> [guardrails\_blocked\_topics](#input\_guardrails\_blocked\_topics) | List of topics to block, each with a name and definition | <pre>list(object({<br/>    name       = string<br/>    definition = string<br/>    examples   = optional(list(string), [])<br/>  }))</pre> | <pre>[<br/>  {<br/>    "definition": "Discussions or recommendations about competitor products and services.",<br/>    "examples": [<br/>      "Tell me about competing AI platforms"<br/>    ],<br/>    "name": "competitor_products"<br/>  },<br/>  {<br/>    "definition": "Internal financial data, revenue figures, or unreleased business metrics.",<br/>    "examples": [<br/>      "What is the company revenue this quarter"<br/>    ],<br/>    "name": "internal_financials"<br/>  }<br/>]</pre> | no |
@@ -124,7 +124,6 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_latency_evaluation_minutes"></a> [latency\_evaluation\_minutes](#input\_latency\_evaluation\_minutes) | Number of 1-minute evaluation periods for the latency alarm | `number` | `5` | no |
 | <a name="input_logout_urls"></a> [logout\_urls](#input\_logout\_urls) | List of allowed logout URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/logout"<br/>]</pre> | no |
 | <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
-| <a name="input_portkey_image"></a> [portkey\_image](#input\_portkey\_image) | Docker image URI for the AI Gateway (custom-built from Portkey OSS, pushed to ECR + GHCR by release workflow) | `string` | `"ghcr.io/theagenticguy/ai-gateway:latest"` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
 | <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
 | <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are Portkey-compatible routing JSON. | `map(string)` | `{}` | no |

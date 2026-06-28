@@ -276,39 +276,20 @@ locals {
   gateway_cpu    = var.gateway_cpu - 256
   gateway_memory = var.gateway_memory - 256
 
-  # Build before_request_hooks array based on which webhook URLs are provided
-  before_request_hooks = concat(
-    var.budget_enforcement_webhook_url != "" ? [
-      {
-        type = "guardrail"
-        id   = "budget-enforcement"
-        deny = true
-        checks = [{
-          id = "budget_check"
-          "default.webhook" = {
-            webhookURL = var.budget_enforcement_webhook_url
-          }
-        }]
-      }
-    ] : [],
-    var.content_scanner_webhook_url != "" ? [
-      {
-        type = "guardrail"
-        id   = "content-scanner"
-        deny = true
-        checks = [{
-          id = "content_scan"
-          "default.webhook" = {
-            webhookURL = var.content_scanner_webhook_url
-          }
-        }]
-      }
-    ] : []
-  )
+  # ADR-017: the data plane is agentgateway, not Portkey. Guardrail Lambdas are
+  # wired as agentgateway promptGuard webhooks; they speak the {action} contract
+  # (see gwcore.agentgateway). agentgateway's webhook target is a host:port
+  # reference, so strip the scheme/path from each Lambda Function URL.
+  budget_enforcement_webhook_host = var.budget_enforcement_webhook_url != "" ? "${replace(replace(var.budget_enforcement_webhook_url, "https://", ""), "/", "")}:443" : ""
+  content_scanner_webhook_host    = var.content_scanner_webhook_url != "" ? "${replace(replace(var.content_scanner_webhook_url, "https://", ""), "/", "")}:443" : ""
 
-  portkey_config = length(local.before_request_hooks) > 0 ? {
-    before_request_hooks = local.before_request_hooks
-  } : null
+  # Render the agentgateway YAML config. Delivered to the container via `-c`
+  # (inline string), the same way Portkey took base64 PORTKEY_CONFIG.
+  agentgateway_config = templatefile("${path.module}/agentgateway-config.yaml.tftpl", {
+    aws_region                      = var.aws_region
+    budget_enforcement_webhook_host = local.budget_enforcement_webhook_host
+    content_scanner_webhook_host    = local.content_scanner_webhook_host
+  })
 }
 
 module "ecs_cluster" {
@@ -365,12 +346,17 @@ module "ecs_service" {
   container_definitions = {
     gateway = {
       essential = true
-      image     = var.portkey_image
+      image     = var.gateway_image
       cpu       = local.gateway_cpu
       memory    = local.gateway_memory
 
-      # Keep the root filesystem read-only; Portkey only needs a writable /tmp,
-      # provided by the ephemeral `gateway-tmp` task volume mounted below.
+      # ADR-017: agentgateway reads its config inline from `-c`. Routing,
+      # providers, guardrail webhooks, and access-log shaping all live in the
+      # rendered YAML (see agentgateway-config.yaml.tftpl).
+      command = ["-c", local.agentgateway_config]
+
+      # Keep the root filesystem read-only; the binary needs only a writable
+      # /tmp, provided by the ephemeral `gateway-tmp` task volume mounted below.
       readonlyRootFilesystem = true
       mountPoints = [{
         sourceVolume  = "gateway-tmp"
@@ -383,26 +369,13 @@ module "ecs_service" {
         protocol      = "tcp"
       }]
 
-      environment = concat(
-        [
-          { name = "NODE_ENV", value = "production" },
-          { name = "PORT", value = "8787" },
-        ],
-        [for name, config in var.portkey_routing_configs : {
-          name  = "PORTKEY_DEFAULT_CONFIG_${upper(name)}"
-          value = config
-        }],
-        var.cache_enabled ? [
-          { name = "CACHE_STORE", value = "redis" },
-          { name = "REDIS_URL", value = var.redis_url },
-        ] : [],
-        local.portkey_config != null ? [
-          {
-            name  = "PORTKEY_CONFIG"
-            value = base64encode(jsonencode(local.portkey_config))
-          }
-        ] : []
-      )
+      # Provider API keys arrive from Secrets Manager as env vars (same as
+      # before); the agentgateway config references $${ANTHROPIC_API_KEY} etc.
+      # via shell expansion. Bedrock uses the ECS task role (no static key).
+      # No NODE_ENV / PORT / PORTKEY_* / CACHE_STORE / REDIS_URL: the LLM
+      # response cache is removed (ADR-017 / ADR-012 superseded), and config is
+      # delivered inline, not via env.
+      environment = []
 
       secrets = [
         { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },
@@ -411,8 +384,9 @@ module "ecs_service" {
         { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
       ]
 
+      # agentgateway exposes a readiness endpoint on readinessAddr (config block).
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q --spider http://localhost:8787/ || exit 1"]
+        command     = ["CMD-SHELL", "wget -q --spider http://localhost:15021/ || exit 1"]
         interval    = 15
         timeout     = 5
         retries     = 3
