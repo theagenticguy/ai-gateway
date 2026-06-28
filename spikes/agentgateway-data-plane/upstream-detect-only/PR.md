@@ -54,9 +54,14 @@ INFO agentgateway::guardrail::detect: bedrock guardrail detect-only evaluation
 
 Expose the assessment as a first-class CEL field (mirroring `mcpGuardrails` at `cel/types.rs:73-74`) so it can be added to the access log via `frontendPolicies.accessLog.add`, rather than only the `tracing` event. Happy to do that here or in a second PR — maintainer's preference.
 
-## Checklist before pushing (must pass on a dev box — see VERIFICATION-NOTE.md)
+## Checklist (verified on Rust 1.96 + protoc 35.1 — see VERIFICATION-NOTE.md)
 
-- [ ] `make lint` (cargo fmt --check + clippy -D warnings) — rustfmt already verified clean
-- [ ] `make generate-schema check-clean-repo` — **required**: the new `detectOnly` field changes `schema/config.json`; regenerate and commit it or CI fails
-- [ ] `make test` (cargo test, insta snapshots)
-- [ ] every commit `git commit -s` (DCO) — done on the branch
+- [x] `cargo fmt --all -- --check` — clean
+- [x] `cargo clippy -p agentgateway` `-D warnings` — clean
+- [x] `cargo check -p agentgateway` — clean (caught + fixed two xDS sites)
+- [x] `cargo test -p agentgateway --lib llm::policy` — 83 passed
+- [x] `make generate-schema` — `schema/config.json` + `config.md` regenerated with `detectOnly`
+- [x] Go proto bindings (`buf generate`) + CRD Helm templates regenerated; controller `go build`/`go vet` clean
+- [x] every commit `git commit -s` (DCO)
+- [ ] full `make test` (entire insta suite) on a dev box before opening — scoped run was green, no snapshot changes expected
+- [ ] `make generate-apis check-clean-repo` — confirm committed generated files match a fresh regen

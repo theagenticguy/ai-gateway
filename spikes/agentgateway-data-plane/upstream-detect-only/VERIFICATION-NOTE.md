@@ -1,27 +1,37 @@
-# Verification status + how to finish on a dev box
+# Verification status
 
-## What was verified in the authoring sandbox
+## COMPILE-VERIFIED (2026-06-28)
 
-- **rustfmt `--check` passes** on all three edited files against the repo's `rustfmt.toml` (hard tabs, 2-space, match trailing comma). Exit 0.
-- Change is **source-grounded**: every symbol used (`GuardrailOutcome::None`, `GuardrailSource::{Input,Output}` which is `pub` + `Copy`, `is_blocked`/`is_anonymized`, the `BedrockGuardrails` struct, the `#[apply(schema!)]` macro) was read from the actual files before use.
-- Commit is **DCO-signed** (`Signed-off-by: Laith Al-Saadoon`), required by the project CHARTER.
+After installing `protobuf` (protoc 35.1) + `cmake` via Homebrew on the host, the
+full toolchain became available and the patch was verified on **Rust 1.96 +
+protoc 35.1**. All green:
 
-## What could NOT be verified here — and why
+- `cargo check -p agentgateway` — clean (the build caught two xDS construction
+  sites in `agent_xds.rs` that the first commit missed; both fixed).
+- `cargo clippy -p agentgateway` — clean with `-D warnings`.
+- `cargo test -p agentgateway --lib llm::policy` — **83 passed, 0 failed**,
+  including the three new `would_action` tests.
+- `cargo fmt --all -- --check` — clean (full workspace, the real lint gate).
+- `make generate-schema` — regenerated `schema/config.json` + `schema/config.md`
+  with `detectOnly` on every guardrail attachment path.
+- Go controller: `go build` + `go vet` of `./api/...` and
+  `./pkg/agentgateway/plugins/...` — clean after regenerating the Go proto
+  bindings (`buf generate`) and CRD Helm templates.
 
-A full `cargo check` / `clippy` / `test` was **not run**. The sandbox has **no `protoc`** (the `crates/protos` build needs it) and `cargo metadata` times out on the cold workspace. So the patch is **not compile-verified**. Treat it as a high-confidence draft, not a green build.
+The feature is threaded **end to end**: config-file path (Rust) AND Kubernetes
+CRD → controller → xDS → Rust. Two commits on the branch:
+`7dae776` (config-file path + behavior) and `bd81ddb` (xDS/CRD/proto/schema +
+the compiler-caught fixes).
 
-## To finish (on a machine with the Rust 1.96 toolchain + protoc)
+Commits are **DCO-signed** (`Signed-off-by: Laith Al-Saadoon`).
 
-```bash
-git checkout feature/bedrock-guardrails-detect-only
-make lint                          # cargo fmt --check + clippy -D warnings
-make generate-schema               # REQUIRED: regenerate schema/config.json for the new detectOnly field
-git add schema/ && git commit -s -m "gen: regenerate schema for detectOnly"
-make generate-schema check-clean-repo   # must report a clean tree
-make test                          # cargo test (insta snapshots); if a snapshot needs updating, cargo insta review
-```
+## Remaining before opening the PR
 
-Only after `make lint`, `check-clean-repo`, and `make test` are green should the PR be opened.
+- `make test` was run scoped to `llm::policy`; run the **full** `make test` on a
+  dev box for the complete insta-snapshot suite (no snapshot changes expected —
+  the new field defaults false, so existing snapshots are unaffected).
+- `make generate-apis check-clean-repo` to confirm the committed generated files
+  match a fresh regen (they were generated here, so this should be a no-op).
 
 ## Likely compile nits to watch (low risk, but where they'd surface)
 
