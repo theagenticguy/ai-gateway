@@ -1,249 +1,35 @@
 # ──────────────────────────────────────────────────────────────
-# Portkey Release Scanner — Daily upstream source monitoring
+# Data-plane image scanner — DISABLED PENDING REWRITE (ADR-017)
 # ──────────────────────────────────────────────────────────────
-# We pin Portkey by git ref (PORTKEY_REF in versions.env): a release tag
-# OR a commit SHA. Upstream's release cadence has stalled (last tag v1.15.2,
-# 2026-01-12) while main ships unreleased security fixes, so we currently
-# track main HEAD. This workflow checks daily: if a newer stable release tag
-# exists it proposes that (preferred — release-gated); otherwise it proposes
-# the latest main commit SHA. Either way it builds our hardened image, scans
-# it, and opens a PR updating versions.env.
-# ──────────────────────────────────────────────────────────────
-name: Portkey Release Scanner
+# This workflow tracked the Portkey OSS *source* pin (PORTKEY_REF). With the
+# data-plane swap to agentgateway (ADR-017), there is no Portkey source to
+# track: the data plane is the pinned upstream agentgateway image
+# (AGENTGATEWAY_REF + AGENTGATEWAY_IMAGE_DIGEST in versions.env).
+#
+# The daily schedule is removed so this stale Portkey-specific logic stops
+# running. The replacement is a TODO (tracked in ADR-017 migration follow-ups):
+# a watcher that polls github.com/agentgateway/agentgateway releases, resolves
+# the new image digest, and opens a PR bumping AGENTGATEWAY_REF +
+# AGENTGATEWAY_IMAGE_DIGEST. Until then, image CVE coverage is provided by the
+# nightly image scans (Trivy/Grype in ci.yml + rescan-on-advisory.yml + Amazon
+# Inspector on the ECR image), which scan the running image regardless of pin
+# provenance.
+name: Data-plane Image Scanner (disabled, see ADR-017)
 
 on:
-  schedule:
-    - cron: "0 7 * * *"   # Daily at 07:00 UTC (after nightly rescan)
-  workflow_dispatch:       # Manual trigger
+  workflow_dispatch: {} # manual only; daily schedule removed pending rewrite
 
 permissions:
-  contents: write
-  pull-requests: write
-  security-events: write
+  contents: read
 
 jobs:
-  check-release:
-    name: Check for New Portkey Release
+  notice:
+    name: Replacement pending (ADR-017)
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      new_ref: ${{ steps.check.outputs.new_ref }}
-      new_version: ${{ steps.check.outputs.new_version }}
-      current_ref: ${{ steps.check.outputs.current_ref }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Load current pinned ref
-        run: grep -E '^[A-Z_][A-Z0-9_]*=' versions.env >> "$GITHUB_ENV"
-
-      - name: Check GitHub for newer source
-        id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Explain
         run: |
-          echo "current_ref=${PORTKEY_REF}" >> "$GITHUB_OUTPUT"
-
-          # Prefer a newer stable release tag if one exists (release-gated).
-          LATEST_TAG=$(gh api repos/Portkey-AI/gateway/releases/latest --jq '.tag_name' 2>/dev/null || true)
-          # Fall back to main HEAD when no tag is newer than what we track.
-          MAIN_SHA=$(gh api repos/Portkey-AI/gateway/commits/main --jq '.sha' 2>/dev/null || true)
-
-          if [[ -z "$MAIN_SHA" ]]; then
-            echo "::warning::Could not query Portkey-AI/gateway from GitHub"
-            exit 0
-          fi
-
-          # Prefer a release tag ONLY when it is genuinely ahead of our pin.
-          # We deliberately track a commit SHA on main that sits AHEAD of the
-          # latest tag (post-v1.15.2 security fixes), so a tag that differs from
-          # our pin is usually a DOWNGRADE, not an upgrade. The compare API tells
-          # us the direction: base=our pin, head=tag.
-          #   status "ahead"/"diverged" → tag has commits we lack → real upgrade
-          #   status "behind"/"identical" → our pin already contains the tag → skip
-          # This is the fix for the recurring false-positive downgrade PR (#193).
-          if [[ -n "$LATEST_TAG" && "$LATEST_TAG" != "$PORTKEY_REF" && "v${PORTKEY_REF}" != "$LATEST_TAG" ]]; then
-            CMP_STATUS=$(gh api "repos/Portkey-AI/gateway/compare/${PORTKEY_REF}...${LATEST_TAG}" --jq '.status' 2>/dev/null || true)
-            echo "Latest release tag: ${LATEST_TAG}, current pin: ${PORTKEY_REF}, compare status: ${CMP_STATUS:-unknown}"
-            if [[ "$CMP_STATUS" == "ahead" || "$CMP_STATUS" == "diverged" ]]; then
-              echo "new_ref=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
-              echo "new_version=${LATEST_TAG#v}" >> "$GITHUB_OUTPUT"
-              echo "::notice::Newer Portkey release tag found (${CMP_STATUS}): ${LATEST_TAG}"
-              exit 0
-            fi
-            # behind / identical / unknown → our SHA pin already includes the tag.
-            echo "::notice::Release tag ${LATEST_TAG} is not ahead of our pin (status: ${CMP_STATUS:-unknown}) — skipping tag downgrade, checking main."
-          fi
-
-          # No newer tag — compare main HEAD against our pinned SHA.
-          echo "Main HEAD: ${MAIN_SHA}, current pin: ${PORTKEY_REF}"
-          if [[ "$MAIN_SHA" == "$PORTKEY_REF" ]]; then
-            echo "Already tracking main HEAD"
-            exit 0
-          fi
-
-          SHORT="${MAIN_SHA:0:7}"
-          echo "new_ref=${MAIN_SHA}" >> "$GITHUB_OUTPUT"
-          echo "new_version=${LATEST_TAG#v}+${SHORT}" >> "$GITHUB_OUTPUT"
-          echo "::notice::Portkey main advanced to ${MAIN_SHA}"
-
-  scan-and-pr:
-    name: Scan & Open PR
-    needs: check-release
-    if: needs.check-release.outputs.new_ref != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      security-events: write
-    env:
-      NEW_REF: ${{ needs.check-release.outputs.new_ref }}
-      NEW_VERSION: ${{ needs.check-release.outputs.new_version }}
-      CURRENT_REF: ${{ needs.check-release.outputs.current_ref }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
-
-      - name: Compute tarball SHA256
-        id: tarball
-        run: |
-          wget -qO /tmp/portkey.tar.gz \
-            "https://github.com/Portkey-AI/gateway/archive/${NEW_REF}.tar.gz"
-          SHA=$(sha256sum /tmp/portkey.tar.gz | cut -d' ' -f1)
-          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
-          rm -f /tmp/portkey.tar.gz
-
-      - name: Build custom image with new ref
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          push: false
-          load: true
-          tags: ai-gateway:upgrade-scan
-          build-args: |
-            PORTKEY_REF=${{ env.NEW_REF }}
-            PORTKEY_VERSION=${{ env.NEW_VERSION }}
-            PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
-
-      # ── Security scan before proposing upgrade ──────────────
-      - name: Trivy vulnerability scan
-        id: trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          # Keep Trivy's DB cache out of the repo checkout so the PR action's
-          # `git add -A` doesn't stage the >1GB trivy.db (exceeds GitHub's 100MB limit).
-          TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
-        with:
-          image-ref: ai-gateway:upgrade-scan
-          format: sarif
-          output: trivy-upgrade.sarif
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-          ignore-unfixed: true
-          cache-dir: ${{ runner.temp }}/trivy-cache
-
-      - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        if: always()
-        continue-on-error: true
-        with:
-          sarif_file: trivy-upgrade.sarif
-          category: trivy-portkey-upgrade
-
-      - name: Count vulnerabilities
-        id: vuln-count
-        run: |
-          if [[ -f trivy-upgrade.sarif ]]; then
-            CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-upgrade.sarif 2>/dev/null || echo 0)
-            HIGH=$(jq '[.runs[].results[] | select(.level == "warning")] | length' trivy-upgrade.sarif 2>/dev/null || echo 0)
-            echo "critical=${CRITICAL}" >> "$GITHUB_OUTPUT"
-            echo "high=${HIGH}" >> "$GITHUB_OUTPUT"
-          else
-            echo "critical=unknown" >> "$GITHUB_OUTPUT"
-            echo "high=unknown" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          image: ai-gateway:upgrade-scan
-          format: cyclonedx-json
-          output-file: sbom-upgrade.cyclonedx.json
-
-      - name: Grype SBOM scan
-        id: grype
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-          grype sbom-upgrade.cyclonedx.json \
-            --fail-on critical \
-            --output table \
-            --file grype-report.txt 2>&1 || true
-          echo "Grype scan complete"
-        continue-on-error: true
-
-      # ── Update versions.env and open PR ─────────────────────
-      - name: Update versions.env
-        run: |
-          cat > versions.env <<EOF
-          PORTKEY_REF=${NEW_REF}
-          PORTKEY_VERSION=${NEW_VERSION}
-          PORTKEY_TARBALL_SHA256=${{ steps.tarball.outputs.sha256 }}
-          EOF
-          sed -i 's/^[[:space:]]*//' versions.env
-
-      - name: Build compare/release link
-        id: link
-        run: |
-          # If NEW_REF looks like a tag (starts with v), link release notes;
-          # otherwise link the commit-range comparison from the current pin.
-          if [[ "${NEW_REF}" == v* ]]; then
-            echo "url=https://github.com/Portkey-AI/gateway/releases/tag/${NEW_REF}" >> "$GITHUB_OUTPUT"
-            echo "label=Release notes ${NEW_REF}" >> "$GITHUB_OUTPUT"
-          else
-            echo "url=https://github.com/Portkey-AI/gateway/compare/${CURRENT_REF}...${NEW_REF}" >> "$GITHUB_OUTPUT"
-            echo "label=Compare ${CURRENT_REF} → ${NEW_REF}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
-        with:
-          branch: deps/portkey-${{ env.NEW_VERSION }}
-          commit-message: "deps(portkey): bump Portkey gateway ${{ env.CURRENT_REF }} → ${{ env.NEW_REF }}"
-          title: "deps(portkey): bump Portkey gateway → ${{ env.NEW_VERSION }}"
-          body: |
-            ## Portkey Gateway Upgrade
-
-            Automated upgrade detected by the daily source scanner.
-
-            | | |
-            |---|---|
-            | **Current ref** | `${{ env.CURRENT_REF }}` |
-            | **New ref** | `${{ env.NEW_REF }}` |
-            | **Label** | `${{ env.NEW_VERSION }}` |
-            | **Upstream** | [${{ steps.link.outputs.label }}](${{ steps.link.outputs.url }}) |
-            | **Image build** | Custom hardened container (Node.js 24 LTS, non-root, tini) |
-
-            > **Note:** when the new ref is a commit SHA (not a release tag), this
-            > is unreleased upstream code that skipped Portkey's own release gate —
-            > review the compare link carefully before merging.
-
-            ### Security Scan Results
-
-            | Scanner | CRITICAL | HIGH |
-            |---|---|---|
-            | Trivy | ${{ steps.vuln-count.outputs.critical }} | ${{ steps.vuln-count.outputs.high }} |
-
-            > Full SARIF results uploaded to the [Security tab](/${{ github.repository }}/security/code-scanning).
-            > Grype SBOM scan also ran — check workflow logs for details.
-
-            ### Checklist
-            - [ ] Review release notes for breaking changes
-            - [ ] Verify scan results are acceptable
-            - [ ] Run integration tests if applicable
-          labels: dependencies,automated
-          assignees: theagenticguy
-          reviewers: theagenticguy
+          echo "The Portkey release scanner is retired with the agentgateway"
+          echo "data-plane swap (ADR-017). Rewrite this as an agentgateway image"
+          echo "version/digest watcher. Image CVE scanning continues via the"
+          echo "nightly Trivy/Grype/Inspector image scans."

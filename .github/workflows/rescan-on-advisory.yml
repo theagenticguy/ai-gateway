@@ -63,9 +63,9 @@ jobs:
           load: true
           tags: ai-gateway:sbom-fallback
           build-args: |
-            PORTKEY_REF=${{ env.PORTKEY_REF }}
-            PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
-            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
+            AGENTGATEWAY_REF=${{ env.AGENTGATEWAY_REF }}
+            AGENTGATEWAY_VERSION=${{ env.AGENTGATEWAY_VERSION }}
+            AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@${{ env.AGENTGATEWAY_IMAGE_DIGEST }}
 
       - name: Generate SBOM fallback
         if: steps.download-sbom.outcome == 'failure'
@@ -150,9 +150,9 @@ jobs:
           load: true
           tags: ai-gateway:rescan
           build-args: |
-            PORTKEY_REF=${{ env.PORTKEY_REF }}
-            PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
-            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
+            AGENTGATEWAY_REF=${{ env.AGENTGATEWAY_REF }}
+            AGENTGATEWAY_VERSION=${{ env.AGENTGATEWAY_VERSION }}
+            AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@${{ env.AGENTGATEWAY_IMAGE_DIGEST }}
 
       - name: Trivy rescan
         id: trivy
