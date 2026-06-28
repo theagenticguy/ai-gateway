@@ -1,15 +1,36 @@
-# ADR-017: agentgateway as the data plane (spike)
+# ADR-017: agentgateway as the data plane
 
-- **Status:** Proposed (spike)
+- **Status:** Accepted (2026-06-27) — implemented on `release/agentgateway-data-plane`
 - **Date:** 2026-06-27
-- **Supersedes:** none
-- **Relates to:** ADR-001 (Portkey over LiteLLM), ADR-006 (dual API surface), ADR-009 (provider routing), ADR-010 (cost attribution), ADR-012 (response cache), ADR-014 (two-plane split), ADR-015 (mantle proxy), ADR-016 (control-plane foundation)
+- **Supersedes:** ADR-012 (response cache)
+- **Relates to:** ADR-001 (Portkey over LiteLLM), ADR-006 (dual API surface), ADR-009 (provider routing), ADR-010 (cost attribution), ADR-014 (two-plane split), ADR-015 (mantle proxy), ADR-016 (control-plane foundation)
 
 ## Decision (lead)
 
-Keep Portkey OSS as the data plane today. Treat agentgateway as a tracked alternative, not a migration in flight. Adopt it only when one of three triggers fires (see Recommendation). The control plane (the gwcore Lambdas, DynamoDB, Cognito, Firehose to Iceberg) stays unchanged under either engine; the swap is contained to the ECS container and four integration seams.
+Replace Portkey OSS with agentgateway as the data plane. The control plane (the gwcore Lambdas, DynamoDB, Cognito, Firehose to Iceberg) and the identity layer (Cognito M2M, ALB JWT, per-team clients, SSO) stay unchanged. The swap is contained to the ECS container, the rendered agentgateway config, and the four integration seams below. The LLM response cache is removed (response/semantic caching is out of scope).
 
-This is a paper + local-PoC spike. Nothing here changes production.
+This ADR began as a spike. The operator directed a full rip-and-replace on a release branch, dropping response/semantic caching, focusing on the LLM gateway, and retaining all control-plane + identity features. The sections below now describe the executed migration; the original spike analysis (seam table, alternatives, risk register) is retained because it still maps the work.
+
+## What was implemented
+
+- **Guardrail Lambdas** (`budget_enforcement`, `content_scanner`) speak agentgateway's `{action: pass|mask|reject}` webhook contract alongside the legacy Portkey `{verdict}` shape, via a shared `gwcore.agentgateway` helper. Budget/scan logic unchanged. Rollback stays a routing flip because the Portkey path is retained.
+- **cost_attribution** parses agentgateway's flat access-log shape (synthesizes the nested `usage` block from flat token fields; reads the flat `oidc_data` field for identity) while keeping Portkey back-compat.
+- **routing_config** renders `RoutingConfig` to an agentgateway `ai.groups` priority-group backend (`to_agentgateway_backend()`); `to_portkey_config()` retained.
+- **Terraform compute** runs the agentgateway image, delivers the rendered YAML config inline via `-c`, wires the two Lambdas as `promptGuard` webhooks, re-keys the access log for cost_attribution, and removes the Redis cache.
+- **Dockerfile** re-tags the upstream agentgateway image pinned by digest; the npm CVE-patch apparatus is gone; CI build-args updated.
+
+## Executed-migration caveats (must close before production cutover)
+
+These are real and tracked, not hidden:
+
+1. **Pinned image digest is a placeholder.** `versions.env` `AGENTGATEWAY_IMAGE_DIGEST` must be resolved to the real digest for `AGENTGATEWAY_REF` before a release build.
+2. **Per-team dynamic routing is not yet wired.** Routing now lives in the static rendered config. The `routing_config` Lambda renders the agentgateway backend, but the render-and-reload (or xDS) delivery path is a follow-up; today a routing change needs a config re-render + task reload.
+3. **mantle lane (ADR-015) is not yet ported** into the rendered config (custom provider with `hostOverride` + Responses format). The Bedrock + Anthropic providers are wired; the OpenAI-on-Bedrock Responses lane is a follow-up.
+4. **The agentgateway config field names are validated against the schema reference, not a live agentgateway boot.** A local `agentgateway --validate-only -c <config>` run is required before cutover.
+5. **The Portkey image/source scanner is disabled, not yet replaced** with an agentgateway image-digest watcher.
+6. **Webhook token estimate is coarse.** agentgateway does not forward a token count to the guardrail webhook, so budget pre-checks estimate tokens from message text; the authoritative count still comes post-hoc from cost_attribution.
+
+## Original spike analysis (retained)
 
 ## Context and decision drivers
 

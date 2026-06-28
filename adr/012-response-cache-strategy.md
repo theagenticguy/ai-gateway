@@ -1,8 +1,15 @@
 # ADR-012: Response Cache Strategy with ElastiCache Redis
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-017](017-agentgateway-data-plane-spike.md) (2026-06-27)
 **Date**: 2026-03-20
 **Deciders**: AI Engineering NAMER
+
+> **Superseded (2026-06-27):** The LLM exact-match response cache is removed with
+> the data-plane swap from Portkey OSS to agentgateway (ADR-017). agentgateway
+> has no response cache, and response/semantic caching is explicitly out of
+> scope for the gateway. The ElastiCache Redis module is decommissioned;
+> `enable_cache` is forced false. The original decision below is retained for
+> history.
 
 ## Context
 
