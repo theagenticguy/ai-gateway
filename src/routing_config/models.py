@@ -142,6 +142,56 @@ class RoutingConfig(BaseModel):
         config["targets"] = targets
         return config
 
+    def to_agentgateway_backend(self) -> dict[str, Any]:
+        """Render this routing config as an agentgateway AI-backend block (ADR-017).
+
+        Maps the Portkey strategy onto agentgateway's ``ai.groups`` priority
+        tiers (the shape under ``backends: - ai:``):
+
+        - **fallback**: each target becomes its own priority group, in order.
+          agentgateway tries group 0, then group 1, etc., which reproduces an
+          ordered fallback chain. Portkey's ``on_status_codes`` does not have a
+          per-edge equivalent; agentgateway fails over on connection/health
+          eviction, so the mapping is documented as approximate.
+        - **loadbalance**: all targets in ONE group; agentgateway load-balances
+          across a group with power-of-two-choices. Per-target ``weight`` is
+          carried but agentgateway weighting is capacity-based, not 0-1 ratios.
+        - **conditional**: agentgateway has no request-field predicate routing
+          (e.g. on max_tokens), so the conditions are dropped and the targets
+          collapse to a single priority-ordered fallback. This is a known gap
+          (ADR-017); conditional configs should be flagged on migration.
+
+        Returns the value to place under a route's ``backends: - ai:`` key.
+        """
+        provider_key = {
+            "bedrock": "bedrock",
+            "anthropic": "anthropic",
+            "openai": "openAI",
+            "azure-openai": "azure",
+            "azure": "azure",
+            "google": "gemini",
+        }
+
+        def provider_block(target: RoutingTarget) -> dict[str, Any]:
+            key = provider_key.get(target.provider, target.provider)
+            spec: dict[str, Any] = {}
+            model = target.override_params.get("model")
+            if model:
+                spec["model"] = model
+            entry: dict[str, Any] = {"name": target.name, "provider": {key: spec}}
+            if key == "bedrock":
+                # Bedrock uses ambient ECS task-role creds + SigV4.
+                entry["policies"] = {"backendAuth": {"aws": {}}}
+            return entry
+
+        if self.strategy.mode == StrategyMode.LOADBALANCE:
+            groups = [{"providers": [provider_block(t) for t in self.targets]}]
+        else:
+            # fallback + conditional both collapse to ordered priority groups.
+            groups = [{"providers": [provider_block(t)]} for t in self.targets]
+
+        return {"groups": groups}
+
 
 class RoutingConfigSummary(BaseModel):
     """Summary of a routing config for list responses."""

@@ -213,6 +213,61 @@ class TestRoutingConfig:
         assert config.metadata.version == 1
         assert config.metadata.created_by == "system"
 
+    # ── agentgateway backend renderer (ADR-017) ──────────────────────────────
+
+    def test_to_agentgateway_fallback_one_group_per_target(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK, on_status_codes=[429, 500]),
+            targets=[
+                RoutingTarget(
+                    name="primary",
+                    provider="bedrock",
+                    override_params={"model": "anthropic.claude-sonnet-4-20250514-v1:0"},
+                ),
+                RoutingTarget(
+                    name="fallback",
+                    provider="anthropic",
+                    override_params={"model": "claude-sonnet-4-20250514"},
+                ),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # fallback -> ordered priority groups, one target each
+        assert len(backend["groups"]) == 2
+        g0 = backend["groups"][0]["providers"][0]
+        assert g0["name"] == "primary"
+        assert g0["provider"]["bedrock"]["model"] == "anthropic.claude-sonnet-4-20250514-v1:0"
+        # Bedrock gets ambient AWS SigV4 auth
+        assert g0["policies"]["backendAuth"]["aws"] == {}
+        g1 = backend["groups"][1]["providers"][0]
+        assert g1["provider"]["anthropic"]["model"] == "claude-sonnet-4-20250514"
+
+    def test_to_agentgateway_loadbalance_single_group(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.LOADBALANCE),
+            targets=[
+                RoutingTarget(name="a", provider="bedrock", weight=0.6),
+                RoutingTarget(name="b", provider="anthropic", weight=0.4),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # loadbalance -> one group with all providers
+        assert len(backend["groups"]) == 1
+        assert len(backend["groups"][0]["providers"]) == 2
+
+    def test_to_agentgateway_provider_key_mapping(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(name="o", provider="openai", override_params={"model": "gpt-4o"}),
+                RoutingTarget(name="z", provider="azure-openai"),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # openai -> openAI, azure-openai -> azure (agentgateway provider keys)
+        assert "openAI" in backend["groups"][0]["providers"][0]["provider"]
+        assert "azure" in backend["groups"][1]["providers"][0]["provider"]
+
 
 class TestRoutingConfigSummary:
     def test_summary(self) -> None:
