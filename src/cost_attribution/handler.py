@@ -104,6 +104,10 @@ def _extract_identity(log_event_raw: dict[str, Any]) -> tuple[str, str]:
         req = log_event_raw.get("req", {})
         headers = req.get("headers", {}) if isinstance(req, dict) else {}
         jwt_token = headers.get("x-amzn-oidc-data", "") if isinstance(headers, dict) else ""
+        # agentgateway emits the JWT as a flat access-log field (ADR-017), not
+        # under req.headers. Fall back to it when the nested header is absent.
+        if not jwt_token:
+            jwt_token = log_event_raw.get("oidc_data", "") or ""
         if not jwt_token:
             return ("unknown", "unknown")
 

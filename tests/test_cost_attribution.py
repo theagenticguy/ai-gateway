@@ -152,6 +152,70 @@ class TestLogRecord:
             pass  # ValidationError is acceptable
 
 
+class TestLogRecordAgentgateway:
+    """ADR-017: cost_attribution must parse agentgateway's flat access-log shape."""
+
+    def test_flat_tokens_synthesized_into_usage(self) -> None:
+        record = LogRecord.model_validate(
+            {
+                "prompt_tokens": 120,
+                "completion_tokens": 30,
+                "total_tokens": 150,
+                "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+                "provider": "bedrock",
+            }
+        )
+        assert record.usage is not None
+        assert record.usage.prompt_tokens == 120
+        assert record.usage.completion_tokens == 30
+        assert record.usage.total_tokens == 150
+        assert record.resolved_provider == "bedrock"
+
+    def test_agentgateway_input_output_names_mapped(self) -> None:
+        # agentgateway CEL exposes inputTokens/outputTokens; if the access log
+        # emits them as input_tokens/output_tokens they map onto prompt/completion.
+        record = LogRecord.model_validate(
+            {"input_tokens": 80, "output_tokens": 20, "provider": "bedrock", "model": "m"}
+        )
+        assert record.usage is not None
+        assert record.usage.prompt_tokens == 80
+        assert record.usage.completion_tokens == 20
+
+    def test_flat_cache_tokens_mapped(self) -> None:
+        record = LogRecord.model_validate(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 10,
+                "cached_input_tokens": 64,
+                "cache_creation_input_tokens": 8,
+                "provider": "anthropic",
+                "model": "claude",
+            }
+        )
+        assert record.usage is not None
+        assert record.usage.cache_read_input_tokens == 64
+        assert record.usage.cache_creation_input_tokens == 8
+
+    def test_portkey_nested_shape_unaffected(self) -> None:
+        # The nested Portkey shape must pass through untouched.
+        record = LogRecord.model_validate(
+            {
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                "req": {"headers": {"x-portkey-provider": "openai"}},
+                "model": "gpt-4",
+            }
+        )
+        assert record.usage is not None
+        assert record.usage.prompt_tokens == 5
+        assert record.resolved_provider == "openai"
+
+    def test_flat_oidc_data_field_accepted(self) -> None:
+        record = LogRecord.model_validate(
+            {"prompt_tokens": 1, "completion_tokens": 1, "oidc_data": "eyJ.payload.sig", "model": "m"}
+        )
+        assert record.oidc_data == "eyJ.payload.sig"
+
+
 # ── TokenPrice model ─────────────────────────────────────────────────────────
 
 

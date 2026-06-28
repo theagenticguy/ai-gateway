@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -68,12 +69,56 @@ class RequestInfo(BaseModel):
 
 
 class LogRecord(BaseModel):
-    """A parsed gateway log record containing usage and routing info."""
+    """A parsed gateway log record containing usage and routing info.
+
+    Accepts two access-log shapes (ADR-017):
+
+    - **Portkey**: nested ``usage: {prompt_tokens, ...}``, ``req.headers``,
+      ``model``, ``provider``.
+    - **agentgateway**: flat top-level token fields (``prompt_tokens``,
+      ``completion_tokens``, ``total_tokens``, ``cached_input_tokens`` /
+      ``cache_creation_input_tokens``), ``model``, ``provider``, and the
+      ALB JWT as a flat ``oidc_data`` field. agentgateway's access-log
+      ``add`` block emits flat keys, so the nested shape is synthesized here.
+    """
 
     usage: UsageMetrics | None = None
     model: str = Field(default="unknown")
     provider: str = Field(default="")
     req: RequestInfo = Field(default_factory=RequestInfo)
+    # agentgateway flat identity field (CEL: request.headers["x-amzn-oidc-data"]).
+    oidc_data: str = Field(default="", description="ALB JWT when the access log emits it flat")
+
+    @model_validator(mode="before")
+    @classmethod
+    def synthesize_nested_from_flat(cls, data: Any) -> Any:
+        """Build nested ``usage``/``req.headers`` from agentgateway flat fields.
+
+        Runs only when no nested ``usage`` is present but flat token fields are,
+        so the Portkey-shaped record passes through untouched.
+        """
+        if not isinstance(data, dict):
+            return data
+        flat_token_keys = (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
+        )
+        if data.get("usage") is None and any(k in data for k in flat_token_keys):
+            data = dict(data)
+            data["usage"] = {
+                # agentgateway names input/output; Portkey names prompt/completion.
+                "prompt_tokens": data.get("prompt_tokens", data.get("input_tokens", 0)),
+                "completion_tokens": data.get("completion_tokens", data.get("output_tokens", 0)),
+                "total_tokens": data.get("total_tokens", 0),
+                "cache_read_input_tokens": data.get("cached_input_tokens", data.get("cache_read_input_tokens", 0)),
+                "cache_creation_input_tokens": data.get("cache_creation_input_tokens", 0),
+            }
+        return data
 
     @property
     def resolved_provider(self) -> str:
