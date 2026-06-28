@@ -14,6 +14,12 @@ variable "enable_guardrails" {
   default     = true
 }
 
+variable "enforce_guardrails" {
+  description = "ADR-017: when false (default), all filters run in DETECT/LOG-ONLY mode (input_action/output_action = NONE) — ApplyGuardrail evaluates and returns assessments but does not block or anonymize. When true, filters BLOCK and topic filters are attached. Set per environment."
+  type        = bool
+  default     = false
+}
+
 variable "content_filter_strength" {
   description = "Strength of content filters (LOW, MEDIUM, HIGH)"
   type        = string

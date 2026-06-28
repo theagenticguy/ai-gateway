@@ -276,19 +276,21 @@ locals {
   gateway_cpu    = var.gateway_cpu - 256
   gateway_memory = var.gateway_memory - 256
 
-  # ADR-017: the data plane is agentgateway, not Portkey. Guardrail Lambdas are
-  # wired as agentgateway promptGuard webhooks; they speak the {action} contract
-  # (see gwcore.agentgateway). agentgateway's webhook target is a host:port
-  # reference, so strip the scheme/path from each Lambda Function URL.
+  # ADR-017: the data plane is agentgateway, not Portkey. agentgateway's webhook
+  # target is a host:port reference, so strip the scheme/path from the Lambda
+  # Function URL. budget_enforcement remains the one in-path webhook (it speaks
+  # the {action} contract via gwcore.agentgateway) until the RLS budget redesign.
+  # content_scanner is NO LONGER in the path: Option A replaces it with the
+  # inline Bedrock ApplyGuardrail policy below, so its webhook is not rendered.
   budget_enforcement_webhook_host = var.budget_enforcement_webhook_url != "" ? "${replace(replace(var.budget_enforcement_webhook_url, "https://", ""), "/", "")}:443" : ""
-  content_scanner_webhook_host    = var.content_scanner_webhook_url != "" ? "${replace(replace(var.content_scanner_webhook_url, "https://", ""), "/", "")}:443" : ""
 
   # Render the agentgateway YAML config. Delivered to the container via `-c`
   # (inline string), the same way Portkey took base64 PORTKEY_CONFIG.
   agentgateway_config = templatefile("${path.module}/agentgateway-config.yaml.tftpl", {
     aws_region                      = var.aws_region
     budget_enforcement_webhook_host = local.budget_enforcement_webhook_host
-    content_scanner_webhook_host    = local.content_scanner_webhook_host
+    bedrock_guardrail_id            = var.bedrock_guardrail_id
+    bedrock_guardrail_version       = var.bedrock_guardrail_version
   })
 }
 

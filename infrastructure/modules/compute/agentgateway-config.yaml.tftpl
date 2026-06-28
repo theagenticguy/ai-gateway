@@ -75,9 +75,11 @@ binds:
           promptGuard:
             request:
 %{ if budget_enforcement_webhook_host != "" ~}
-            # budget_enforcement Lambda (now speaks the agentgateway {action}
+            # budget_enforcement Lambda (speaks the agentgateway {action}
             # contract). failClosed guards the transport; the Lambda itself
-            # fails open on a DynamoDB outage.
+            # fails open on a DynamoDB outage. NOTE (ADR-017): this remains the
+            # one in-path Lambda; it moves off-path to RLS sync in the budget
+            # redesign (pending the dollar hard-stop decision).
             - webhook:
                 target:
                   host: ${budget_enforcement_webhook_host}
@@ -87,15 +89,32 @@ binds:
                     regex: ".*"
                 failureMode: failClosed
 %{ endif ~}
-%{ if content_scanner_webhook_host != "" ~}
-            # content_scanner Lambda (agentgateway {action} contract).
-            # failOpen matches its fail-open-on-error design.
-            - webhook:
-                target:
-                  host: ${content_scanner_webhook_host}
-                forwardHeaderMatches:
-                - name: x-amzn-oidc-data
-                  value:
-                    regex: ".*"
-                failureMode: failOpen
+%{ if bedrock_guardrail_id != "" ~}
+            # Bedrock Guardrails, called INLINE via the ApplyGuardrail API
+            # (ADR-017 Option A). Replaces the in-path content_scanner Lambda:
+            # no Lambda, the gateway signs the call with its ECS task role.
+            # DETECT/LOG-ONLY by default — the guardrail RESOURCE sets every
+            # filter action to NONE (see modules/guardrails, enforce_guardrails),
+            # so ApplyGuardrail returns action=NONE and the gateway passes the
+            # request through untouched. Flip enforce_guardrails per env to BLOCK.
+            # source INPUT here (request); OUTPUT is set in the response array.
+            - bedrockGuardrails:
+                guardrailIdentifier: ${bedrock_guardrail_id}
+                guardrailVersion: "${bedrock_guardrail_version}"
+                region: ${aws_region}
+                policies:
+                  backendAuth:
+                    aws: {}
+%{ endif ~}
+%{ if bedrock_guardrail_id != "" ~}
+            response:
+            # Same guardrail on the response path (source OUTPUT). Detect-only
+            # unless enforce_guardrails flips filter actions to BLOCK/ANONYMIZE.
+            - bedrockGuardrails:
+                guardrailIdentifier: ${bedrock_guardrail_id}
+                guardrailVersion: "${bedrock_guardrail_version}"
+                region: ${aws_region}
+                policies:
+                  backendAuth:
+                    aws: {}
 %{ endif ~}

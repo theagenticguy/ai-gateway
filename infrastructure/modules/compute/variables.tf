@@ -99,7 +99,19 @@ variable "budget_enforcement_webhook_url" {
 }
 
 variable "content_scanner_webhook_url" {
-  description = "Function URL for the content scanner Lambda (agentgateway promptGuard webhook)"
+  description = "DEPRECATED (ADR-017 Option A): the content_scanner Lambda is no longer in the inference path — inline Bedrock ApplyGuardrail replaces it. Retained for rollback; not rendered into the config."
+  type        = string
+  default     = ""
+}
+
+variable "bedrock_guardrail_id" {
+  description = "ADR-017: Bedrock Guardrail ID for the inline ApplyGuardrail promptGuard policy. Empty disables the guardrail block in the rendered config."
+  type        = string
+  default     = ""
+}
+
+variable "bedrock_guardrail_version" {
+  description = "ADR-017: Bedrock Guardrail version for the inline ApplyGuardrail promptGuard policy."
   type        = string
   default     = ""
 }

@@ -176,9 +176,16 @@ module "compute" {
   # response cache (Redis) is removed. Per-team dynamic routing is a follow-up
   # (xDS or a config-render-and-reload path); see ADR-017 migration notes.
 
-  # Guardrail Lambdas, wired as agentgateway promptGuard webhooks.
+  # budget_enforcement is the one remaining in-path webhook (until the RLS
+  # budget redesign). content_scanner is intentionally NOT passed: Option A
+  # replaces it with the inline Bedrock guardrail, so it leaves the path.
   budget_enforcement_webhook_url = var.enable_budgets ? module.budgets[0].function_url : ""
-  content_scanner_webhook_url    = var.enable_content_scanner ? module.content_scanner.function_url : ""
+
+  # ADR-017 Option A: Bedrock Guardrails called inline by agentgateway via the
+  # ApplyGuardrail API (detect/log-only by default). The gateway uses its ECS
+  # task-role SigV4 for the call. id/version come from the guardrails module.
+  bedrock_guardrail_id      = var.enable_guardrails ? module.guardrails.guardrail_id : ""
+  bedrock_guardrail_version = var.enable_guardrails ? module.guardrails.guardrail_version : ""
 }
 
 # -----------------------------------------------------------------------------
@@ -250,6 +257,7 @@ module "guardrails" {
   environment  = var.environment
 
   enable_guardrails       = var.enable_guardrails
+  enforce_guardrails      = var.enforce_guardrails
   content_filter_strength = var.guardrails_content_filter_strength
   blocked_topics          = var.guardrails_blocked_topics
   blocked_words           = var.guardrails_blocked_words
