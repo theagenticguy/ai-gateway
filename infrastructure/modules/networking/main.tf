@@ -137,8 +137,12 @@ module "alb" {
         port     = 80
         protocol = "HTTP"
 
-        # Redirect to HTTPS when a certificate is available, otherwise forward to gateway
-        forward = var.certificate_arn == "" ? {
+        # Redirect to HTTPS when a certificate is available, otherwise forward to
+        # gateway — but ONLY when JWT auth is off. A plaintext HTTP:80 forward to
+        # the gateway while JWT is intended (enable_jwt_auth = true) would bypass
+        # auth entirely; in that case create no plaintext forward (the secure
+        # default requires a cert, so the redirect branch below applies instead).
+        forward = (var.certificate_arn == "" && !var.enable_jwt_auth) ? {
           target_group_key = "gateway"
         } : null
 
