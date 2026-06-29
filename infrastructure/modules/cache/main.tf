@@ -53,6 +53,10 @@ resource "aws_elasticache_subnet_group" "redis" {
 # ------------------------------------------------------------------
 
 resource "aws_security_group" "redis" {
+  # checkov:skip=CKV2_AWS_5:Decommissioned per ADR-017 (supersedes ADR-012). The
+  # response cache is no longer instantiated (var.enable_cache forced false, module
+  # not called from main.tf); this SG attaches to the replication group only when
+  # the module is live. Code retained on disk for history per the ADR.
   count = var.enable_cache ? 1 : 0
 
   name        = "${var.project_name}-${var.environment}-redis"
@@ -82,6 +86,8 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_ecs" {
 #checkov:skip=CKV_AWS_2:False positive — this is ElastiCache Redis, not an ALB listener
 resource "aws_elasticache_replication_group" "redis" {
   #checkov:skip=CKV2_AWS_50:Single-node dev cluster
+  #checkov:skip=CKV_AWS_191:Decommissioned per ADR-017 — response cache no longer instantiated (var.enable_cache forced false); transit+at-rest encryption already on, CMK not warranted for dead code retained for history
+  #checkov:skip=CKV_AWS_31:Decommissioned per ADR-017 — transit_encryption_enabled=true is set; auth-token finding is moot since the module is no longer called from main.tf
   count = var.enable_cache ? 1 : 0
 
   replication_group_id = "${var.project_name}-${var.environment}"
