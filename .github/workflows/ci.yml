@@ -42,7 +42,7 @@ jobs:
           fetch-depth: 2
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -331,7 +331,7 @@ jobs:
 
       - name: Checkov IaC scan
         if: always()
-        uses: bridgecrewio/checkov-action@fa9edf8f0a491c59a924ea6accd5bdcf07752cff # v12
+        uses: bridgecrewio/checkov-action@4a1afa9897f7afe297a3762c926e1e800361464f # v12
         with:
           directory: infrastructure/
           framework: terraform
