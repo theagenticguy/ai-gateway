@@ -65,18 +65,6 @@ variable "routing_config_function_name" {
   default     = ""
 }
 
-variable "content_scanner_invoke_arn" {
-  description = "Invoke ARN of the content-scanner Lambda"
-  type        = string
-  default     = ""
-}
-
-variable "content_scanner_function_name" {
-  description = "Function name of the content-scanner Lambda"
-  type        = string
-  default     = ""
-}
-
 variable "pricing_admin_invoke_arn" {
   description = "Invoke ARN of the pricing-admin Lambda"
   type        = string

@@ -4,7 +4,7 @@ Terraform root module for the AI Gateway — deploys VPC, ALB, ECS Fargate, Cogn
 
 ## Architecture
 
-This root module composes 17 local sub-modules. The core data plane is always deployed; the remaining modules are feature-gated by input variables (see the Inputs table below).
+This root module composes 15 local sub-modules. The core data plane is always deployed; the remaining modules are feature-gated by input variables (see the Inputs table below).
 
 **Core (always deployed):**
 
@@ -14,10 +14,8 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | `modules/auth` | Cognito User Pool, M2M client, ALB JWT validation |
 | `modules/compute` | ECS Fargate, ECR, IAM roles, Secrets Manager |
 | `modules/observability` | KMS-encrypted CloudWatch log groups and dashboard |
-| `modules/cache` | ElastiCache Redis for response caching |
-| `modules/guardrails` | Bedrock Guardrails for content safety filtering |
-| `modules/content_scanner` | Lambda + Function URL for PII redaction and injection detection |
-| `modules/appconfig` | Feature flags and dynamic config for the content scanner |
+| `modules/guardrails` | Bedrock Guardrails for inline content safety filtering (ApplyGuardrail) |
+| `modules/appconfig` | Feature flags and dynamic configuration toggles |
 | `modules/cost_attribution` | Lambda pipeline attributing spend per team via CloudWatch metrics |
 | `modules/inspector` | Continuous ECR vulnerability scanning |
 
@@ -62,7 +60,6 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="module_chargeback"></a> [chargeback](#module\_chargeback) | ./modules/chargeback | n/a |
 | <a name="module_clients"></a> [clients](#module\_clients) | ./modules/clients | n/a |
 | <a name="module_compute"></a> [compute](#module\_compute) | ./modules/compute | n/a |
-| <a name="module_content_scanner"></a> [content\_scanner](#module\_content\_scanner) | ./modules/content_scanner | n/a |
 | <a name="module_cost_attribution"></a> [cost\_attribution](#module\_cost\_attribution) | ./modules/cost_attribution | n/a |
 | <a name="module_guardrails"></a> [guardrails](#module\_guardrails) | ./modules/guardrails | n/a |
 | <a name="module_inspector"></a> [inspector](#module\_inspector) | ./modules/inspector | n/a |
@@ -88,21 +85,16 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into | `string` | `"us-east-1"` | no |
 | <a name="input_budget_alarm_threshold_pct"></a> [budget\_alarm\_threshold\_pct](#input\_budget\_alarm\_threshold\_pct) | Percentage of daily budget that triggers the budget utilization alarm | `number` | `80` | no |
 | <a name="input_budget_limit_daily_usd"></a> [budget\_limit\_daily\_usd](#input\_budget\_limit\_daily\_usd) | Daily budget limit in USD for dashboard gauge and budget alarm | `number` | `1000` | no |
-| <a name="input_cache_node_type"></a> [cache\_node\_type](#input\_cache\_node\_type) | DECOMMISSIONED (ADR-017): unused; the cache module is no longer instantiated. | `string` | `"cache.t4g.micro"` | no |
 | <a name="input_callback_urls"></a> [callback\_urls](#input\_callback\_urls) | List of allowed callback URLs for the user SSO client | `list(string)` | <pre>[<br/>  "http://localhost:3000/callback"<br/>]</pre> | no |
 | <a name="input_certificate_arn"></a> [certificate\_arn](#input\_certificate\_arn) | ACM certificate ARN for HTTPS listener | `string` | `""` | no |
 | <a name="input_client_configs"></a> [client\_configs](#input\_client\_configs) | Map of team configurations for per-team Cognito app clients.<br/>Each key is the team identifier; value specifies allowed OAuth scopes<br/>and a human-readable description.<br/><br/>Example:<br/>  client\_configs = {<br/>    platform = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke"]<br/>      description    = "Platform engineering team"<br/>    }<br/>    ml-ops = {<br/>      allowed\_scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]<br/>      description    = "ML Operations team"<br/>    }<br/>  } | <pre>map(object({<br/>    allowed_scopes = list(string)<br/>    description    = string<br/>  }))</pre> | `{}` | no |
 | <a name="input_cognito_domain_prefix"></a> [cognito\_domain\_prefix](#input\_cognito\_domain\_prefix) | Cognito User Pool domain prefix for the token endpoint. Leave empty to skip domain creation. | `string` | `""` | no |
 | <a name="input_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#input\_cognito\_user\_pool\_id) | Cognito User Pool ID for JWT validation. Leave empty to disable JWT auth. | `string` | `""` | no |
-| <a name="input_content_scanner_default_injection_mode"></a> [content\_scanner\_default\_injection\_mode](#input\_content\_scanner\_default\_injection\_mode) | Default injection scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
-| <a name="input_content_scanner_default_pii_mode"></a> [content\_scanner\_default\_pii\_mode](#input\_content\_scanner\_default\_pii\_mode) | Default PII scan mode when team config is missing (off, detect, redact, block) | `string` | `"detect"` | no |
 | <a name="input_enable_admin_api"></a> [enable\_admin\_api](#input\_enable\_admin\_api) | Enable the API Gateway admin plane (also enables team\_registration and routing modules) | `bool` | `false` | no |
-| <a name="input_enable_appconfig"></a> [enable\_appconfig](#input\_enable\_appconfig) | Enable AWS AppConfig for feature flag management (scanner toggle) | `bool` | `false` | no |
+| <a name="input_enable_appconfig"></a> [enable\_appconfig](#input\_enable\_appconfig) | Enable AWS AppConfig for feature flag and dynamic configuration management | `bool` | `false` | no |
 | <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
-| <a name="input_enable_cache"></a> [enable\_cache](#input\_enable\_cache) | DECOMMISSIONED (ADR-017): LLM response cache removed. Must be false. | `bool` | `false` | no |
 | <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
-| <a name="input_enable_content_scanner"></a> [enable\_content\_scanner](#input\_enable\_content\_scanner) | Whether to deploy the content scanner Lambda (PII redaction + injection detection) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to create the Bedrock Guardrail and wire it into the agentgateway data plane (ADR-017). Default true: the guardrail runs inline in detect/log-only mode. | `bool` | `true` | no |
 | <a name="input_enable_inspector"></a> [enable\_inspector](#input\_enable\_inspector) | Whether to enable Amazon Inspector enhanced scanning for ECR repositories | `bool` | `false` | no |
@@ -127,7 +119,7 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
 | <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
-| <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are Portkey-compatible routing JSON. | `map(string)` | `{}` | no |
+| <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are agentgateway routing JSON. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr"></a> [vpc\_cidr](#input\_vpc\_cidr) | CIDR block for the VPC | `string` | `"10.0.0.0/16"` | no |
 
 ## Outputs
@@ -151,8 +143,6 @@ This root module composes 17 local sub-modules. The core data plane is always de
 | <a name="output_cognito_token_endpoint"></a> [cognito\_token\_endpoint](#output\_cognito\_token\_endpoint) | Cognito token endpoint URL |
 | <a name="output_cognito_user_pool_arn"></a> [cognito\_user\_pool\_arn](#output\_cognito\_user\_pool\_arn) | Cognito User Pool ARN |
 | <a name="output_cognito_user_pool_id"></a> [cognito\_user\_pool\_id](#output\_cognito\_user\_pool\_id) | Cognito User Pool ID |
-| <a name="output_content_scanner_function_arn"></a> [content\_scanner\_function\_arn](#output\_content\_scanner\_function\_arn) | ARN of the content scanner Lambda function |
-| <a name="output_content_scanner_function_url"></a> [content\_scanner\_function\_url](#output\_content\_scanner\_function\_url) | Lambda Function URL for the content scanner |
 | <a name="output_ecr_repository_url"></a> [ecr\_repository\_url](#output\_ecr\_repository\_url) | URL of the ECR repository |
 | <a name="output_ecs_cluster_name"></a> [ecs\_cluster\_name](#output\_ecs\_cluster\_name) | Name of the ECS cluster |
 | <a name="output_ecs_service_name"></a> [ecs\_service\_name](#output\_ecs\_service\_name) | Name of the ECS service |

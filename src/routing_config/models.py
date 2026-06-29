@@ -13,7 +13,7 @@ _MIN_PATH_PARTS_WITH_NAME = 3
 
 
 class StrategyMode(StrEnum):
-    """Supported Portkey routing strategy modes."""
+    """Supported routing strategy modes."""
 
     LOADBALANCE = "loadbalance"
     FALLBACK = "fallback"
@@ -35,7 +35,7 @@ class RoutingTarget(BaseModel):
         le=1.0,
         description="Traffic weight for loadbalance mode (0.0-1.0)",
     )
-    virtual_key: str | None = Field(default=None, description="Portkey virtual key for this target")
+    virtual_key: str | None = Field(default=None, description="Provider virtual-key reference for this target")
     retry: dict[str, Any] | None = Field(
         default=None,
         description="Per-target retry config (attempts, on_status_codes)",
@@ -75,7 +75,7 @@ class ConfigMetadata(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    """Complete routing configuration for Portkey."""
+    """Complete provider routing configuration."""
 
     strategy: RoutingStrategy
     targets: list[RoutingTarget] = Field(min_length=1, description="At least one routing target is required")
@@ -116,41 +116,15 @@ class RoutingConfig(BaseModel):
                     raise ValueError(msg)
         return self
 
-    def to_portkey_config(self) -> dict[str, Any]:
-        """Convert to Portkey-native JSON config format."""
-        config: dict[str, Any] = {
-            "strategy": {"mode": self.strategy.mode.value},
-        }
-        if self.strategy.on_status_codes:
-            config["strategy"]["on_status_codes"] = self.strategy.on_status_codes
-        if self.strategy.conditions:
-            config["strategy"]["conditions"] = [c.model_dump(exclude_none=True) for c in self.strategy.conditions]
-
-        targets = []
-        for t in self.targets:
-            target: dict[str, Any] = {"name": t.name, "provider": t.provider}
-            if t.override_params:
-                target["override_params"] = t.override_params
-            if t.weight is not None:
-                target["weight"] = t.weight
-            if t.virtual_key:
-                target["virtual_key"] = t.virtual_key
-            if t.retry:
-                target["retry"] = t.retry
-            targets.append(target)
-
-        config["targets"] = targets
-        return config
-
     def to_agentgateway_backend(self) -> dict[str, Any]:
         """Render this routing config as an agentgateway AI-backend block (ADR-017).
 
-        Maps the Portkey strategy onto agentgateway's ``ai.groups`` priority
+        Maps the routing strategy onto agentgateway's ``ai.groups`` priority
         tiers (the shape under ``backends: - ai:``):
 
         - **fallback**: each target becomes its own priority group, in order.
           agentgateway tries group 0, then group 1, etc., which reproduces an
-          ordered fallback chain. Portkey's ``on_status_codes`` does not have a
+          ordered fallback chain. The ``on_status_codes`` trigger has no
           per-edge equivalent; agentgateway fails over on connection/health
           eviction, so the mapping is documented as approximate.
         - **loadbalance**: all targets in ONE group; agentgateway load-balances

@@ -1,25 +1,21 @@
 """agentgateway guardrail-webhook contract helpers (ADR-017).
 
-When the data plane is agentgateway instead of Portkey, the guardrail-webhook
-contract differs. agentgateway POSTs ``{"body": {"messages": [...]}}`` to the
-webhook and expects back an ``action`` object (``pass`` / ``mask`` / ``reject``),
+agentgateway POSTs ``{"body": {"messages": [...]}}`` to the guardrail webhook
+and expects back an ``action`` object (``pass`` / ``mask`` / ``reject``),
 forwarding matched request headers (so ``x-amzn-oidc-data`` arrives as a header).
-Portkey instead POSTed a domain body (``jwt_token`` / ``content``) and read a
-``{"verdict": bool}`` envelope.
 
-These helpers let a single Lambda speak BOTH contracts. A handler calls
-``detect_contract(body)`` to branch, ``parse_request(...)`` to pull messages +
-forwarded identity out of an agentgateway call, and ``pass_action`` /
-``reject_action`` / ``mask_action`` to shape the response agentgateway expects.
+These helpers let a Lambda speak that contract: ``extract_messages`` /
+``messages_to_text`` / ``estimate_tokens`` pull the prompt and a token estimate
+out of an agentgateway call, ``header_lookup`` reads forwarded identity headers,
+and ``pass_action`` / ``reject_action`` / ``mask_action`` shape the response
+agentgateway expects.
 
 Reference: agentgateway ``crates/agentgateway/src/llm/policy/webhook.rs`` and the
-config-schema reference captured in ADR-017. The Portkey path is retained
-unchanged so rollback is a routing flip, not a code revert.
+config-schema reference captured in ADR-017.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Any
 
 # Rough chars-per-token heuristic for request-time token estimation. agentgateway
@@ -30,30 +26,13 @@ from typing import Any
 _CHARS_PER_TOKEN = 4
 
 
-class Contract(StrEnum):
-    """Which data-plane webhook contract an inbound request speaks."""
+def extract_messages(parsed_body: Any) -> list[dict[str, Any]]:
+    """Pull the message list out of an agentgateway guardrail request body.
 
-    AGENTGATEWAY = "agentgateway"
-    PORTKEY = "portkey"
-
-
-def detect_contract(parsed_body: Any) -> Contract:
-    """Classify a parsed webhook body as agentgateway- or Portkey-shaped.
-
-    agentgateway sends ``{"body": {"messages": [...]}}``. Anything else (a
-    domain body with ``jwt_token`` / ``content`` / ``team_id`` at the top level)
-    is the legacy Portkey shape.
+    Tolerant of malformed input (non-dict bodies, missing keys): returns an
+    empty list rather than raising, so the caller degrades gracefully.
     """
-    if isinstance(parsed_body, dict):
-        inner = parsed_body.get("body")
-        if isinstance(inner, dict) and isinstance(inner.get("messages"), list):
-            return Contract.AGENTGATEWAY
-    return Contract.PORTKEY
-
-
-def extract_messages(parsed_body: dict[str, Any]) -> list[dict[str, Any]]:
-    """Pull the message list out of an agentgateway guardrail request body."""
-    inner = parsed_body.get("body", {})
+    inner = parsed_body.get("body", {}) if isinstance(parsed_body, dict) else {}
     messages = inner.get("messages", []) if isinstance(inner, dict) else []
     return [m for m in messages if isinstance(m, dict)]
 
@@ -101,8 +80,8 @@ def _envelope(action: dict[str, Any]) -> dict[str, Any]:
     """Wrap an action in the HTTP 200 Lambda Function URL response.
 
     agentgateway reads ``{"action": {...}}`` from the body. The Lambda always
-    returns HTTP 200; the action carries the decision (same 200-not-4xx rule the
-    Portkey contract used, for the same reason: a 4xx reads as a hook failure).
+    returns HTTP 200; the action carries the decision. A 4xx would read as a
+    hook *failure* rather than a deny, so the decision must ride in the body.
     """
     import json  # noqa: PLC0415
 

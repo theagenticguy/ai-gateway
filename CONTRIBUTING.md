@@ -73,11 +73,11 @@ Include `terraform plan` output in your PR description for infrastructure change
 
 All pinned image versions live in `versions.env` at the repo root. CI workflows and Terragrunt read from this file automatically.
 
-### Updating the Portkey Gateway Version
+### Updating the data-plane (agentgateway) image
 
-1. Update `PORTKEY_VERSION` in `versions.env`
-2. Update the default in `infrastructure/variables.tf` to match
-3. Open a PR — CI will pull and scan the new image
+1. Bump `AGENTGATEWAY_REF` and `AGENTGATEWAY_IMAGE_DIGEST` together in `versions.env`
+2. Update the `gateway_image` default in `infrastructure/variables.tf` to match
+3. Open a PR — CI will pull, re-tag by digest, and scan the new image
 
 ### Updating Dev Tool Versions
 

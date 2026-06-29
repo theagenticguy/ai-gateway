@@ -88,18 +88,11 @@ variable "otel_config_content" {
   type        = string
 }
 
-# ADR-017: routing now lives in the rendered agentgateway config, not in
-# Portkey env configs; the LLM response cache (Redis) is removed entirely. The
-# portkey_routing_configs / cache_enabled / redis_url variables were dropped.
+# ADR-017: routing now lives in the rendered agentgateway config; there are no
+# routing-config env vars and no response cache.
 
 variable "budget_enforcement_webhook_url" {
   description = "Function URL for the budget enforcement Lambda (agentgateway promptGuard webhook)"
-  type        = string
-  default     = ""
-}
-
-variable "content_scanner_webhook_url" {
-  description = "DEPRECATED (ADR-017 Option A): the content_scanner Lambda is no longer in the inference path — inline Bedrock ApplyGuardrail replaces it. Retained for rollback; not rendered into the config."
   type        = string
   default     = ""
 }

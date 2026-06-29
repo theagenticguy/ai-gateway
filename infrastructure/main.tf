@@ -14,12 +14,11 @@ data "aws_availability_zones" "available" {
 module "observability" {
   source = "./modules/observability"
 
-  project_name         = var.project_name
-  environment          = var.environment
-  aws_region           = var.aws_region
-  account_id           = data.aws_caller_identity.current.account_id
-  enable_cost_widgets  = var.enable_cost_attribution
-  enable_cache_widgets = var.enable_cache
+  project_name        = var.project_name
+  environment         = var.environment
+  aws_region          = var.aws_region
+  account_id          = data.aws_caller_identity.current.account_id
+  enable_cost_widgets = var.enable_cost_attribution
 
   # Alarm configuration
   alarm_sns_topic_arns          = var.alarm_sns_topic_arns
@@ -172,13 +171,13 @@ module "compute" {
   otel_log_group_name    = module.observability.otel_log_group_name
   otel_config_content    = file("${path.module}/otel-config.yaml")
 
-  # ADR-017: routing now lives in the rendered agentgateway config; the LLM
-  # response cache (Redis) is removed. Per-team dynamic routing is a follow-up
-  # (xDS or a config-render-and-reload path); see ADR-017 migration notes.
+  # ADR-017: routing now lives in the rendered agentgateway config. Per-team
+  # dynamic routing is a follow-up (xDS or a config-render-and-reload path);
+  # see ADR-017 migration notes.
 
   # budget_enforcement is the one remaining in-path webhook (until the RLS
-  # budget redesign). content_scanner is intentionally NOT passed: Option A
-  # replaces it with the inline Bedrock guardrail, so it leaves the path.
+  # budget redesign). Content safety is handled by the inline Bedrock guardrail
+  # (see bedrock_guardrail_* below), so there is no separate scanner in the path.
   budget_enforcement_webhook_url = var.enable_budgets ? module.budgets[0].function_url : ""
 
   # ADR-017 Option A: Bedrock Guardrails called inline by agentgateway via the
@@ -215,26 +214,8 @@ module "cost_attribution" {
   jwt_auth_enforced = var.enable_jwt_auth
 }
 
-# Content Scanner (Lambda: PII redaction + prompt injection detection)
-# -----------------------------------------------------------------------------
-
-module "content_scanner" {
-  source = "./modules/content_scanner"
-
-  project_name           = var.project_name
-  environment            = var.environment
-  aws_region             = var.aws_region
-  account_id             = data.aws_caller_identity.current.account_id
-  enable_content_scanner = var.enable_content_scanner
-  default_pii_mode       = var.content_scanner_default_pii_mode
-  default_injection_mode = var.content_scanner_default_injection_mode
-
-  # AppConfig feature flag path (hot-path toggle)
-  appconfig_path = var.enable_appconfig ? module.appconfig.appconfig_resource_path : ""
-}
-
 # =============================================================================
-# AppConfig — Feature flags for content scanner and future toggles
+# AppConfig — Feature flags and dynamic configuration toggles
 # =============================================================================
 
 module "appconfig" {
@@ -243,7 +224,7 @@ module "appconfig" {
   enable_appconfig   = var.enable_appconfig
   project_name       = var.project_name
   environment        = var.environment
-  rollback_alarm_arn = "" # TODO: Wire CloudWatch alarm for scanner errors
+  rollback_alarm_arn = "" # TODO: wire a CloudWatch alarm for AppConfig deployment rollback
   tags               = {}
 }
 
@@ -262,15 +243,6 @@ module "guardrails" {
   blocked_topics          = var.guardrails_blocked_topics
   blocked_words           = var.guardrails_blocked_words
 }
-
-# -----------------------------------------------------------------------------
-# Cache: DECOMMISSIONED (ADR-017, supersedes ADR-012).
-# -----------------------------------------------------------------------------
-# The LLM exact-match response cache (ElastiCache Redis) is removed with the
-# Portkey-to-agentgateway data-plane swap. agentgateway has no response cache,
-# and response caching is explicitly out of scope. The ./modules/cache code is
-# retained on disk for history but is no longer instantiated. var.enable_cache
-# is forced false (see variables_cache.tf); the dashboard cache widgets are off.
 
 # -----------------------------------------------------------------------------
 # Budgets (DynamoDB tables for budget definitions and usage tracking)

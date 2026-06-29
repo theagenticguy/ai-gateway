@@ -1,9 +1,9 @@
-"""Routing config Lambda — Portkey routing strategies, migrated onto gwcore (ADR-016).
+"""Routing config Lambda — provider routing strategies, migrated onto gwcore (ADR-016).
 
-Built-in configs load from the portkey-configs directory (read-only); custom
-configs live in DynamoDB. Authorization is now enforced in-handler (it was not):
-every request requires the admin scope, and the create / update / delete
-mutations emit audit events.
+Custom routing configs live in DynamoDB, persisted as the rendered agentgateway
+AI-backend shape (ADR-017). Authorization is enforced in-handler: every request
+requires the admin scope, and the create / update / delete mutations emit audit
+events.
 
 Routes:
     GET    /routing/configs         -- list all configs
@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import boto3
@@ -38,43 +37,8 @@ from routing_config.models import (
 logger = get_logger("routing_config")
 
 CONFIGS_TABLE = os.environ.get("ROUTING_CONFIGS_TABLE", "gateway-routing-configs")
-CONFIGS_DIR = os.environ.get(
-    "PORTKEY_CONFIGS_DIR",
-    str(Path(__file__).resolve().parent.parent.parent / "infrastructure" / "portkey-configs"),
-)
 
 dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-
-
-# -- Built-in config loader ---------------------------------------------------
-
-
-def _load_builtin_configs() -> dict[str, dict[str, Any]]:
-    """Load all JSON files from the portkey-configs directory."""
-    configs: dict[str, dict[str, Any]] = {}
-    configs_path = Path(CONFIGS_DIR)
-    if not configs_path.is_dir():
-        logger.warning("Portkey configs directory not found: %s", CONFIGS_DIR)
-        return configs
-
-    for config_file in sorted(configs_path.glob("*.json")):
-        try:
-            data = json.loads(config_file.read_text())
-            configs[config_file.stem] = data
-        except (json.JSONDecodeError, OSError):
-            logger.exception("Failed to load config file: %s", config_file)
-    return configs
-
-
-_BUILTIN_CONFIGS: dict[str, dict[str, Any]] | None = None
-
-
-def _get_builtin_configs() -> dict[str, dict[str, Any]]:
-    """Get built-in configs (cached after first load)."""
-    global _BUILTIN_CONFIGS  # noqa: PLW0603 — module-scoped cache for warm Lambda
-    if _BUILTIN_CONFIGS is None:
-        _BUILTIN_CONFIGS = _load_builtin_configs()
-    return _BUILTIN_CONFIGS
 
 
 # -- DynamoDB helpers ----------------------------------------------------------
@@ -103,7 +67,7 @@ def _put_custom_config(name: str, config: RoutingConfig) -> None:
     table.put_item(
         Item={
             "config_name": name,
-            "config_json": json.dumps(config.to_portkey_config()),
+            "config_json": json.dumps(config.to_agentgateway_backend()),
             "strategy_mode": config.strategy.mode.value,
             "target_count": len(config.targets),
             "description": config.metadata.description,
@@ -162,19 +126,8 @@ def _validate_body(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _list_configs() -> dict[str, Any]:
-    """GET /routing/configs — built-in + custom config summaries."""
+    """GET /routing/configs — custom config summaries."""
     summaries: list[dict[str, Any]] = []
-    for name, config_data in sorted(_get_builtin_configs().items()):
-        strategy = config_data.get("strategy", {})
-        summaries.append(
-            RoutingConfigSummary(
-                name=name,
-                mode=strategy.get("mode", "unknown"),
-                target_count=len(config_data.get("targets", [])),
-                builtin=True,
-                description=f"Built-in {strategy.get('mode', '')} routing config",
-            ).model_dump()
-        )
     try:
         summaries.extend(
             RoutingConfigSummary(
@@ -192,10 +145,7 @@ def _list_configs() -> dict[str, Any]:
 
 
 def _get_config(name: str) -> dict[str, Any]:
-    """GET /routing/configs/{name} — built-in first, then custom."""
-    builtin = _get_builtin_configs()
-    if name in builtin:
-        return ok({"name": name, "builtin": True, "config": builtin[name]})
+    """GET /routing/configs/{name} — fetch a custom config."""
     try:
         custom = _get_custom_config(name)
     except ClientError as e:
@@ -211,8 +161,6 @@ def _create_config(event: dict[str, Any], principal: auth.Principal) -> dict[str
     name = body.pop("name", None)
     if not name or not isinstance(name, str):
         raise errors.ValidationFailedError("Missing required field: name")
-    if name in _get_builtin_configs():
-        raise errors.ConflictError(f"Cannot create config with built-in name: {name}")
     try:
         if _get_custom_config(name):
             raise errors.ConflictError(f"Config already exists: {name}. Use PUT to update.")
@@ -235,15 +183,13 @@ def _create_config(event: dict[str, Any], principal: auth.Principal) -> dict[str
     logger.info("Created custom routing config: %s", name)
     _audit(event, principal, action="routing.create", resource=name, status=201)
     return ok(
-        {"name": name, "config": config.to_portkey_config(), "message": "Config created successfully"},
+        {"name": name, "config": config.to_agentgateway_backend(), "message": "Config created successfully"},
         status=201,
     )
 
 
 def _update_config(name: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """PUT /routing/configs/{name} — update a custom config."""
-    if name in _get_builtin_configs():
-        raise errors.ForbiddenError(f"Cannot modify built-in config: {name}")
     body = _validate_body(event)
     try:
         config = RoutingConfig.model_validate(body)
@@ -265,13 +211,11 @@ def _update_config(name: str, event: dict[str, Any], principal: auth.Principal) 
 
     logger.info("Updated custom routing config: %s (v%d)", name, config.metadata.version)
     _audit(event, principal, action="routing.update", resource=name, detail=f"v{config.metadata.version}")
-    return ok({"name": name, "config": config.to_portkey_config(), "message": "Config updated successfully"})
+    return ok({"name": name, "config": config.to_agentgateway_backend(), "message": "Config updated successfully"})
 
 
 def _delete_config(name: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """DELETE /routing/configs/{name} — delete a custom config."""
-    if name in _get_builtin_configs():
-        raise errors.ForbiddenError(f"Cannot delete built-in config: {name}")
     try:
         deleted = _delete_custom_config(name)
     except ClientError as e:

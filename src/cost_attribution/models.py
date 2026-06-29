@@ -56,7 +56,6 @@ class UsageMetrics(BaseModel):
 class RequestHeaders(BaseModel):
     """Relevant headers from the gateway request."""
 
-    x_portkey_provider: str = Field(default="", alias="x-portkey-provider")
     x_amzn_oidc_data: str = Field(default="", alias="x-amzn-oidc-data")
 
     model_config = {"populate_by_name": True}
@@ -69,17 +68,14 @@ class RequestInfo(BaseModel):
 
 
 class LogRecord(BaseModel):
-    """A parsed gateway log record containing usage and routing info.
+    """A parsed agentgateway access-log record containing usage and routing info.
 
-    Accepts two access-log shapes (ADR-017):
-
-    - **Portkey**: nested ``usage: {prompt_tokens, ...}``, ``req.headers``,
-      ``model``, ``provider``.
-    - **agentgateway**: flat top-level token fields (``prompt_tokens``,
-      ``completion_tokens``, ``total_tokens``, ``cached_input_tokens`` /
-      ``cache_creation_input_tokens``), ``model``, ``provider``, and the
-      ALB JWT as a flat ``oidc_data`` field. agentgateway's access-log
-      ``add`` block emits flat keys, so the nested shape is synthesized here.
+    agentgateway emits a flat top-level shape (ADR-017): flat token fields
+    (``prompt_tokens`` / ``completion_tokens`` / ``total_tokens``,
+    ``cached_input_tokens`` / ``cache_creation_input_tokens``), ``model``,
+    ``provider``, and the ALB JWT as a flat ``oidc_data`` field. The
+    access-log ``add`` block emits these flat keys, so the nested ``usage``
+    block is synthesized here for downstream pricing.
     """
 
     usage: UsageMetrics | None = None
@@ -92,10 +88,9 @@ class LogRecord(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def synthesize_nested_from_flat(cls, data: Any) -> Any:
-        """Build nested ``usage``/``req.headers`` from agentgateway flat fields.
+        """Build a nested ``usage`` block from agentgateway flat token fields.
 
-        Runs only when no nested ``usage`` is present but flat token fields are,
-        so the Portkey-shaped record passes through untouched.
+        Runs only when no nested ``usage`` is present but flat token fields are.
         """
         if not isinstance(data, dict):
             return data
@@ -111,21 +106,19 @@ class LogRecord(BaseModel):
         if data.get("usage") is None and any(k in data for k in flat_token_keys):
             data = dict(data)
             data["usage"] = {
-                # agentgateway names input/output; Portkey names prompt/completion.
+                # agentgateway's access log re-keys CEL inputTokens/outputTokens
+                # to prompt_tokens/completion_tokens; accept either spelling.
                 "prompt_tokens": data.get("prompt_tokens", data.get("input_tokens", 0)),
                 "completion_tokens": data.get("completion_tokens", data.get("output_tokens", 0)),
                 "total_tokens": data.get("total_tokens", 0),
-                "cache_read_input_tokens": data.get("cached_input_tokens", data.get("cache_read_input_tokens", 0)),
+                "cache_read_input_tokens": data.get("cached_input_tokens", 0),
                 "cache_creation_input_tokens": data.get("cache_creation_input_tokens", 0),
             }
         return data
 
     @property
     def resolved_provider(self) -> str:
-        """Resolve provider from header, then field, then 'unknown'."""
-        header_provider = self.req.headers.x_portkey_provider
-        if header_provider:
-            return header_provider
+        """Resolve provider from the flat ``provider`` field, else 'unknown'."""
         return self.provider or "unknown"
 
 

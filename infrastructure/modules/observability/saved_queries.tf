@@ -6,7 +6,7 @@ resource "aws_cloudwatch_query_definition" "requests_by_model" {
   name            = "${var.project_name}/requests-by-model"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, model, `req.headers.x-portkey-provider` as provider
+    fields @timestamp, model, provider
     | filter ispresent(responseTime)
     | stats count(*) as requests by model, provider
     | sort requests desc
@@ -18,7 +18,7 @@ resource "aws_cloudwatch_query_definition" "errors_by_provider" {
   name            = "${var.project_name}/errors-by-provider-detail"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, res.statusCode, `req.headers.x-portkey-provider` as provider, @message
+    fields @timestamp, res.statusCode, provider, @message
     | filter res.statusCode >= 400
     | stats count(*) as errors by provider, res.statusCode
     | sort errors desc
@@ -30,7 +30,7 @@ resource "aws_cloudwatch_query_definition" "latency_percentiles_detail" {
   name            = "${var.project_name}/latency-percentiles-detail"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, responseTime, `req.headers.x-portkey-provider` as provider, model
+    fields @timestamp, responseTime, provider, model
     | filter ispresent(responseTime)
     | stats pct(responseTime, 50) as p50,
             pct(responseTime, 90) as p90,
@@ -61,21 +61,6 @@ resource "aws_cloudwatch_query_definition" "cost_by_team" {
   EOQ
 }
 
-resource "aws_cloudwatch_query_definition" "cache_stats" {
-  name            = "${var.project_name}/cache-stats"
-  log_group_names = [aws_cloudwatch_log_group.gateway.name]
-  query_string    = <<-EOQ
-    fields @timestamp, cacheHit, cacheTokensSaved
-    | filter ispresent(cacheHit)
-    | stats sum(cacheHit) as hits,
-            sum(not cacheHit) as misses,
-            sum(cacheHit) / count(*) * 100 as hit_rate_pct,
-            sum(cacheTokensSaved) as tokens_saved
-      by bin(1h)
-    | sort bin(1h) desc
-  EOQ
-}
-
 resource "aws_cloudwatch_query_definition" "top_endpoints" {
   name            = "${var.project_name}/top-endpoints-detail"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
@@ -96,7 +81,7 @@ resource "aws_cloudwatch_query_definition" "ttft_percentiles" {
   name            = "${var.project_name}/ttft-percentiles"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, timeToFirstToken, `req.headers.x-portkey-provider` as provider, model
+    fields @timestamp, timeToFirstToken, provider, model
     | filter ispresent(timeToFirstToken)
     | stats pct(timeToFirstToken, 50) as p50_ms,
             pct(timeToFirstToken, 95) as p95_ms,

@@ -276,16 +276,15 @@ locals {
   gateway_cpu    = var.gateway_cpu - 256
   gateway_memory = var.gateway_memory - 256
 
-  # ADR-017: the data plane is agentgateway, not Portkey. agentgateway's webhook
-  # target is a host:port reference, so strip the scheme/path from the Lambda
-  # Function URL. budget_enforcement remains the one in-path webhook (it speaks
-  # the {action} contract via gwcore.agentgateway) until the RLS budget redesign.
-  # content_scanner is NO LONGER in the path: Option A replaces it with the
-  # inline Bedrock ApplyGuardrail policy below, so its webhook is not rendered.
+  # ADR-017: agentgateway's webhook target is a host:port reference, so strip
+  # the scheme/path from the Lambda Function URL. budget_enforcement remains the
+  # one in-path webhook (it speaks the {action} contract via gwcore.agentgateway)
+  # until the RLS budget redesign. Content safety is handled inline by the
+  # Bedrock ApplyGuardrail policy below, so no scanner webhook is rendered.
   budget_enforcement_webhook_host = var.budget_enforcement_webhook_url != "" ? "${replace(replace(var.budget_enforcement_webhook_url, "https://", ""), "/", "")}:443" : ""
 
   # Render the agentgateway YAML config. Delivered to the container via `-c`
-  # (inline string), the same way Portkey took base64 PORTKEY_CONFIG.
+  # (inline string).
   agentgateway_config = templatefile("${path.module}/agentgateway-config.yaml.tftpl", {
     aws_region                      = var.aws_region
     budget_enforcement_webhook_host = local.budget_enforcement_webhook_host
@@ -371,12 +370,10 @@ module "ecs_service" {
         protocol      = "tcp"
       }]
 
-      # Provider API keys arrive from Secrets Manager as env vars (same as
-      # before); the agentgateway config references $${ANTHROPIC_API_KEY} etc.
-      # via shell expansion. Bedrock uses the ECS task role (no static key).
-      # No NODE_ENV / PORT / PORTKEY_* / CACHE_STORE / REDIS_URL: the LLM
-      # response cache is removed (ADR-017 / ADR-012 superseded), and config is
-      # delivered inline, not via env.
+      # Provider API keys arrive from Secrets Manager as env vars; the
+      # agentgateway config references $${ANTHROPIC_API_KEY} etc. via shell
+      # expansion. Bedrock uses the ECS task role (no static key). The config is
+      # delivered inline via `-c`, not via env, so no runtime env vars are set.
       environment = []
 
       secrets = [

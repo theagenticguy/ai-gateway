@@ -1,8 +1,8 @@
 """Tests for the agentgateway guardrail-webhook contract path (ADR-017).
 
-Covers the dual-contract behavior added to budget_enforcement and
-content_scanner: detection, request parsing from agentgateway's
-``{body:{messages}}`` + forwarded headers, and the ``action`` response envelope.
+Covers the contract budget_enforcement speaks: request parsing from
+agentgateway's ``{body:{messages}}`` + forwarded headers, and the ``action``
+response envelope.
 """
 
 from __future__ import annotations
@@ -20,17 +20,6 @@ def _jwt(claims: dict) -> str:
 
 
 # ── gwcore.agentgateway helpers ──────────────────────────────────────────────
-
-
-def test_detect_agentgateway_contract():
-    body = {"body": {"messages": [{"role": "user", "content": "hi"}]}}
-    assert agentgateway.detect_contract(body) is agentgateway.Contract.AGENTGATEWAY
-
-
-def test_detect_portkey_contract():
-    assert agentgateway.detect_contract({"jwt_token": "x", "model": "m"}) is agentgateway.Contract.PORTKEY
-    assert agentgateway.detect_contract({"content": "x", "team_id": "t"}) is agentgateway.Contract.PORTKEY
-    assert agentgateway.detect_contract("not-a-dict") is agentgateway.Contract.PORTKEY
 
 
 def test_extract_messages_and_text():
@@ -105,44 +94,3 @@ def test_budget_handler_agentgateway_deny_maps_to_reject(monkeypatch):
     inner = json.loads(action["reject"]["body"])
     assert inner["retry_after_seconds"] == 3600
     assert "budget" in inner["error"].lower()
-
-
-def test_budget_handler_portkey_path_unchanged(monkeypatch):
-    """Legacy Portkey body still yields a verdict envelope."""
-    from budget_enforcement import handler as be
-
-    monkeypatch.setattr(be, "_check_budget", lambda req: be.BudgetCheckResponse(allowed=True))
-    event = {"body": json.dumps({"jwt_token": _jwt({"custom:team": "alpha"}), "model": "m"})}
-    resp = be.handler(event)
-    parsed = json.loads(resp["body"])
-    assert parsed["verdict"] is True
-    assert "action" not in parsed
-
-
-# ── content_scanner via agentgateway ─────────────────────────────────────────
-
-
-def test_scanner_handler_agentgateway_allow(monkeypatch):
-    from content_scanner import handler as cs
-
-    monkeypatch.setattr(cs, "_load_appconfig", lambda: cs.ScannerAppConfig(enabled=True))
-    monkeypatch.setattr(
-        cs,
-        "_load_team_config",
-        lambda team: cs.TeamScanConfig(team_id=team, pii_mode=cs.ScanMode.off, injection_mode=cs.ScanMode.off),
-    )
-    event = {
-        "headers": {"x-amzn-oidc-data": _jwt({"custom:team": "alpha"})},
-        "body": json.dumps({"body": {"messages": [{"role": "user", "content": "benign text"}]}}),
-    }
-    resp = cs.handler(event)
-    assert resp["statusCode"] == 200
-    assert json.loads(resp["body"]) == {"action": {"pass": {}}}
-
-
-def test_scanner_team_from_jwt():
-    from content_scanner import handler as cs
-
-    assert cs._team_from_jwt(_jwt({"custom:team": "beta"})) == "beta"
-    assert cs._team_from_jwt("") == "default"
-    assert cs._team_from_jwt("garbage") == "default"

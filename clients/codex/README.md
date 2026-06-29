@@ -10,12 +10,12 @@ gateway's hooks, logging, and cost attribution applied.
 Codex is Responses-API-only. The flagship GPT-5.5/5.4 models on Bedrock are also
 Responses-only, served at the OpenAI-compatible **mantle** endpoint
 (`https://bedrock-mantle.<region>.api.aws/openai/v1/responses`). The gateway
-proxies to mantle with Portkey's stock `openai` provider + a pinned
-`custom_host` — **no fork, no Converse translation**. The gateway holds the
-Bedrock API key server-side; developer endpoints present only a gateway token.
+proxies to mantle with an agentgateway custom provider (Responses format) + a
+pinned `hostOverride` — **no fork, no Converse translation**. The gateway holds
+the Bedrock API key server-side; developer endpoints present only a gateway token.
 
 ```
-Codex ──Responses──▶ AI Gateway ──openai provider + custom_host──▶ bedrock-mantle/openai/v1/responses
+Codex ──Responses──▶ AI Gateway ──custom provider + hostOverride──▶ bedrock-mantle/openai/v1/responses
                        (hooks, logging, cost attribution, isolation)
 ```
 

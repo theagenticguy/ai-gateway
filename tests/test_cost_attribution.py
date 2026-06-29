@@ -125,13 +125,8 @@ class TestUsageMetrics:
 
 
 class TestLogRecord:
-    def test_extracts_provider_from_header(self) -> None:
-        record = LogRecord.model_validate(
-            {
-                "req": {"headers": {"x-portkey-provider": "openai"}},
-                "model": "gpt-4",
-            }
-        )
+    def test_resolves_provider_from_flat_field(self) -> None:
+        record = LogRecord.model_validate({"provider": "openai", "model": "gpt-4"})
         assert record.resolved_provider == "openai"
 
     def test_falls_back_to_provider_field(self) -> None:
@@ -196,12 +191,13 @@ class TestLogRecordAgentgateway:
         assert record.usage.cache_read_input_tokens == 64
         assert record.usage.cache_creation_input_tokens == 8
 
-    def test_portkey_nested_shape_unaffected(self) -> None:
-        # The nested Portkey shape must pass through untouched.
+    def test_nested_usage_block_unaffected(self) -> None:
+        # An already-nested usage block must pass through untouched (the flat
+        # synthesizer only runs when usage is absent).
         record = LogRecord.model_validate(
             {
                 "usage": {"prompt_tokens": 5, "completion_tokens": 7},
-                "req": {"headers": {"x-portkey-provider": "openai"}},
+                "provider": "openai",
                 "model": "gpt-4",
             }
         )
@@ -399,7 +395,7 @@ class TestExtractMetrics:
         record = {
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
             "model": "gpt-4",
-            "req": {"headers": {"x-portkey-provider": "openai"}},
+            "provider": "openai",
         }
         log_event = {"message": json.dumps(record)}
         result = _extract_metrics(log_event)
@@ -417,7 +413,7 @@ class TestExtractMetrics:
                 "cache_creation_input_tokens": 20,
             },
             "model": "claude-sonnet-4",
-            "req": {"headers": {"x-portkey-provider": "anthropic"}},
+            "provider": "anthropic",
         }
         log_event = {"message": json.dumps(record)}
         result = _extract_metrics(log_event)
@@ -432,7 +428,8 @@ class TestExtractMetrics:
         record = {
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
             "model": "gpt-4",
-            "req": {"headers": {"x-portkey-provider": "openai", "x-amzn-oidc-data": jwt_token}},
+            "provider": "openai",
+            "req": {"headers": {"x-amzn-oidc-data": jwt_token}},
         }
         log_event = {"message": json.dumps(record)}
         # With JWT auth enforced at the ALB, the header is trusted as-is.
@@ -797,7 +794,7 @@ class TestHandler:
                     {
                         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
                         "model": "gpt-4",
-                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                        "provider": "openai",
                     }
                 ),
             }
@@ -849,7 +846,7 @@ class TestHandler:
                     {
                         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
                         "model": "gpt-4",
-                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                        "provider": "openai",
                     }
                 ),
             }
@@ -872,7 +869,7 @@ class TestHandler:
                     {
                         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
                         "model": "gpt-4",
-                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                        "provider": "openai",
                     }
                 ),
             }
@@ -978,7 +975,7 @@ class TestAuditLogPublishing:
                     {
                         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
                         "model": "gpt-4",
-                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                        "provider": "openai",
                     }
                 ),
             }
@@ -1109,7 +1106,7 @@ class TestObservability:
                     {
                         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
                         "model": "gpt-4",
-                        "req": {"headers": {"x-portkey-provider": "openai"}},
+                        "provider": "openai",
                     }
                 ),
             }

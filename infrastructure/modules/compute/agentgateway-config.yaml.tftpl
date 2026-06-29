@@ -1,6 +1,5 @@
 # agentgateway data-plane config (ADR-017). Rendered by templatefile() in
-# compute/main.tf and passed to the container via `-c <inline>` (mirrors how
-# Portkey took base64 PORTKEY_CONFIG). Schema:
+# compute/main.tf and passed to the container via `-c <inline>`. Schema:
 # https://agentgateway.dev/schema/config
 #
 # Field shapes are grounded in agentgateway schema/config.json + Rust source:
@@ -48,8 +47,7 @@ binds:
       backends:
       - ai:
           # Priority-group failover: Bedrock primary, then Anthropic-direct.
-          # Mirrors the Portkey fallback-anthropic.json strategy. Bedrock uses
-          # ambient ECS task-role credentials (no static key), same as today.
+          # Bedrock uses ambient ECS task-role credentials (no static key).
           groups:
           - providers:
             - name: bedrock-primary
@@ -72,7 +70,7 @@ binds:
         ai:
           modelAliases:
             "gpt-4*": anthropic.claude-sonnet-4-20250514-v1:0
-          # ADR-017: the Redis response cache is gone; we rely on provider-native
+          # ADR-017: there is no response cache; we rely on provider-native
           # prompt caching instead. agentgateway's promptCaching is OPT-IN (no
           # markers are added unless this block is present), so it must be set
           # explicitly. It injects Bedrock `cachePoint` markers on the
@@ -106,8 +104,8 @@ binds:
 %{ endif ~}
 %{ if bedrock_guardrail_id != "" ~}
             # Bedrock Guardrails, called INLINE via the ApplyGuardrail API
-            # (ADR-017 Option A). Replaces the in-path content_scanner Lambda:
-            # no Lambda, the gateway signs the call with its ECS task role.
+            # (ADR-017 Option A). Content safety runs in-path with no Lambda:
+            # the gateway signs the call with its ECS task role.
             # DETECT/LOG-ONLY by default — the guardrail RESOURCE sets every
             # filter action to NONE (see modules/guardrails, enforce_guardrails),
             # so ApplyGuardrail returns action=NONE and the gateway passes the

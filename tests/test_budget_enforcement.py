@@ -22,7 +22,6 @@ from hypothesis import strategies as st
 
 from budget_enforcement.handler import (
     TIER_DEFAULTS,
-    _build_response,
     _check_budget,
     _check_model_budget,
     _load_tier_defaults,
@@ -43,7 +42,6 @@ from budget_enforcement.models import (
     BudgetStatus,
     ModelBudgetError,
     ModelLimit,
-    PluginHandlerResponse,
     TierConfig,
 )
 
@@ -58,13 +56,42 @@ def _make_jwt(claims: dict[str, Any]) -> str:
     return f"{header}.{payload}.{signature}"
 
 
-def _make_function_url_event(body: dict[str, Any]) -> dict[str, Any]:
-    """Build a Lambda Function URL event."""
+def _make_function_url_event(
+    jwt: str | None = None,
+    model: str | None = None,
+    content: str = "hello world",
+) -> dict[str, Any]:
+    """Build an agentgateway guardrail-webhook event (ADR-017).
+
+    The JWT rides in the forwarded ``x-amzn-oidc-data`` header, the model in an
+    optional ``x-model`` header, and the prompt in ``{body: {messages: [...]}}``.
+    """
+    headers: dict[str, str] = {}
+    if jwt is not None:
+        headers["x-amzn-oidc-data"] = jwt
+    if model is not None:
+        headers["x-model"] = model
     return {
-        "body": json.dumps(body),
+        "headers": headers,
+        "body": json.dumps({"body": {"messages": [{"role": "user", "content": content}]}}),
         "isBase64Encoded": False,
         "requestContext": {"http": {"method": "POST"}},
     }
+
+
+def _allowed(result: dict[str, Any]) -> bool:
+    """True if the agentgateway action envelope allowed (``pass``) the request."""
+    return "pass" in json.loads(result["body"])["action"]
+
+
+def _reject(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the ``reject`` action and its parsed JSON body for a denied request.
+
+    The reject envelope carries ``status_code`` / ``reason`` and a JSON ``body``
+    string holding ``error`` + optional ``retry_after_seconds``.
+    """
+    action = json.loads(result["body"])["action"]["reject"]
+    return {**action, "parsed_body": json.loads(action["body"])}
 
 
 # ── JWT utilities ────────────────────────────────────────────────────────────
@@ -561,13 +588,10 @@ class TestBudgetHandler:
         mock_usage.return_value = Decimal("50.00")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        event = _make_function_url_event({"jwt_token": jwt})
-        result = handler(event)
+        result = handler(_make_function_url_event(jwt=jwt))
 
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is True
-        assert "error" not in body
+        assert _allowed(result)
 
     @patch("budget_enforcement.handler._get_current_usage")
     @patch("budget_enforcement.handler._get_budget_record")
@@ -576,46 +600,46 @@ class TestBudgetHandler:
         mock_usage.return_value = Decimal("150.00")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        event = _make_function_url_event({"jwt_token": jwt})
-        result = handler(event)
+        result = handler(_make_function_url_event(jwt=jwt))
 
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert "error" in body
-        assert "exceeded" in body["error"].lower()
+        rej = _reject(result)
+        assert rej["status_code"] == 429
+        assert "exceeded" in rej["parsed_body"]["error"].lower()
 
     def test_invalid_body(self) -> None:
         event = {"body": "not json!!!", "isBase64Encoded": False}
         result = handler(event)
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert body["error"] == "Invalid request body"
+        rej = _reject(result)
+        assert rej["status_code"] == 400
+        assert rej["parsed_body"]["error"] == "Invalid request body"
 
-    def test_missing_jwt_token(self) -> None:
-        event = _make_function_url_event({"model": "gpt-4"})
-        result = handler(event)
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_missing_jwt_header_handled_gracefully(self, mock_budget: Any, mock_usage: Any) -> None:
+        # No x-amzn-oidc-data header: identity resolves to "unknown" and the
+        # check still runs (no validation error under the agentgateway contract).
+        mock_budget.return_value = {"monthly_budget_usd": "1000", "warn_threshold_pct": 80, "hard_limit_pct": 100}
+        mock_usage.return_value = Decimal("10.00")
+        result = handler(_make_function_url_event())
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert "Validation error" in body["error"]
+        assert _allowed(result)
 
-    def test_base64_encoded_body(self) -> None:
+    @patch("budget_enforcement.handler._get_current_usage")
+    @patch("budget_enforcement.handler._get_budget_record")
+    def test_base64_encoded_body(self, mock_budget: Any, mock_usage: Any) -> None:
+        mock_budget.return_value = {"monthly_budget_usd": "1000", "warn_threshold_pct": 80, "hard_limit_pct": 100}
+        mock_usage.return_value = Decimal(0)
+
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        raw_body = json.dumps({"jwt_token": jwt})
-        encoded_body = base64.b64encode(raw_body.encode()).decode()
-        event = {"body": encoded_body, "isBase64Encoded": True}
-        with (
-            patch("budget_enforcement.handler._get_budget_record") as mock_budget,
-            patch("budget_enforcement.handler._get_current_usage") as mock_usage,
-        ):
-            mock_budget.return_value = {"monthly_budget_usd": "1000", "warn_threshold_pct": 80, "hard_limit_pct": 100}
-            mock_usage.return_value = Decimal(0)
-            result = handler(event)
+        raw_event = _make_function_url_event(jwt=jwt)
+        raw_event["body"] = base64.b64encode(raw_event["body"].encode()).decode()
+        raw_event["isBase64Encoded"] = True
+
+        result = handler(raw_event)
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is True
+        assert _allowed(result)
 
     @patch("budget_enforcement.handler._get_model_usage")
     @patch("budget_enforcement.handler._get_current_usage")
@@ -623,7 +647,10 @@ class TestBudgetHandler:
     def test_model_budget_exceeded_response_shape(
         self, mock_budget: Any, mock_usage: Any, mock_model_usage: Any
     ) -> None:
-        """E.5: Full handler returns correct JSON shape for model budget exceeded."""
+        """E.5: Full handler returns a reject action for a model budget exceed.
+
+        The model is read from the forwarded ``x-model`` header.
+        """
         mock_budget.return_value = {
             "monthly_budget_usd": "10000",
             "warn_threshold_pct": 80,
@@ -636,22 +663,19 @@ class TestBudgetHandler:
         mock_model_usage.return_value = Decimal("215.50")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        event = _make_function_url_event({"jwt_token": jwt, "model": "claude-opus-4"})
-        result = handler(event)
+        result = handler(_make_function_url_event(jwt=jwt, model="claude-opus-4"))
 
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert "error" in body
-        assert "Model budget exceeded" in body["error"]
-        assert "budget_status" in body["data"]
+        rej = _reject(result)
+        assert rej["status_code"] == 429
+        assert "Model budget exceeded" in rej["parsed_body"]["error"]
 
 
 # ── gwcore observability (ADR-016) ───────────────────────────────────────────
 
 
 class TestObservability:
-    """The migration adds a deny-audit + metrics without changing the contract."""
+    """The migration adds a deny-audit + metrics on the agentgateway contract."""
 
     @patch("budget_enforcement.handler.audit.emit")
     @patch("budget_enforcement.handler.emit_metric")
@@ -664,9 +688,9 @@ class TestObservability:
         mock_usage.return_value = Decimal("150.00")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        result = handler(_make_function_url_event({"jwt_token": jwt}))
+        result = handler(_make_function_url_event(jwt=jwt))
 
-        assert json.loads(result["body"])["verdict"] is False
+        assert not _allowed(result)
         # A deny audit event was emitted with decision="deny" and the team.
         assert mock_audit.call_count == 1
         emitted = mock_audit.call_args.args[0]
@@ -684,21 +708,15 @@ class TestObservability:
         mock_usage.return_value = Decimal("50.00")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        result = handler(_make_function_url_event({"jwt_token": jwt}))
+        result = handler(_make_function_url_event(jwt=jwt))
 
-        assert json.loads(result["body"])["verdict"] is True
+        assert _allowed(result)
         mock_audit.assert_not_called()
 
     @patch("budget_enforcement.handler.emit_metric")
     def test_invalid_body_emits_error_metric(self, mock_metric: Any) -> None:
         result = handler({"body": "not json!!!", "isBase64Encoded": False})
-        assert json.loads(result["body"])["verdict"] is False
-        assert any(c.args and c.args[0] == "BudgetEnforcementError" for c in mock_metric.call_args_list)
-
-    @patch("budget_enforcement.handler.emit_metric")
-    def test_validation_error_emits_error_metric(self, mock_metric: Any) -> None:
-        result = handler(_make_function_url_event({"model": "gpt-4"}))
-        assert json.loads(result["body"])["verdict"] is False
+        assert not _allowed(result)
         assert any(c.args and c.args[0] == "BudgetEnforcementError" for c in mock_metric.call_args_list)
 
     @patch("budget_enforcement.handler.audit.emit")
@@ -711,11 +729,11 @@ class TestObservability:
         mock_rate.return_value = RateLimitResult(allowed=False, reason="RPM exceeded", retry_after_seconds=42)
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        result = handler(_make_function_url_event({"jwt_token": jwt}))
+        result = handler(_make_function_url_event(jwt=jwt))
 
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert body["data"]["retry_after_seconds"] == 42
+        rej = _reject(result)
+        assert rej["status_code"] == 429
+        assert rej["parsed_body"]["retry_after_seconds"] == 42
         assert mock_audit.call_args.args[0].decision == "deny"
 
     @patch("budget_enforcement.handler._get_current_usage")
@@ -727,11 +745,10 @@ class TestObservability:
         mock_usage.return_value = Decimal("10.00")
 
         jwt = _make_jwt({"custom:team": "platform", "sub": "user1"})
-        result = handler(_make_function_url_event({"jwt_token": jwt}))
+        result = handler(_make_function_url_event(jwt=jwt))
 
-        body = json.loads(result["body"])
-        assert body["verdict"] is True
-        assert body["data"]["budget_status"]["monthly_budget_usd"] == "1000"
+        # Low utilization with the default budget -> allow.
+        assert _allowed(result)
 
 
 # ── Seconds until period reset ───────────────────────────────────────────────
@@ -787,58 +804,6 @@ class TestBudgetModels:
         assert status.warn_threshold_pct == 80.0
         assert status.hard_limit_pct == 100.0
 
-    def test_plugin_handler_response_allow(self) -> None:
-        resp = PluginHandlerResponse(verdict=True, data={"budget_status": {"team": "t"}})
-        dumped = resp.model_dump(exclude_none=True, mode="json")
-        assert dumped["verdict"] is True
-        assert dumped["data"]["budget_status"]["team"] == "t"
-        assert "error" not in dumped
-
-    def test_plugin_handler_response_deny(self) -> None:
-        resp = PluginHandlerResponse(verdict=False, error="Budget exceeded")
-        dumped = resp.model_dump(exclude_none=True, mode="json")
-        assert dumped["verdict"] is False
-        assert dumped["error"] == "Budget exceeded"
-
-
-# ── Build response ───────────────────────────────────────────────────────────
-
-
-class TestBuildResponse:
-    def test_allowed_format(self) -> None:
-        resp = BudgetCheckResponse(allowed=True)
-        result = _build_response(resp)
-        assert result["statusCode"] == 200
-        assert result["headers"]["Content-Type"] == "application/json"
-        body = json.loads(result["body"])
-        assert body["verdict"] is True
-        assert body["data"] == {}
-        assert "error" not in body
-
-    def test_denied_format(self) -> None:
-        resp = BudgetCheckResponse(
-            allowed=False,
-            status_code=429,
-            reason="Monthly budget exceeded (110.0% of $1000)",
-            budget_status=BudgetStatus(team="t", user="u"),
-            retry_after_seconds=3600,
-        )
-        result = _build_response(resp)
-        assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert body["error"] == "Monthly budget exceeded (110.0% of $1000)"
-        assert body["data"]["budget_status"]["team"] == "t"
-        assert body["data"]["retry_after_seconds"] == 3600
-
-    def test_always_200_even_for_400_status(self) -> None:
-        resp = BudgetCheckResponse(allowed=False, status_code=400, reason="Invalid request body")
-        result = _build_response(resp)
-        assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["verdict"] is False
-        assert body["error"] == "Invalid request body"
-
 
 # ── Property-based tests ─────────────────────────────────────────────────────
 
@@ -880,13 +845,13 @@ class TestPropertyBased:
     )
     @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_handler_never_crashes_on_random_body(self, body_text: str) -> None:
-        """Handler should return a valid Portkey response for any body input."""
+        """Handler should return a valid agentgateway action envelope for any body."""
         event = {"body": body_text, "isBase64Encoded": False}
         result = handler(event)
         assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert "verdict" in body
-        assert isinstance(body["verdict"], bool)
+        action = json.loads(result["body"])["action"]
+        # Exactly one of pass / reject / mask is present.
+        assert sum(k in action for k in ("pass", "reject", "mask")) == 1
 
     @given(
         rpm=st.integers(min_value=0, max_value=100000),

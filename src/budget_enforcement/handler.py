@@ -1,18 +1,20 @@
 """Pre-request budget enforcement Lambda (Function URL).
 
-A Portkey plugin webhook: the gateway calls it before forwarding a request to
-the upstream LLM. It ALWAYS returns HTTP 200 with a ``verdict`` field — the
-verdict (true/false) carries the allow/deny decision, because a 4xx would be
-treated by Portkey as a hook *failure*, not a deny.
+An agentgateway guardrail webhook (ADR-017): the data plane calls it before
+forwarding a request to the upstream LLM. agentgateway POSTs
+``{"body": {"messages": [...]}}`` and expects an ``action`` envelope back
+(``pass`` / ``reject``). It ALWAYS returns HTTP 200; the action carries the
+allow/deny decision, because a 4xx would be treated as a hook *failure*, not a
+deny.
 
 Graceful degradation: if DynamoDB is unreachable the request is allowed and a
 warning is logged — a budget-check outage must never block traffic.
 
 Migrated onto gwcore (ADR-016): structured JSON logging with a correlation id,
-a latency Timer, deny metrics, and a deny-audit event on every block. The
-response contract and degradation behavior are unchanged. The JWT arrives in
-the request *body* (ALB pre-verifies its signature), so this handler does no
-in-handler authorization — ``gwcore.auth`` (header-based) does not apply here.
+a latency Timer, deny metrics, and a deny-audit event on every block. The JWT
+arrives as the forwarded ``x-amzn-oidc-data`` header (ALB pre-verifies its
+signature), so this handler does no in-handler authorization — ``gwcore.auth``
+(header-based) does not apply here.
 """
 
 from __future__ import annotations
@@ -352,8 +354,8 @@ def _check_budget(request: BudgetCheckRequest) -> BudgetCheckResponse:
 def _audit_denial(event: dict[str, Any], request: BudgetCheckRequest, result: BudgetCheckResponse) -> None:
     """Emit a deny metric + audit event for a blocked request (best-effort).
 
-    Only fires on a hard deny (``verdict`` false). Graceful-degradation allows
-    and warning-threshold allows are not denials, so they are not audited here.
+    Only fires on a hard deny. Graceful-degradation allows and warning-threshold
+    allows are not denials, so they are not audited here.
     """
     if result.allowed:
         return
@@ -376,19 +378,12 @@ def _audit_denial(event: dict[str, Any], request: BudgetCheckRequest, result: Bu
 
 
 def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
-    """Lambda Function URL handler.
+    """Lambda Function URL handler (agentgateway guardrail webhook, ADR-017).
 
-    Speaks two data-plane contracts (ADR-017):
-
-    - **agentgateway** posts ``{"body": {"messages": [...]}}`` and expects an
-      ``action`` envelope back; the JWT arrives as the forwarded
-      ``x-amzn-oidc-data`` header and the request model/tokens are derived from
-      the messages + headers.
-    - **Portkey** (legacy) posts ``{"jwt_token": ..., "model": ...,
-      "estimated_tokens": ...}`` and expects a ``verdict`` envelope.
-
-    The budget logic is identical; only the request parse and response shape
-    differ. Retaining both keeps rollback to a routing flip.
+    agentgateway posts ``{"body": {"messages": [...]}}`` and expects an
+    ``action`` envelope back; the JWT arrives as the forwarded
+    ``x-amzn-oidc-data`` header and the request model/tokens are derived from
+    the messages + headers.
     """
     cid = correlation_id(event)
     log = bind(logger, cid)
@@ -405,29 +400,14 @@ def handler(event: dict[str, Any], _context: Any = None) -> dict[str, Any]:
             log.exception("Failed to parse request body")
             emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "bad_request"})
             resp = BudgetCheckResponse(allowed=False, status_code=400, reason="Invalid request body")
-            return _build_response(resp)
+            return _build_agentgateway_response(resp)
 
-        contract = agentgateway.detect_contract(body)
-
-        if contract is agentgateway.Contract.AGENTGATEWAY:
-            request = _request_from_agentgateway(body, event)
-        else:
-            try:
-                request = BudgetCheckRequest.model_validate(body)
-            except ValidationError as e:
-                log.warning("Invalid budget check request: %s", e)
-                emit_metric("BudgetEnforcementError", 1, dimensions={"Code": "validation_error"})
-                resp = BudgetCheckResponse(
-                    allowed=False, status_code=400, reason=f"Validation error: {e.error_count()} errors"
-                )
-                return _build_response(resp)
+        request = _request_from_agentgateway(body, event)
 
         result = _check_budget(request)
         _audit_denial(event, request, result)
 
-        if contract is agentgateway.Contract.AGENTGATEWAY:
-            return _build_agentgateway_response(result)
-        return _build_response(result)
+        return _build_agentgateway_response(result)
 
 
 def _request_from_agentgateway(body: dict[str, Any], event: dict[str, Any]) -> BudgetCheckRequest:
@@ -454,8 +434,7 @@ def _build_agentgateway_response(result: BudgetCheckResponse) -> dict[str, Any]:
 
     Allow (including the warn-threshold and graceful-degradation allows) maps to
     ``pass``. A hard deny maps to ``reject`` with the budget's status code and a
-    JSON body carrying the reason + retry-after, so the client sees the same
-    429 it sees under Portkey today.
+    JSON body carrying the reason + retry-after, so the client sees a 429.
     """
     if result.allowed:
         return agentgateway.pass_action()
@@ -467,31 +446,3 @@ def _build_agentgateway_response(result: BudgetCheckResponse) -> dict[str, Any]:
         body=json.dumps(payload),
         reason=result.reason or "budget exceeded",
     )
-
-
-def _build_response(result: BudgetCheckResponse) -> dict[str, Any]:
-    """Format the Lambda Function URL response as a Portkey PluginHandlerResponse.
-
-    Always returns HTTP 200 — the ``verdict`` field controls allow/deny.
-    If the Lambda returns 4xx, Portkey treats it as a hook failure, not a deny.
-    """
-    verdict = result.allowed
-    data: dict[str, Any] = {}
-    if result.budget_status:
-        data["budget_status"] = result.budget_status.model_dump(mode="json")
-    if result.retry_after_seconds:
-        data["retry_after_seconds"] = result.retry_after_seconds
-    error = result.reason if not result.allowed else None
-
-    portkey_response: dict[str, Any] = {
-        "verdict": verdict,
-        "data": data,
-    }
-    if error:
-        portkey_response["error"] = error
-
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(portkey_response),
-    }
