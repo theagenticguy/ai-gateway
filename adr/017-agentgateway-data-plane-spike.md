@@ -78,6 +78,28 @@ agentgateway replaces the Portkey container in the ECS task definition. It runs 
 | mantle lane (ADR-015) | Portkey `custom_host` to `bedrock-mantle.<region>.api.aws/openai/v1`, OpenAI Responses API; gpt-oss via Bedrock Converse | Custom provider with `hostOverride`/`pathOverride` + `ProviderFormat::Responses` (`llm/custom.rs:59-69`); gpt-oss via Bedrock provider. Feasible; static bearer needs the `Key` auth mode. | Medium | Medium |
 | API surface | OpenAI chat completions, Anthropic messages, embeddings/images/audio passthrough | Chat completions, Anthropic messages, Responses, embeddings, rerank, count_tokens are first-class. Images/audio passthrough is NOT a typed route; needs verification or a passthrough route. | Medium | Medium |
 
+## Prompt caching (replaces the removed response cache)
+
+The Redis exact-match response cache is gone; the data plane relies on
+provider-native prompt caching instead. Two facts to keep straight:
+
+- **agentgateway's `promptCaching` policy is opt-in.** With no `promptCaching:`
+  block in a route's `ai` policy the proxy adds zero cache markers (the field is
+  `Option<PromptCachingConfig>`, absent → `None`, and every cache-insertion
+  branch is guarded by `if let Some(...)`). The rendered config therefore sets an
+  explicit `promptCaching` block. It injects Bedrock `cachePoint` markers
+  (system + message history, gated by `minTokens`) on the bedrock-primary
+  provider only. The `anthropic-fallback` provider ignores the policy entirely
+  (`to_anthropic` takes no caching argument); caching on that path happens only
+  if the client sends `cache_control`, which agentgateway passes through.
+- **Prompt caching is not a response cache.** It reuses prompt *prefixes* to cut
+  input-token cost on a hit; it still round-trips to the model and still bills
+  output tokens. It does not reproduce the latency/throughput win of returning a
+  cached completion for an identical request. That capability is gone, not
+  relocated. The cost path still reads `cachedInputTokens` /
+  `cacheCreationInputTokens` from the access log, so cache savings remain
+  attributable.
+
 ## What improves
 
 - **Translation fidelity.** Typed, compile-checked, snapshot-tested cross-API translation including streaming SSE to AWS-event-stream.
