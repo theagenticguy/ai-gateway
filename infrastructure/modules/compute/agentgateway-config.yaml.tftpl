@@ -72,6 +72,21 @@ binds:
         ai:
           modelAliases:
             "gpt-4*": anthropic.claude-sonnet-4-20250514-v1:0
+          # ADR-017: the Redis response cache is gone; we rely on provider-native
+          # prompt caching instead. agentgateway's promptCaching is OPT-IN (no
+          # markers are added unless this block is present), so it must be set
+          # explicitly. It injects Bedrock `cachePoint` markers on the
+          # bedrock-primary provider (system + message history, gated at
+          # minTokens). NOTE: this policy only affects the Bedrock path; the
+          # anthropic-fallback provider ignores it — caching there depends on the
+          # client sending `cache_control`, which agentgateway passes through.
+          # Prompt caching cuts input-token cost on prefix reuse; it is NOT a
+          # response cache (it still round-trips to the model and bills output).
+          promptCaching:
+            cacheSystem: true
+            cacheMessages: true
+            cacheTools: true
+            minTokens: 1024
           promptGuard:
             request:
 %{ if budget_enforcement_webhook_host != "" ~}
