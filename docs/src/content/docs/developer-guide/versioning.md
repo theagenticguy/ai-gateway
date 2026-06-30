@@ -11,8 +11,8 @@ AI Gateway follows [Semantic Versioning 2.0.0](https://semver.org/) with the for
 | Bump | When | Examples |
 |------|------|----------|
 | **MAJOR** | Breaking changes to the gateway API, authentication scheme, or infrastructure that require consumer action | Changing auth from Cognito M2M to a different scheme; removing or renaming API endpoints; Terraform state-breaking module restructures |
-| **MINOR** | New functionality that is backward-compatible | Adding a new model provider; new API endpoints; new Terraform modules (cache, guardrails); new observability features |
-| **PATCH** | Backward-compatible bug fixes, security patches, dependency updates, documentation, and CI improvements | Fixing JWT validation edge cases; updating pinned action SHAs; Portkey version bumps; Terraform variable defaults |
+| **MINOR** | New functionality that is backward-compatible | Adding a new model provider; new API endpoints; new Terraform modules (guardrails, routing); new observability features |
+| **PATCH** | Backward-compatible bug fixes, security patches, dependency updates, documentation, and CI improvements | Fixing JWT validation edge cases; updating pinned action SHAs; agentgateway image digest bumps; Terraform variable defaults |
 
 ## Pre-release Tags
 

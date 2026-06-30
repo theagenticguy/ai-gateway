@@ -25,7 +25,7 @@ flowchart LR
         end
 
         subgraph Private Subnets
-            GW[Portkey Gateway<br>Port 8787]
+            GW[agentgateway<br>Port 8787]
             OTEL[OTel Sidecar<br>Collector]
         end
 
@@ -73,7 +73,7 @@ The gateway splits traffic into two planes ([ADR-014](/ai-gateway/adrs/014-two-p
 | Plane | Transport | Auth | Endpoints | Traffic Pattern |
 |---|---|---|---|---|
 | **Inference** | ALB | ALB-native JWT | `/v1/chat/completions`, `/v1/messages` | High-volume, latency-sensitive |
-| **Admin** | API Gateway REST API | Cognito Authorizer | `/teams`, `/budgets`, `/routing`, `/scanner`, `/pricing`, `/usage` | Low-volume, correctness-sensitive |
+| **Admin** | API Gateway REST API | Cognito Authorizer | `/teams`, `/budgets`, `/routing`, `/pricing` (plus the `/usage` self-service API) | Low-volume, correctness-sensitive |
 
 The ALB handles inference requests with zero per-request cost. Admin APIs run behind API Gateway with a shared Cognito authorizer, which eliminates per-handler JWT validation code and provides built-in throttling, access logging, and CloudWatch metrics.
 
@@ -86,7 +86,7 @@ flowchart LR
 
     subgraph Inference Plane
         ALB[ALB<br>JWT Validation]
-        GW[Portkey Gateway]
+        GW[agentgateway]
     end
 
     subgraph Admin Plane
@@ -94,9 +94,8 @@ flowchart LR
         L1[teams Lambda]
         L2[budgets Lambda]
         L3[routing Lambda]
-        L4[scanner Lambda]
-        L5[pricing Lambda]
-        L6[usage Lambda]
+        L4[pricing Lambda]
+        L5[usage Lambda]
     end
 
     Agent -->|/v1/messages| ALB --> GW
@@ -106,7 +105,6 @@ flowchart LR
     APIGW --> L3
     APIGW --> L4
     APIGW --> L5
-    APIGW --> L6
 ```
 
 ### Data Plane (Inference Path)
@@ -119,21 +117,22 @@ The data plane handles high-volume, latency-sensitive LLM API requests. Every re
 |---|---|---|
 | WAF v2 | AWS WAF | Rate limiting (2,000 req/5 min per IP), AWS Managed Rules (common exploits, IP reputation) |
 | ALB | Application Load Balancer | TLS 1.3 termination, JWT validation via `validate_token` action, zero per-request cost |
-| Portkey Gateway | ECS Fargate (port 8787) | LLM request proxy — routes to Bedrock, OpenAI, Anthropic, Google, Azure via `x-portkey-provider` header |
+| agentgateway | ECS Fargate (port 8787) | LLM request proxy — routes to providers via the rendered config (priority-group failover, Bedrock primary → Anthropic fallback). No `x-portkey-*` headers; provider selection lives in the config + model aliases. |
 | OTel Sidecar | ECS Fargate (sidecar) | Collects traces and metrics, ships to CloudWatch and X-Ray |
-| ElastiCache Redis | ElastiCache | Response caching (optional, `enable_cache` flag) |
 
-**Pre-request hooks** run inline before the request reaches the provider:
+The gateway reads a YAML config delivered inline via `-c`, rendered from `compute/agentgateway-config.yaml.tftpl`. Provider routing is expressed as `ai.groups` priority-group failover; model substitution uses `modelAliases`.
 
-| Hook | Module | Behavior |
+**Inline policies** run inside the gateway, in path, before/after the provider call:
+
+| Policy | Module | Behavior |
 |---|---|---|
-| Budget enforcement | `modules/budgets` | Blocks requests when team monthly budget is exhausted. Fails open — a broken budget check never blocks legitimate traffic. |
-| Content scanner | `modules/content_scanner` | PII redaction and prompt injection detection. Configurable per-team: `off`, `detect`, `redact`, or `block`. Fails open. |
-| Bedrock Guardrails | `modules/guardrails` | Content safety filtering on both input and output (hate, violence, PII, topic policies). |
+| Budget enforcement | `modules/budgets` (webhook) | The `budget_enforcement` Lambda is called as an agentgateway `promptGuard` webhook speaking the `{action: pass\|reject}` contract. It blocks requests when a team's monthly budget is exhausted, and fails open on a DynamoDB outage. This is the one remaining in-path Lambda. |
+| Bedrock Guardrails | `modules/guardrails` | Content safety runs **inline** — agentgateway calls the Bedrock `ApplyGuardrail` API directly (no Lambda), signed with the ECS task role, on both input and output. **Detect/log-only by default** (every filter action is `NONE`); flip `enforce_guardrails` per environment to `BLOCK`. PII detection is a Guardrails `sensitive_information_policy_config` concern. |
+| Prompt caching | (gateway config) | The opt-in `promptCaching` policy injects Bedrock `cachePoint` markers (system + message history, gated at `minTokens`) on the Bedrock path. This cuts input-token cost on prefix reuse; it is **not** a response cache (it still round-trips to the model and bills output). The Anthropic-fallback path passes through client-sent `cache_control`. |
 
 **Autoscaling** targets CPU utilization at 70% and ALB request count at 500 requests/target, with a minimum of 2 and maximum of 6 Fargate tasks.
 
-**Terraform modules** backing the data plane: `networking`, `auth`, `compute`, `cache`, `content_scanner`, `guardrails`, `appconfig`.
+**Terraform modules** backing the data plane: `networking`, `auth`, `compute`, `guardrails`, `appconfig`, `routing`.
 
 ### Control Plane (Admin Path)
 
@@ -147,8 +146,7 @@ The control plane handles low-volume, correctness-sensitive configuration and ma
 |---|---|---|---|
 | `/teams` | `team_registration` | `src/team_registration/` | Self-service team onboarding — creates Cognito app clients, DynamoDB entries, and default budget allocations |
 | `/budgets` | `budgets` | `src/budget_admin/` | Budget CRUD — per-team monthly limits, tier defaults (sandbox/standard/premium/unlimited) |
-| `/routing` | `routing` | `src/routing_config/` | Dynamic routing rule management — provider fallback chains, model mappings |
-| `/scanner` | `content_scanner` | `src/content_scanner/` | Per-team guardrail configuration — PII mode, injection mode |
+| `/routing` | `routing` | `src/routing_config/` | Dynamic routing rule management — renders the agentgateway backend config (provider failover groups, model mappings) |
 | `/pricing` | `cost_attribution` | `src/pricing_admin/` | Dynamic pricing overrides per model/provider |
 | `/usage` | `cost_attribution` | `src/usage_api/` | Real-time usage self-service — token counts, costs, budget utilization |
 
@@ -159,8 +157,8 @@ The control plane handles low-volume, correctness-sensitive configuration and ma
 | State storage | DynamoDB | Budget definitions, usage counters (atomic), team configs, routing rules |
 | Chargeback reports | Step Functions + Lambda | Monthly cost reports per team (`modules/chargeback`) |
 | Audit trail | Kinesis Firehose → Apache Iceberg on S3 Tables | `gwcore.audit` records every mutation and authz decision; Firehose lands them in an Iceberg table for ACID + Athena queries (`modules/audit_pipeline`, ADR-016). The earlier Parquet + Glue path (`modules/audit_log`) remains for compatibility. |
-| Cost attribution | CloudWatch subscription + Lambda | Parses gateway logs, emits per-team/model cost metrics (`modules/cost_attribution`) |
-| Feature flags | AppConfig | Hot-path toggles (content scanner on/off) without redeployment (`modules/appconfig`) |
+| Cost attribution | CloudWatch subscription + Lambda | Parses agentgateway's flat access log (the `accessLog.add` field map re-keys the gateway's camelCase token fields), emits per-team/model cost metrics (`modules/cost_attribution`) |
+| Feature flags | AppConfig | Hot-path configuration without redeployment (`modules/appconfig`) |
 | Budget alerts | SNS | Notifications when teams hit warning (80%) or hard (100%) budget thresholds |
 | CVE monitoring | Amazon Inspector | Continuous vulnerability scanning of ECR images (`modules/inspector`) |
 
@@ -178,13 +176,13 @@ For the full decision record, see [ADR-014](/ai-gateway/adrs/014-two-plane-archi
 
 ## Design Principles
 
-**Lightweight** -- The gateway adds minimal overhead. Portkey OSS is a ~62 MB container that proxies requests with sub-millisecond added latency. No database, no state, no complex middleware.
+**Lightweight** -- agentgateway is a single Rust binary on a distroless base. It proxies requests with minimal added latency, holds no database and no persistent state, and runs no application sidecar beyond the OTel collector.
 
 **Zero per-request auth cost** -- ALB-native JWT validation means authentication adds no cost and no extra latency beyond the ALB itself. No API Gateway, no Lambda authorizer, no per-request charges. See [ADR-005](/ai-gateway/adrs/005-alb-jwt-validation-over-api-gateway/).
 
-**Multi-provider** -- A single gateway instance routes to Bedrock, OpenAI, Anthropic, Google Vertex AI, and Azure OpenAI through Portkey's 200+ model provider support.
+**Multi-provider** -- agentgateway types eight provider integrations (OpenAI, Anthropic, Bedrock, Azure, Gemini, Vertex, Copilot, Custom); this deployment provisions five (Bedrock, OpenAI, Anthropic, Azure OpenAI, Google). Routing and failover are expressed in the rendered config as priority groups (Bedrock primary → Anthropic fallback).
 
-**Dual-format API** -- Both OpenAI Chat Completions (`/v1/chat/completions`) and Anthropic Messages (`/v1/messages`) are served natively on a single port, so every major coding agent works without translation layers. See [ADR-006](/ai-gateway/adrs/006-portkey-dual-format-api/).
+**Dual-format API** -- Both OpenAI Chat Completions (`/v1/chat/completions`) and Anthropic Messages (`/v1/messages`) are served natively on a single port, so every major coding agent works without translation layers. agentgateway selects the route type from the path suffix. See [ADR-006](/ai-gateway/adrs/006-portkey-dual-format-api/) (the dual-format requirement; the implementation is now agentgateway per [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)).
 
 **Infrastructure as Code** -- All resources are defined in Terraform with modular composition, environment-specific variable files, and automated documentation generation.
 
@@ -236,7 +234,7 @@ flowchart TD
 
 ### Module Responsibilities
 
-The infrastructure is organized into 19 modules. The table below groups them by plane.
+The infrastructure is organized into 17 modules. The table below groups them by plane.
 
 **Foundation modules** (shared by both planes):
 
@@ -251,10 +249,9 @@ The infrastructure is organized into 19 modules. The table below groups them by 
 
 | Module | Resources | Key Outputs |
 |--------|-----------|---------|
-| **compute** | ECR, ECS cluster + service, task definition (gateway + OTel sidecar), IAM roles, Secrets Manager, auto-scaling | `ecs_cluster_name`, `ecs_service_name`, `ecr_repository_url` |
-| **cache** | ElastiCache Redis cluster, security group rules | `redis_connection_url` |
-| **content_scanner** | Lambda (PII redaction + injection detection), DynamoDB config table | `function_url` |
-| **guardrails** | Bedrock Guardrail (content filters, topic policies, word policies) | `guardrail_id`, `guardrail_version` |
+| **compute** | ECR, ECS cluster + service, task definition (agentgateway + OTel sidecar), IAM roles, Secrets Manager, auto-scaling, the rendered agentgateway config | `ecs_cluster_name`, `ecs_service_name`, `ecr_repository_url` |
+| **guardrails** | Bedrock Guardrail (content filters, PII/sensitive-info policy, topic policies, word policies) — called inline via `ApplyGuardrail`; detect-only unless `enforce_guardrails` flips actions to `BLOCK` | `guardrail_id`, `guardrail_version` |
+| **routing** | Lambda + DynamoDB for dynamic routing config — renders the agentgateway backend (provider failover groups, model aliases) | `function_url` |
 | **appconfig** | AppConfig application, environment, configuration profile, deployment strategy | `appconfig_resource_path` |
 
 **Control plane modules:**
@@ -264,7 +261,6 @@ The infrastructure is organized into 19 modules. The table below groups them by 
 | **admin_api** | API Gateway REST API, Cognito authorizer, per-path Lambda integrations, CloudWatch access logging | `api_url`, `api_execution_arn` |
 | **api_foundation** | Deployed control-plane stage (method-level GET cache + throttling), per-tenant usage plans + API keys, regional WAF, JSON access logging, the token-exchange route, and alarms + dashboard for the `gwcore` EMF metrics (ADR-016) | `stage_invoke_url`, `dashboard_name` |
 | **team_registration** | Lambda + DynamoDB for self-service team onboarding | `function_url` |
-| **routing** | Lambda + DynamoDB for dynamic routing config management | `function_url` |
 | **budgets** | DynamoDB tables (budget definitions + usage counters), SNS budget alerts topic | `budgets_table_name`, `usage_table_name`, `budget_alerts_topic_arn` |
 | **cost_attribution** | CloudWatch subscription filter, Lambda (log parser → custom metrics), budget alert integration | -- |
 | **chargeback** | Step Functions state machine, Lambda for monthly cost report generation | -- |
@@ -286,7 +282,7 @@ sequenceDiagram
     participant Agent as AI Agent
     participant ALB as ALB (TLS + WAF)
     participant JWT as ALB JWT Validator
-    participant GW as Portkey Gateway
+    participant GW as agentgateway
     participant Provider as Model Provider
 
     Agent->>ALB: POST /v1/chat/completions<br>Authorization: Bearer jwt-token
@@ -296,9 +292,10 @@ sequenceDiagram
     alt Token invalid
         JWT-->>Agent: 401 Unauthorized
     end
-    JWT->>GW: Forward request<br>(validated claims in headers)
-    GW->>GW: Parse x-portkey-* headers<br>Resolve provider + model
-    GW->>Provider: Proxy request<br>(with provider API key from Secrets Manager)
+    JWT->>GW: Forward request<br>(ALB JWT in x-amzn-oidc-data header)
+    GW->>GW: Select route by path suffix<br>Resolve provider via config groups + modelAliases
+    GW->>GW: promptGuard: budget webhook +<br>inline Bedrock Guardrails (ApplyGuardrail)
+    GW->>Provider: Proxy request<br>(Bedrock via ECS task-role SigV4;<br>others via key from Secrets Manager)
     Provider-->>GW: Model response
     GW-->>ALB: Response
     ALB-->>Agent: Response
@@ -311,7 +308,7 @@ sequenceDiagram
     participant Client as AI Agent / Script
     participant Cognito as Cognito User Pool
     participant ALB as ALB
-    participant GW as Portkey Gateway
+    participant GW as agentgateway
 
     Client->>Cognito: POST /oauth2/token<br>grant_type=client_credentials<br>client_id + client_secret<br>scope=https://gateway.internal/invoke
     Cognito-->>Client: JWT access token (1h TTL)
@@ -338,7 +335,7 @@ The gateway uses **Cognito machine-to-machine (M2M)** authentication with the `c
 The VPC follows a two-AZ layout optimized for cost:
 
 - **2 public subnets** -- Host the Application Load Balancer.
-- **2 private subnets** -- Host ECS Fargate tasks (Portkey gateway + OTel sidecar).
+- **2 private subnets** -- Host ECS Fargate tasks (agentgateway + OTel sidecar).
 - **1 NAT Gateway** -- Handles outbound internet traffic for LLM provider API calls (non-Bedrock). Single AZ to reduce cost. See [ADR-003](/ai-gateway/adrs/003-single-nat-gw-with-vpc-endpoints/).
 - **VPC Endpoints** -- ECR (API + DKR), CloudWatch Logs, Secrets Manager, and S3 (gateway). These eliminate NAT Gateway charges for AWS service traffic.
 
@@ -351,10 +348,12 @@ AWS Bedrock traffic can use a VPC endpoint, making Bedrock calls immune to NAT G
 
 | Decision | Reference | Summary |
 |----------|-----------|---------|
-| Portkey OSS over LiteLLM | [ADR-001](/ai-gateway/adrs/001-portkey-oss-over-litellm/) | LiteLLM has 14 CVEs including RCE; Portkey has zero CVEs and a ~62 MB image |
+| agentgateway as the data plane | [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/) | agentgateway (Rust, distroless, pinned by digest) replaces the Portkey OSS build; routing moves into the rendered config, content safety goes inline via Bedrock Guardrails, and the response cache is dropped for provider-native prompt caching |
+| LLM gateway proxy selection | [ADR-001](/ai-gateway/adrs/001-portkey-oss-over-litellm/) | Original proxy selection (Portkey OSS over LiteLLM); superseded by [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/) |
 | ALB JWT over API Gateway | [ADR-005](/ai-gateway/adrs/005-alb-jwt-validation-over-api-gateway/) | Saves $260-2,400/month by validating JWTs at the ALB with zero additional latency |
-| Dual API format | [ADR-006](/ai-gateway/adrs/006-portkey-dual-format-api/) | Portkey natively serves both OpenAI and Anthropic formats on a single port |
+| Dual API format | [ADR-006](/ai-gateway/adrs/006-portkey-dual-format-api/) | Serves both OpenAI and Anthropic formats on a single port — still true under agentgateway (ADR-017) |
 | Single NAT + VPC endpoints | [ADR-003](/ai-gateway/adrs/003-single-nat-gw-with-vpc-endpoints/) | Saves ~$32/month with acceptable HA trade-off for non-Bedrock outbound |
 | 3-phase security pipeline | [ADR-004](/ai-gateway/adrs/004-security-pipeline-composition/) | Pre-build (hadolint + checkov), post-build (trivy + syft), post-scan (cosign) |
 | AWS provider >= 6.22 | [ADR-007](/ai-gateway/adrs/007-terraform-provider-upgrade-for-jwt/) | Required for the `validate_token` (JWT validation) listener action on ALB |
+| Response cache strategy | [ADR-012](/ai-gateway/adrs/012-response-cache-strategy/) | The ElastiCache Redis response cache; **superseded by [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)**, which removes it in favor of provider-native prompt caching |
 | Two-plane architecture | [ADR-014](/ai-gateway/adrs/014-two-plane-architecture-split/) | ALB for inference, API Gateway + Cognito for admin APIs — eliminates per-handler JWT code |

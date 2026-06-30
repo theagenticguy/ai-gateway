@@ -1,76 +1,74 @@
 ---
 title: Upgrading
-description: How to upgrade Portkey versions, Terraform providers, and enable new features.
+description: How to upgrade the agentgateway data-plane image, Terraform providers, and enable new features.
 sidebar:
   order: 10
 ---
 
-This guide covers the three main upgrade paths for the AI Gateway: upgrading the Portkey gateway version, upgrading Terraform providers, and enabling new features.
+This guide covers the three main upgrade paths for the AI Gateway: upgrading the [agentgateway](https://github.com/agentgateway/agentgateway) data-plane image, upgrading Terraform providers, and enabling new features.
 
-## Upgrading Portkey Version
+## Upgrading the agentgateway Data-Plane Image
 
-The gateway pins a specific git ref of the [Portkey-AI/gateway](https://github.com/Portkey-AI/gateway) in `versions.env` at the repository root. The Dockerfile downloads, verifies, and builds from this pinned source.
+The data plane is the [agentgateway](https://github.com/agentgateway/agentgateway) proxy (Rust, distroless base), pinned **by image digest** in `versions.env` at the repository root. We do not build the binary from source — agentgateway publishes an official hardened image, so the Dockerfile re-tags the upstream image **by digest** into our ECR. The digest is the immutable supply-chain contract; the tag is informational. See [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/) for the decision that replaced the Portkey OSS build.
 
 `versions.env` holds three values:
 
-- `PORTKEY_REF` — the git ref to build from: a release tag (e.g. `v1.15.2`) **or** a full commit SHA. Both are fetched from `https://github.com/Portkey-AI/gateway/archive/<ref>.tar.gz`.
-- `PORTKEY_VERSION` — a human-readable label for image tags and logs (for a SHA pin, `<upstream-version>+<short-sha>`).
-- `PORTKEY_TARBALL_SHA256` — sha256 of the archive tarball, verified at build time.
+- `AGENTGATEWAY_REF` — the upstream image tag published by the agentgateway project (e.g. `v0.5.6`). Informational; the digest is the real pin.
+- `AGENTGATEWAY_VERSION` — a human-readable label used in image tags, labels, and docs.
+- `AGENTGATEWAY_IMAGE_DIGEST` — the `sha256:...` digest of the upstream multi-arch image. This is the immutable pin; the build references `ghcr.io/agentgateway/agentgateway@<digest>`.
 
-:::note[Why a commit SHA?]
-Portkey's release cadence has stalled (last tag `v1.15.2`, 2026-01-12) while `main` has shipped unreleased security fixes. We therefore currently pin a **commit SHA** rather than a release tag, to pick up those fixes while keeping the build reproducible and SHA256-verifiable. When Portkey resumes tagging, prefer pinning the tag — release-gated code is preferred over raw `main`.
+:::note[Why pin by digest instead of building from source?]
+agentgateway ships a hardened distroless image (`cgr.dev/chainguard/glibc-dynamic` base, `ENTRYPOINT /app/agentgateway`). Re-tagging it by digest is a smaller attack surface and faster than reproducing the Rust toolchain build. CVE scanning moves to image-level scanning of the pinned digest (Trivy/Grype/Inspector on the ECR image), which CI already runs. The old Portkey Dockerfile compiled Node and patched npm CVEs at build time — that apparatus is gone.
 :::
 
 ### Automated Detection
 
-A daily GitHub Actions workflow ([`portkey-release-scanner.yml`](https://github.com/theagenticguy/ai-gateway/blob/main/.github/workflows/portkey-release-scanner.yml)) checks for newer upstream source at 07:00 UTC. It prefers a newer stable **release tag** if one exists; otherwise it proposes the latest **`main` commit SHA**. When a newer ref is found, the workflow:
-
-1. Downloads the new source tarball and computes its SHA256 hash.
-2. Builds the custom hardened container image from the new ref.
-3. Runs Trivy and Grype security scans against the built image.
-4. Opens a pull request to update `versions.env` (with a release-notes link for tags, or a commit-range compare link for SHA bumps).
+A scheduled GitHub Actions workflow watches upstream agentgateway releases and, when a newer release is found, opens a pull request that bumps `AGENTGATEWAY_REF` + `AGENTGATEWAY_IMAGE_DIGEST` in `versions.env`. The workflow pulls the new image, re-tags it by digest, and runs the container security scans before the PR is opened.
 
 :::tip
-You can trigger the scanner manually from the Actions tab via `workflow_dispatch` if you want to check for updates outside the daily schedule.
+You can trigger the scanner manually from the Actions tab via `workflow_dispatch` if you want to check for updates outside the schedule.
 :::
 
 ### Manual Upgrade Steps
 
-If you prefer to upgrade manually or need to pin a specific ref:
+If you prefer to upgrade manually or need to pin a specific image:
 
-**1. Update `versions.env`**
-
-```bash
-# versions.env — three values, all required.
-# PORTKEY_REF is a tag (v1.16.0) or a full commit SHA.
-PORTKEY_REF=v1.16.0
-PORTKEY_VERSION=1.16.0
-PORTKEY_TARBALL_SHA256=<sha256-of-the-tarball>
-```
-
-**2. Compute the SHA256 hash**
+**1. Resolve the digest for the target tag**
 
 ```bash
-wget -qO /tmp/portkey.tar.gz \
-  "https://github.com/Portkey-AI/gateway/archive/v1.16.0.tar.gz"
-sha256sum /tmp/portkey.tar.gz
+docker buildx imagetools inspect ghcr.io/agentgateway/agentgateway:v0.5.7
 ```
 
-Copy the hash into `PORTKEY_TARBALL_SHA256` in `versions.env`.
+Copy the `sha256:...` digest from the output.
 
-**3. Test the build locally**
+**2. Update `versions.env`**
+
+Bump `AGENTGATEWAY_REF` and `AGENTGATEWAY_IMAGE_DIGEST` **together** — they must always describe the same image:
+
+```bash
+# versions.env
+AGENTGATEWAY_REF=v0.5.7
+AGENTGATEWAY_VERSION=0.5.7
+AGENTGATEWAY_IMAGE_DIGEST=sha256:<digest-from-step-1>
+```
+
+**3. Update the `gateway_image` default**
+
+Update the `gateway_image` default in `infrastructure/variables.tf` to match the new tag, so `terraform plan`/`validate` resolve a consistent default.
+
+**4. Test the build locally**
 
 ```bash
 docker build \
-  --build-arg PORTKEY_REF=v1.16.0 \
-  --build-arg PORTKEY_VERSION=1.16.0 \
-  --build-arg PORTKEY_TARBALL_SHA256=<hash> \
+  --build-arg AGENTGATEWAY_REF=v0.5.7 \
+  --build-arg AGENTGATEWAY_VERSION=0.5.7 \
+  --build-arg AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@sha256:<digest> \
   -t ai-gateway:test .
 ```
 
-The Dockerfile performs SHA256 verification during the build. If the hash does not match, the build fails immediately.
+The build re-tags the pinned upstream image; it intentionally adds no layers, preserving the distroless attack surface.
 
-**4. Push a version tag to trigger the release**
+**5. Push a version tag to trigger the release**
 
 ```bash
 # Bump the project version (updates pyproject.toml, generates CHANGELOG.md, commits, tags)
@@ -82,26 +80,28 @@ git push origin main --tags
 
 The `v*` tag triggers `.github/workflows/release.yml`, which:
 
-- Builds and pushes the container image to GHCR (always) and ECR (if configured).
+- Re-tags the pinned upstream image by digest and pushes it to ECR (and GHCR).
 - Signs the image with cosign (keyless Sigstore).
 - Generates CycloneDX and SPDX SBOMs.
 - Creates a GitHub Release with an auto-generated changelog.
 
 :::caution
-Always review the [Portkey release notes](https://github.com/Portkey-AI/gateway/releases) for breaking changes before upgrading. The gateway is a core dependency and breaking changes in Portkey may require updates to routing configurations or environment variables.
+Always review the [agentgateway release notes](https://github.com/agentgateway/agentgateway/releases) for breaking changes before upgrading. The data plane reads a rendered YAML config (`compute/agentgateway-config.yaml.tftpl`); a config-schema change upstream may require updating that template.
 :::
 
-### How the Build Uses the Pinned Version
+### How the Build Uses the Pinned Image
 
-The Dockerfile is a multi-stage build:
+The Dockerfile is a single stage that re-tags the pinned upstream image:
 
-| Stage | What Happens |
+| Step | What Happens |
 |---|---|
-| **source** | Downloads the Portkey tarball for the pinned version, verifies SHA256, extracts source |
-| **build** | Installs dependencies (`npm ci`), builds from source (`npm run build`), prunes dev deps |
-| **runtime** | Copies only the build output and production `node_modules` into a hardened Alpine image (non-root user, tini PID 1, no npm) |
+| **base** | `FROM ghcr.io/agentgateway/agentgateway@<AGENTGATEWAY_IMAGE_DIGEST>` — the pinned distroless image |
+| **labels** | OCI labels stamp `AGENTGATEWAY_VERSION` and the upstream base name |
+| **expose** | Port 8787 (the gateway listener); readiness is on 15021, checked by ECS |
 
-The `versions.env` file is loaded by both the release workflow and the scanner workflow via `cat versions.env >> "$GITHUB_ENV"`, making `PORTKEY_VERSION` and `PORTKEY_TARBALL_SHA256` available as environment variables during the build.
+No application layers are added: there is no shell, no package manager, and the entrypoint (`/app/agentgateway`) is inherited from the upstream image. The ECS task definition supplies the config via `command: ["-c", "<rendered config>"]`.
+
+The `versions.env` file is loaded by the CI and release workflows via `cat versions.env >> "$GITHUB_ENV"`, making `AGENTGATEWAY_REF`, `AGENTGATEWAY_VERSION`, and `AGENTGATEWAY_IMAGE_DIGEST` available as `--build-arg` values during the build.
 
 ---
 
@@ -195,7 +195,7 @@ terraform apply -var-file=envs/dev.tfvars
 ```
 
 :::tip
-Features are independent. You can enable SSO without multi-client, or enable the response cache without cost attribution. The only dependency is that rate limiting and group mapping both benefit from multi-client being enabled, but they function without it.
+Features are independent. You can enable SSO without multi-client, or enable guardrails without cost attribution. The only dependency is that rate limiting and group mapping both benefit from multi-client being enabled, but they function without it.
 :::
 
 ### Disabling a Feature
@@ -215,25 +215,25 @@ Disabling `enable_audit_log` will destroy the Kinesis Firehose, S3 bucket, and G
 
 ## Rollback Procedures
 
-### Rolling Back a Portkey Version
+### Rolling Back the agentgateway Image
 
-If a new Portkey version introduces issues, revert `versions.env` to the previous values and push a new release tag:
+If a new agentgateway image introduces issues, revert `versions.env` (and the `gateway_image` default) to the previous known-good values and push a new release tag:
 
 ```bash
-# Revert versions.env to the previous known-good version
-git checkout HEAD~1 -- versions.env
+# Revert versions.env to the previous known-good digest
+git checkout HEAD~1 -- versions.env infrastructure/variables.tf
 
 # Commit and tag a new release
-git add versions.env
-git commit -m "fix: revert Portkey to v1.15.2"
+git add versions.env infrastructure/variables.tf
+git commit -m "fix: revert agentgateway image to v0.5.5"
 mise run release:bump-patch
 git push origin main --tags
 ```
 
-The release workflow will build and deploy the container image with the reverted Portkey version.
+The release workflow will re-tag and deploy the reverted image by digest.
 
 :::note
-Container images are tagged with both the version tag and `latest`. Previous version images remain available in GHCR and ECR. You can also point your ECS task definition directly at a previous image tag (e.g., `ghcr.io/theagenticguy/ai-gateway:v1.2.0`) for an immediate rollback without rebuilding.
+Images are tagged with both the version tag and `latest` in ECR. Previous images remain available. You can also point your ECS task definition (via the `gateway_image` variable) directly at a previous image URI for an immediate rollback without re-running the release workflow.
 :::
 
 ### Rolling Back a Terraform Change

@@ -4,29 +4,24 @@ description: Step-by-step configuration for each supported AI coding agent.
 sidebar:
   order: 2
 ---
-Configure any of the 6 supported AI coding agents to route requests through the AI Gateway.
+Configure any of the supported AI coding agents to route requests through the AI Gateway.
 
 ---
 
 ## Overview
 
-The gateway serves two API formats natively:
+The gateway is the [agentgateway](https://github.com/agentgateway/agentgateway) proxy, which serves two API formats natively on a single port:
 
 | Format | Endpoint | Used By |
 |---|---|---|
 | **Anthropic Messages** | `/v1/messages` | Claude Code |
 | **OpenAI Chat Completions** | `/v1/chat/completions` | OpenCode, Goose, Continue.dev, LangChain, Codex CLI |
 
-Every request must include the `x-portkey-provider` header to tell the gateway which upstream provider to route to:
+Provider and model selection is **server-side**. agentgateway reads its routing from a YAML config rendered by Terraform: a priority-group failover chain (Bedrock primary, Anthropic-direct fallback) plus `modelAliases` that map requested model IDs onto backend models. Clients do **not** send a provider routing header -- there is no `x-portkey-provider` and no per-request routing override. You point your agent at the gateway URL with a valid JWT, and the gateway decides where the request goes.
 
-| Header Value | Provider |
-|---|---|
-| `anthropic` | Anthropic (Claude) |
-| `openai` | OpenAI (GPT) |
-| `google` | Google (Gemini) |
-| `azure-openai` | Azure OpenAI |
-
-If the header is omitted, the gateway returns `{"error": "provider is not set"}`.
+:::note[No provider header]
+Earlier (Portkey-based) releases required an `x-portkey-provider` header on every request. agentgateway removed it: the active provider chain lives in the rendered gateway config, and the gateway selects the backend by model alias and failover priority. Remove any `x-portkey-*` headers from your agent configuration.
+:::
 
 ---
 
@@ -62,13 +57,14 @@ Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 # Gateway base URL -- no /v1 suffix (Claude Code appends it)
 export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
 
-# Provider routing header (newline-separated key: value format)
-export ANTHROPIC_CUSTOM_HEADERS="x-portkey-provider: anthropic"
-
 # Token TTL -- must be a real env var, NOT in settings.json env block.
 # Claude Code bug #7660: TTL in the settings.json env block is ignored.
 export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3000000
 ```
+
+:::tip[No custom headers needed]
+agentgateway selects the provider server-side, so you do not need `ANTHROPIC_CUSTOM_HEADERS`. If you set it for a previous release, remove it.
+:::
 
 :::caution[Known issue #26999]
 `ANTHROPIC_BASE_URL` must be exported in your shell profile. Setting it in the Claude Code settings JSON alone is unreliable -- some internal codepaths read only from the process environment.
@@ -88,7 +84,6 @@ export ENABLE_TOOL_SEARCH=true
 ```bash
 # --- AI Gateway (Claude Code) ---
 export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
-export ANTHROPIC_CUSTOM_HEADERS="x-portkey-provider: anthropic"
 export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3000000
 export ENABLE_TOOL_SEARCH=true
 export GATEWAY_CLIENT_ID="<your-client-id>"
@@ -115,10 +110,7 @@ Create or edit `opencode.json` in your project root:
       "name": "AI Gateway",
       "type": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "${GATEWAY_URL}/v1",
-        "headers": {
-          "x-portkey-provider": "openai"
-        }
+        "baseURL": "${GATEWAY_URL}/v1"
       },
       "models": {
         "gpt-4.1": {
@@ -164,19 +156,16 @@ export OPENAI_HOST="${GATEWAY_URL}"
 export OPENAI_API_KEY=$(~/workplace/ai-gateway/scripts/get-gateway-token.sh)
 ```
 
-#### Wrapper script for custom headers
+#### Wrapper script for fresh tokens
 
-Goose does not support custom headers via environment variables. Create a wrapper script at `~/bin/goose-gateway.sh`:
+Goose reads `OPENAI_API_KEY` once at startup. Create a wrapper at `~/bin/goose-gateway.sh` to refresh the token on every launch:
 
 ```bash
 #!/usr/bin/env bash
-# Refresh token and launch Goose with provider header
+# Refresh token and launch Goose
 export GOOSE_PROVIDER=openai
 export OPENAI_HOST="${GATEWAY_URL}"
 export OPENAI_API_KEY=$(~/workplace/ai-gateway/scripts/get-gateway-token.sh)
-
-# Goose reads OPENAI_EXTRA_HEADERS if available (check your version)
-export OPENAI_EXTRA_HEADERS="x-portkey-provider: openai"
 
 exec goose "$@"
 ```
@@ -186,7 +175,7 @@ chmod +x ~/bin/goose-gateway.sh
 ```
 
 :::note
-If your version of Goose does not support `OPENAI_EXTRA_HEADERS`, contact the gateway admin to configure a default provider route on the gateway side.
+No provider header is required. agentgateway selects the upstream provider from its rendered config, so Goose needs only the gateway URL and a valid token.
 :::
 
 
@@ -207,21 +196,15 @@ models:
     model: gpt-4.1
     apiBase: "${GATEWAY_URL}/v1"
     apiKey: "${TOKEN}"
-    requestOptions:
-      headers:
-        x-portkey-provider: openai
 
   - name: Claude Sonnet (Gateway)
     provider: openai
     model: claude-sonnet-4-20250514
     apiBase: "${GATEWAY_URL}/v1"
     apiKey: "${TOKEN}"
-    requestOptions:
-      headers:
-        x-portkey-provider: anthropic
 ```
 
-Replace `${TOKEN}` with the output of `scripts/get-gateway-token.sh`, or use the [shell wrapper pattern](#token-caching) to keep it fresh.
+Replace `${TOKEN}` with the output of `scripts/get-gateway-token.sh`, or use the [shell wrapper pattern](#token-caching) to keep it fresh. No `requestOptions.headers` are needed -- the gateway maps the requested model onto a backend via `modelAliases` and routes through its priority-group failover chain.
 
 :::note
 Continue reads `config.yaml` at startup. If your token expires mid-session, restart Continue or use the command palette to reload the configuration.
@@ -248,21 +231,19 @@ llm = ChatOpenAI(
     base_url="${GATEWAY_URL}/v1",
     api_key=token,
     model="gpt-4.1",
-    default_headers={"x-portkey-provider": "openai"},
 )
 
 response = llm.invoke("Hello from LangChain via the AI Gateway")
 print(response.content)
 ```
 
-To route Anthropic models through the gateway (still using the OpenAI wire format):
+To target an Anthropic model, just change the `model` argument -- the gateway resolves it against `modelAliases` and its provider failover chain. No custom headers are needed:
 
 ```python
 llm = ChatOpenAI(
     base_url="${GATEWAY_URL}/v1",
     api_key=token,
     model="claude-sonnet-4-20250514",
-    default_headers={"x-portkey-provider": "anthropic"},
 )
 ```
 
@@ -281,9 +262,6 @@ Edit `~/.codex/config.toml`:
 name = "AI Gateway"
 base_url = "${GATEWAY_URL}/v1"
 env_key = "GATEWAY_API_KEY"
-
-[model_providers.gateway.headers]
-x-portkey-provider = "openai"
 ```
 
 #### API key and launch

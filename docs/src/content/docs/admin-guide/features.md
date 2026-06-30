@@ -1,6 +1,6 @@
 ---
 title: Feature Toggles
-description: "Optional platform features: multi-client isolation, fallback routing, cost attribution, guardrails, caching, rate limiting, audit logging, and SSO."
+description: "Optional platform features: multi-client isolation, fallback routing, cost attribution, guardrails, prompt caching, rate limiting, audit logging, and SSO."
 sidebar:
   order: 6
 ---
@@ -15,15 +15,14 @@ Features are designed as additive modules. Enabling a feature creates new resour
 | Feature | Toggle Variable | Category |
 |---|---|---|
 | [Multi-Client Onboarding](#multi-client-onboarding) | `enable_multi_client` | Access Control |
-| [Provider Fallback Routing](#provider-fallback-routing) | `enable_fallback_routing` | Routing |
+| [Provider Fallback Routing](#provider-fallback-routing) | (gateway config) + `enable_routing_api` | Routing |
 | [Cost Attribution Pipeline](#cost-attribution-pipeline) | `enable_cost_attribution` | Cost Management |
 | [Bedrock Guardrails](#bedrock-guardrails) | `enable_guardrails` | Content Safety |
-| [ElastiCache Response Cache](#elasticache-response-cache) | `enable_response_cache` | Performance |
+| [Provider-Native Prompt Caching](#provider-native-prompt-caching) | (gateway config) | Performance |
 | [RPM & Token Rate Limiting](#rpm--token-rate-limiting) | `enable_admin_api` | Metering |
 | [Usage Self-Service API](#usage-self-service-api) | `enable_admin_api` | Metering |
 | [Dynamic Pricing Admin](#dynamic-pricing-admin) | `enable_admin_api` | Metering |
 | [Audit Log Pipeline](#audit-log-pipeline) | `enable_audit_log` | Compliance |
-| [Per-Team Cache Metrics](#per-team-cache-metrics) | `enable_cost_attribution` | Cost Management |
 | [Identity Provider Federation](#identity-provider-federation) | `enable_user_auth` | Identity & SSO |
 | [Pre-Token Group Mapping](#pre-token-group-mapping) | `enable_user_auth` | Identity & SSO |
 
@@ -69,65 +68,44 @@ Use the `admin` scope sparingly. Most consuming services only need `invoke` to c
 
 ### Provider Fallback Routing
 
-Portkey-native fallback and load-balancing configurations that route requests across multiple LLM providers. If the primary provider fails or is throttled, requests automatically fall back to a secondary provider.
+agentgateway routes across providers using **priority-group failover**, declared in the rendered config (`compute/agentgateway-config.yaml.tftpl`) under `ai.groups`. This is **always on** — there is no enable/disable toggle for failover itself. Each group is a list of providers; the gateway tries the first group, then falls through to the next on failure. The default config makes **Bedrock the primary** and **Anthropic-direct the fallback**. Bedrock uses ambient ECS task-role credentials (SigV4, no static key); the Anthropic fallback uses an API key from Secrets Manager.
 
-**Routing strategies:**
+The optional **dynamic routing API** (Lambda + DynamoDB, gated by `enable_routing_api`) lets operators manage routing rules at runtime; the `routing_config` Lambda renders them into the agentgateway backend config.
 
-| Strategy | Description | Use Case |
+**How it works:**
+
+| Mechanism | Where | Behavior |
 |---|---|---|
-| **Fallback** | Try providers in order; move to next on failure | High availability: OpenAI primary, Bedrock fallback |
-| **Load Balance** | Distribute requests across providers by weight | Cost optimization: 70% Bedrock, 30% OpenAI |
-| **Retry** | Retry failed requests on the same or different provider | Transient error recovery |
+| **Priority-group failover** | `ai.groups` in the rendered config | Try each group in order; fall through to the next group when a provider errors |
+| **Model aliases** | `policies.ai.modelAliases` | Rewrite a requested model id to a provider-specific id (e.g. map `gpt-4*` → a Bedrock Claude model) |
 
-**How to enable:**
+**Example (excerpt of the rendered config):**
 
-```hcl
-enable_fallback_routing = true
+```yaml
+ai:
+  groups:
+    - providers:
+        - name: bedrock-primary
+          provider:
+            bedrock:
+              model: anthropic.claude-sonnet-4-20250514-v1:0
+              region: us-east-1
+          policies:
+            backendAuth:
+              aws: {}            # ambient ECS task-role SigV4
+    - providers:
+        - name: anthropic-fallback
+          provider:
+            anthropic:
+              model: claude-sonnet-4-20250514
+          policies:
+            backendAuth:
+              key: ${ANTHROPIC_API_KEY}
 ```
 
-This deploys Portkey routing configuration files that define fallback chains and load-balancing weights. The configurations are passed to the gateway as environment variables or mounted config files.
-
-**Example fallback configuration:**
-
-```json
-{
-  "strategy": {
-    "mode": "fallback"
-  },
-  "targets": [
-    {
-      "provider": "openai",
-      "override_params": { "model": "gpt-4" }
-    },
-    {
-      "provider": "bedrock",
-      "override_params": { "model": "anthropic.claude-3-5-sonnet-20241022-v2:0" }
-    }
-  ]
-}
-```
-
-**Example load-balancing configuration:**
-
-```json
-{
-  "strategy": {
-    "mode": "loadbalance"
-  },
-  "targets": [
-    {
-      "provider": "bedrock",
-      "weight": 0.7,
-      "override_params": { "model": "anthropic.claude-3-5-sonnet-20241022-v2:0" }
-    },
-    {
-      "provider": "openai",
-      "weight": 0.3,
-      "override_params": { "model": "gpt-4" }
-    }
-  ]
-}
-```
+:::note
+There is no `x-portkey-config` or `x-portkey-provider` header. Provider selection and failover are defined in the rendered config, not per-request headers. The `routing` admin API (`/routing`) and the `routing_config` Lambda manage the dynamic backend that renders into this config.
+:::
 
 ---
 
@@ -159,17 +137,7 @@ The gateway emits structured JSON logs for every request. A CloudWatch Logs subs
 The pricing table must be populated with current provider rates. Rates change frequently -- consider automating the update process or reviewing monthly.
 :::
 
-
-### Per-Team Cache Metrics
-
-Extends the cost attribution pipeline to publish cache hit/miss metrics with a `Team` dimension, in addition to the existing `Provider` and `Model` dimensions.
-
-| Metric | Dimensions | Description |
-|---|---|---|
-| `AIGateway/CacheHitRate` | Team, Provider, Model | Percentage of requests served from cache |
-| `AIGateway/CacheSavingsUsd` | Team | Estimated cost savings from cache hits |
-
-Use these metrics to identify teams with low cache hit rates and tune their request patterns (e.g., lowering temperature for deterministic calls).
+The cost attribution Lambda reads agentgateway's flat access log, including the `cached_input_tokens` and `cache_creation_input_tokens` fields emitted when [provider-native prompt caching](#provider-native-prompt-caching) is active, so prompt-cache savings show up in per-team cost metrics.
 
 ---
 
@@ -177,39 +145,39 @@ Use these metrics to identify teams with low cache hit rates and tune their requ
 
 ### Bedrock Guardrails
 
-Content safety controls powered by Amazon Bedrock Guardrails. These are applied to requests and responses passing through the gateway, blocking harmful content before it reaches end users.
+Content safety powered by Amazon Bedrock Guardrails. agentgateway calls the Bedrock `ApplyGuardrail` API **inline** — in path, on both the input (prompt) and the output (completion) — signed with the ECS task role. There is no scanner Lambda and no separate scanner route; the `guardrails` Terraform module provisions the guardrail resource the gateway invokes.
 
 **Resources created:**
 
 | Resource | Purpose |
 |---|---|
-| Bedrock Guardrail | Content filtering, PII detection, topic policies, word policies |
+| Bedrock Guardrail | Content filters, sensitive-information (PII) policy, topic policies, word policies |
 | Guardrail version | Immutable published version for production use |
-| IAM policy | Grants the ECS task role permission to invoke Bedrock Guardrails |
+| IAM policy | Grants the ECS task role permission to call `ApplyGuardrail` |
+
+**Detect-only by default.** When `enforce_guardrails = false` (the default), every filter action is set to `NONE`: `ApplyGuardrail` still evaluates each request and returns assessments, but the gateway passes the request through untouched (log-only). Flip `enforce_guardrails = true` per environment to make filters `BLOCK`/`ANONYMIZE` and attach topic filters.
 
 **Guardrail policies:**
 
-| Policy Type | Description | Default Behavior |
+| Policy Type | Description | Default Behavior (`enforce_guardrails = false`) |
 |---|---|---|
-| **Content Filtering** | Blocks harmful content categories (hate, violence, sexual, misconduct) | Block at HIGH strength for all categories |
-| **PII Blocking** | Detects and blocks personally identifiable information | Blocks SSN, credit card, email, phone in responses |
-| **Topic Policies** | Blocks requests about restricted topics | Configurable deny-list |
-| **Word Policies** | Blocks specific words or patterns | Configurable word list |
+| **Content Filtering** | Hate, violence, sexual, misconduct, prompt-attack categories | Evaluated at the configured strength, action `NONE` (detect/log only) |
+| **Sensitive Information (PII)** | Detects PII entities (SSN, credit card, phone, email by default) | Detected, action `NONE` — set to `BLOCK`/`ANONYMIZE` when enforcing |
+| **Topic Policies** | Restricted-topic deny-list | Attached only when enforcing |
+| **Word Policies** | Specific words or phrases | Evaluated, action `NONE` until enforcing |
 
 **How to enable:**
 
 ```hcl
-enable_guardrails = true
-
-guardrail_config = {
-  content_filter_strength = "HIGH"
-  pii_action             = "BLOCK"
-  blocked_topics         = ["financial-advice", "medical-diagnosis"]
-  blocked_words          = []
-}
+enable_guardrails       = true
+enforce_guardrails      = false   # detect/log-only; set true to BLOCK
+content_filter_strength = "HIGH"
+blocked_pii_types       = ["SSN", "CREDIT_DEBIT_CARD_NUMBER", "PHONE", "EMAIL"]
+blocked_topics          = []
+blocked_words           = []
 ```
 
-When guardrails are enabled, the gateway invokes Bedrock's `ApplyGuardrail` API on both the input (prompt) and output (completion). If either triggers a policy violation, the request is blocked with an explanatory error message.
+When the gateway's `bedrockGuardrails` policy is wired (a non-empty `bedrock_guardrail_id` is rendered into the config), every request and response runs through `ApplyGuardrail`. With enforcement off, the call returns `action=NONE` and nothing is blocked; with enforcement on, a policy violation blocks the request with the configured message.
 
 :::caution
 Bedrock Guardrails are a regional service. Ensure the guardrail is created in the same region as the ECS cluster. Additional Bedrock quotas may need to be requested for high-throughput use.
@@ -220,37 +188,32 @@ Bedrock Guardrails are a regional service. Ensure the guardrail is created in th
 
 ## Performance
 
-### ElastiCache Response Cache
+### Provider-Native Prompt Caching
 
-A Redis-based response cache that stores LLM completions keyed by the request hash. Identical requests return cached responses, reducing latency and provider API costs.
+agentgateway has **no response cache** — there is no ElastiCache/Redis tier. Instead it relies on **provider-native prompt caching**, configured by the opt-in `promptCaching` policy in the rendered config. The policy injects Bedrock `cachePoint` markers into the system prompt, message history, and tool definitions, gated at a minimum token threshold.
 
-**Resources created:**
+This is **not** a response cache: every request still round-trips to the model and bills output tokens. What it saves is **input-token cost on prefix reuse** — a long shared system prompt or conversation prefix is billed at the cached (cheaper) rate on subsequent calls.
 
-| Resource | Purpose |
-|---|---|
-| ElastiCache Serverless (Redis 7.1) | Cache store with TLS encryption in transit |
-| Security group | Allows port 6379 from ECS tasks only |
-| Subnet group | Places Redis in private subnets |
+**Scope and configuration (in the rendered config, opt-in):**
 
-**How to enable:**
-
-```hcl
-enable_response_cache = true
+```yaml
+policies:
+  ai:
+    promptCaching:
+      cacheSystem: true
+      cacheMessages: true
+      cacheTools: true
+      minTokens: 1024
 ```
 
-When enabled, the gateway container receives additional environment variables:
+| Aspect | Behavior |
+|---|---|
+| **Opt-in** | No `cachePoint` markers are added unless the `promptCaching` block is present |
+| **Bedrock path only** | Markers are injected on the `bedrock-primary` provider; the Anthropic-fallback provider ignores this policy |
+| **Anthropic fallback** | Caching there depends on the client sending `cache_control`, which agentgateway passes through |
+| **`minTokens`** | Prefixes below the threshold are not marked, avoiding overhead on short prompts |
 
-| Variable | Value | Purpose |
-|---|---|---|
-| `CACHE_STORE` | `redis` | Tells Portkey to use Redis for caching |
-| `REDIS_URL` | `rediss://{endpoint}:6379` | TLS-encrypted Redis endpoint |
-| `CACHE_TTL` | `3600` | Default cache TTL in seconds (1 hour) |
-
-Portkey's built-in caching layer hashes the request body (model, messages, parameters) to generate a cache key. On cache hit, the cached response is returned immediately without calling the LLM provider. On cache miss, the provider response is stored in Redis for subsequent requests.
-
-:::tip
-Caching works best for deterministic requests (temperature=0). For creative/random outputs (temperature>0), caching may return unexpected repeated responses. Consider setting `cache: "none"` in the Portkey request headers for non-deterministic calls.
-:::
+Prompt-cache token counts surface in the access log as `cached_input_tokens` / `cache_creation_input_tokens` and flow through to cost attribution. See [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/) (which supersedes the response-cache decision in [ADR-012](/ai-gateway/adrs/012-response-cache-strategy/)).
 
 
 ---
@@ -452,16 +415,16 @@ You do not need to choose between M2M and user auth. Both can be active simultan
 
 All features can be enabled independently. The following matrix shows interactions for the platform features:
 
-| | Multi-Client | Fallback Routing | Cost Attribution | Guardrails | Cache |
+| | Multi-Client | Fallback Routing | Cost Attribution | Guardrails | Prompt Caching |
 |---|---|---|---|---|---|
 | **Multi-Client** | -- | Compatible | Compatible (per-client cost) | Compatible | Compatible |
 | **Fallback Routing** | Compatible | -- | Compatible (multi-provider cost) | Compatible | Compatible |
-| **Cost Attribution** | Compatible (per-client cost) | Compatible (multi-provider cost) | -- | Compatible | Compatible (tracks cache savings) |
-| **Guardrails** | Compatible | Compatible | Compatible | -- | Order-dependent (see note) |
-| **Cache** | Compatible | Compatible | Compatible (tracks cache savings) | Order-dependent (see note) | -- |
+| **Cost Attribution** | Compatible (per-client cost) | Compatible (multi-provider cost) | -- | Compatible | Compatible (tracks cache-token savings) |
+| **Guardrails** | Compatible | Compatible | Compatible | -- | Compatible |
+| **Prompt Caching** | Compatible | Compatible (Bedrock path only) | Compatible (tracks cache-token savings) | Compatible | -- |
 
-:::note[Guardrails + Cache Interaction]
-When both guardrails and caching are enabled, cached responses bypass guardrail evaluation on cache hits. If guardrail policies change after a response is cached, the old response may still be served until the cache entry expires.
+:::note[Guardrails + Prompt Caching]
+Prompt caching is not a response cache — every request still reaches the model, so inline Bedrock Guardrails evaluate every request and response regardless of cache state. There is no stale-response concern.
 :::
 
 
@@ -470,7 +433,7 @@ When both guardrails and caching are enabled, cached responses bypass guardrail 
 | Use Case | Features | Rationale |
 |---|---|---|
 | **Multi-team platform** | Multi-Client + Cost Attribution | Per-team credentials with per-team cost visibility |
-| **High-availability gateway** | Fallback Routing + Cache | Fallback routing for resilience, caching for latency |
+| **High-availability gateway** | Fallback Routing + Prompt Caching | Priority-group failover for resilience, prompt caching to cut input-token cost on prefix reuse |
 | **Regulated workloads** | Multi-Client + Guardrails + Cost Attribution | Access control, content safety, and cost tracking |
-| **Cost-optimized platform** | Fallback Routing + Cost Attribution + Cache | Load-balance across providers, track costs, cache responses |
+| **Cost-optimized platform** | Fallback Routing + Cost Attribution + Prompt Caching | Fail over across providers, track costs, cut input-token cost on the Bedrock path |
 | **Full platform** | All features enabled | Complete enterprise deployment |

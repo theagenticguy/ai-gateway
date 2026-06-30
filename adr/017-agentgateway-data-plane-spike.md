@@ -13,10 +13,12 @@ This ADR began as a spike. The operator directed a full rip-and-replace on a rel
 
 ## What was implemented
 
-- **Guardrail Lambdas** (`budget_enforcement`, `content_scanner`) speak agentgateway's `{action: pass|mask|reject}` webhook contract alongside the legacy Portkey `{verdict}` shape, via a shared `gwcore.agentgateway` helper. Budget/scan logic unchanged. Rollback stays a routing flip because the Portkey path is retained.
-- **cost_attribution** parses agentgateway's flat access-log shape (synthesizes the nested `usage` block from flat token fields; reads the flat `oidc_data` field for identity) while keeping Portkey back-compat.
-- **routing_config** renders `RoutingConfig` to an agentgateway `ai.groups` priority-group backend (`to_agentgateway_backend()`); `to_portkey_config()` retained.
-- **Terraform compute** runs the agentgateway image, delivers the rendered YAML config inline via `-c`, wires the two Lambdas as `promptGuard` webhooks, re-keys the access log for cost_attribution, and removes the Redis cache.
+> **v0.1 update (post-migration cleanup):** agentgateway is the only data plane, so the dual-contract scaffolding described below was removed. `budget_enforcement` now speaks the agentgateway `{action}` contract only (the Portkey `{verdict}` branch and `to_portkey_config()` are deleted); `content_scanner` was removed entirely in favor of the inline Bedrock guardrail; the Redis cache module, the Portkey routing-config presets, and the Portkey release scanner are deleted. Rollback is no longer a routing flip — this is a clean-cut v0.1.
+
+- **Guardrails.** `budget_enforcement` speaks agentgateway's `{action: pass|mask|reject}` webhook contract (via the `gwcore.agentgateway` helper) as the one in-path Lambda. Content safety runs **inline** in agentgateway via the Bedrock Guardrails ApplyGuardrail API (ADR-017 Option A), detect/log-only by default; the standalone `content_scanner` Lambda is gone.
+- **cost_attribution** parses agentgateway's flat access-log shape: it synthesizes the nested `usage` block from flat token fields and reads the flat `oidc_data` field for identity.
+- **routing_config** renders `RoutingConfig` to an agentgateway `ai.groups` priority-group backend (`to_agentgateway_backend()`).
+- **Terraform compute** runs the agentgateway image, delivers the rendered YAML config inline via `-c`, wires `budget_enforcement` as a `promptGuard` webhook and the Bedrock guardrail inline, re-keys the access log for cost_attribution, and removes the Redis cache.
 - **Dockerfile** re-tags the upstream agentgateway image pinned by digest; the npm CVE-patch apparatus is gone; CI build-args updated.
 
 ## Executed-migration caveats (must close before production cutover)

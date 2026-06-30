@@ -4,10 +4,19 @@ description: Containerization, IaC, Docker hardening, CI/CD, observability, and 
 sidebar:
   order: 3
 ---
-**Project**: LLM API Gateway (Portkey OSS)
+**Project**: LLM API Gateway (Portkey OSS data plane, at time of research)
 **Date**: 2026-03-18
 **Researcher Domain**: Infrastructure
 **Locked-In**: Python 3.13, uv, ECS Fargate, ALB, Terraform
+
+:::note[Historical research snapshot -- data plane has since changed]
+This is a point-in-time research report from 2026-03-18, when the data plane was Portkey OSS (a Node/Python proxy built from source). The data plane has since been migrated to [agentgateway](https://github.com/agentgateway/agentgateway), a Rust LLM/MCP proxy on a distroless base, pinned by image digest in `versions.env` (see ADR-017). Two findings below are now superseded:
+
+- The data-plane container is no longer built from source. We pin and re-tag the upstream agentgateway image by digest; there is no Python Dockerfile or `python -m portkey_gateway` entrypoint for the proxy.
+- agentgateway is not instrumented with the OpenTelemetry Python SDK. It emits OTLP traces and access logs natively to the ADOT sidecar (`localhost:4317`).
+
+The containerization, IaC, Docker-hardening, CI/CD, and security findings for the surrounding Python Lambdas and Terraform are otherwise unchanged. Treat "Portkey" mentions below as the original data plane.
+:::
 
 ---
 

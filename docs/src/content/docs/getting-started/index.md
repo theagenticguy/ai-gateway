@@ -10,10 +10,10 @@ Get the AI Gateway running locally and deploy it to AWS in under 5 minutes.
 
 ## What You Will Build
 
-A fully operational LLM inference gateway on AWS that:
+A fully operational LLM inference gateway on AWS, built on the [agentgateway](https://github.com/agentgateway/agentgateway) Rust proxy, that:
 
-- Accepts requests in both OpenAI and Anthropic API formats
-- Routes to multiple model providers (Bedrock, OpenAI, Anthropic, Google, Azure OpenAI)
+- Accepts requests in both OpenAI and Anthropic API formats on a single port
+- Routes to multiple model providers (Bedrock, OpenAI, Anthropic, Google, Azure OpenAI) using priority-group failover defined in the gateway config
 - Authenticates callers via Cognito M2M JWT tokens
 - Auto-scales on ECS Fargate behind an Application Load Balancer
 - Collects traces, metrics, and logs via OpenTelemetry
@@ -75,7 +75,7 @@ After deployment, Terraform outputs the ALB DNS name and Cognito token endpoint.
 
 1. **Get a token** -- Use `scripts/get-gateway-token.sh` to obtain a JWT from Cognito
 2. **Configure your agent** -- Point your AI coding agent at the gateway URL
-3. **Start routing requests** -- Send LLM requests through the gateway to any provider
+3. **Start routing requests** -- Send LLM requests through the gateway; the rendered gateway config selects the provider and applies priority-group failover
 
 ---
 

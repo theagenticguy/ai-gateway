@@ -23,12 +23,12 @@ sequenceDiagram
     participant Client as AI Agent / Script
     participant Cognito as Cognito User Pool
     participant ALB as Application Load Balancer
-    participant ECS as Portkey Gateway (ECS)
+    participant ECS as agentgateway (ECS)
 
     Client->>Cognito: POST /oauth2/token<br/>grant_type=client_credentials<br/>client_id + client_secret
     Cognito-->>Client: 200 OK<br/>access_token (JWT, 1h TTL)
 
-    Client->>ALB: POST /v1/messages<br/>Authorization: Bearer JWT<br/>x-portkey-provider: anthropic
+    Client->>ALB: POST /v1/messages<br/>Authorization: Bearer JWT
     ALB->>ALB: Validate JWT signature (JWKS)<br/>Check iss, exp, scope
 
     alt Token valid
@@ -46,7 +46,7 @@ sequenceDiagram
 2. **Token issuance** -- Cognito validates the credentials and returns a signed JWT access token with a 1-hour TTL and the `https://gateway.internal/invoke` scope.
 3. **Request with Bearer token** -- The client includes the JWT in the `Authorization: Bearer <token>` header on every request to the gateway.
 4. **ALB JWT validation** -- The ALB validates the token signature against Cognito's JWKS endpoint, checks standard claims (`iss`, `exp`, `nbf`, `iat`), and verifies the required scope. Invalid tokens are rejected with a `401` before reaching the backend.
-5. **Forward to ECS** -- Valid requests pass through to the Portkey gateway container on ECS Fargate.
+5. **Forward to ECS** -- Valid requests pass through to the agentgateway container on ECS Fargate.
 
 ---
 

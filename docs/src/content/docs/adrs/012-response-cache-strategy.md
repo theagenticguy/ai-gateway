@@ -1,11 +1,15 @@
 ---
 title: "ADR-012: Response Cache Strategy"
-description: ElastiCache Redis for exact-match LLM response caching via Portkey's built-in cache layer.
+description: ElastiCache Redis for exact-match LLM response caching — superseded by ADR-017, which removes the response cache.
 sidebar:
   order: 12
 ---
 
-**Status**: Accepted
+:::caution[Superseded by ADR-017]
+This decision is **superseded**. The ElastiCache Redis response cache was decommissioned with the [agentgateway data-plane migration](/ai-gateway/adrs/017-agentgateway-data-plane-spike/). agentgateway has no response cache; the gateway relies on provider-native prompt caching instead (which discounts input tokens on prefix reuse but is not an exact-match response cache). This ADR is retained as a historical record.
+:::
+
+**Status**: Superseded by [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)
 **Date**: 2026-03-20
 **Deciders**: AI Engineering NAMER
 

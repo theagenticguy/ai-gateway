@@ -11,7 +11,7 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
 
 ## Overview
 
-AI Gateway deploys [Portkey AI Gateway OSS](https://github.com/Portkey-ai/gateway) (v1.15.2) on ECS Fargate behind an Application Load Balancer, giving your AI coding agents a unified entry point to multiple model providers. It speaks both the **OpenAI Chat Completions** and **Anthropic Messages** API formats natively, so every major agent works without translation layers or custom adapters.
+AI Gateway deploys [agentgateway](https://github.com/agentgateway/agentgateway) -- a Rust LLM/MCP proxy on a distroless base -- on ECS Fargate behind an Application Load Balancer, giving your AI coding agents a unified entry point to multiple model providers. It speaks both the **OpenAI Chat Completions** and **Anthropic Messages** API formats natively on a single port, so every major agent works without translation layers or custom adapters. Provider and model selection is server-side: agentgateway routes through a priority-group failover chain defined in its config.
 
 Authentication is handled by **Cognito M2M** (`client_credentials` grant) with **ALB-native JWT validation** -- no API Gateway required, no per-request cost added.
 
@@ -21,11 +21,12 @@ Authentication is handled by **Cognito M2M** (`client_credentials` grant) with *
 
 | Feature | Description |
 |---|---|
-| **Dual API format** | Serves `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) natively |
-| **Multi-provider routing** | Routes to Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI via a single header |
+| **Dual API format** | Serves `/v1/chat/completions` (OpenAI) and `/v1/messages` (Anthropic) natively on one port |
+| **Multi-provider routing** | Routes to Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI via server-side priority-group failover |
 | **Cognito M2M auth** | Machine-to-machine JWT authentication with ALB-native validation |
 | **Zero per-request cost** | ALB JWT validation eliminates the need for API Gateway |
 | **Auto-scaling** | ECS Fargate scales on CPU utilization and ALB request count |
+| **Inline content safety** | Bedrock Guardrails called in-path (ApplyGuardrail), detect/log-only by default |
 | **Observability** | OpenTelemetry sidecar with CloudWatch logs, X-Ray traces, and operational dashboards |
 
 ---
