@@ -14,7 +14,7 @@ Features are designed as additive modules. Enabling a feature creates new resour
 
 | Feature | Toggle Variable | Category |
 |---|---|---|
-| [Multi-Client Onboarding](#multi-client-onboarding) | `enable_multi_client` | Access Control |
+| [Multi-Client Onboarding](#multi-client-onboarding) | `client_configs` (non-empty map) | Access Control |
 | [Provider Fallback Routing](#provider-fallback-routing) | (gateway config) + `enable_routing_api` | Routing |
 | [Cost Attribution Pipeline](#cost-attribution-pipeline) | `enable_cost_attribution` | Cost Management |
 | [Bedrock Guardrails](#bedrock-guardrails) | `enable_guardrails` | Content Safety |
@@ -34,28 +34,32 @@ Features are designed as additive modules. Enabling a feature creates new resour
 
 Per-team Cognito credentials that allow you to issue separate client IDs and secrets to each consuming team or service. Each client can be assigned a subset of OAuth scopes, enabling fine-grained access control.
 
-**Resources created:**
+There is **no boolean toggle** for this feature. The `clients` Terraform module is driven entirely by the `client_configs` map variable: one entry per team, each provisioning a dedicated Cognito app client. The module is created only when `client_configs` is non-empty (`length(var.client_configs) > 0`); leaving it at the default empty map (`{}`) means no per-team clients are created.
 
-- Additional Cognito User Pool clients (one per team)
-- Per-client scope assignments (e.g., team A gets `invoke` only, team B gets `invoke` + `admin`)
-- Optional per-client rate limiting via WAF rules
+**Resources created (one set per `client_configs` entry):**
+
+- A dedicated Cognito User Pool app client (`aws_cognito_user_pool_client`) named `<project_name>-<team>-<environment>`, with a generated client secret
+- Per-client scope assignments drawn from each entry's `allowed_scopes` (e.g., team A gets `invoke` only, team B gets `invoke` + `admin`)
+- A 1-hour `client_credentials` access-token validity
 
 **How to enable:**
 
-```hcl
-enable_multi_client = true
+Set the `client_configs` map. Each key is a team identifier; each value is an object with `allowed_scopes` (a list of OAuth scope identifiers) and a human-readable `description`:
 
-client_configurations = {
-  team-alpha = {
-    scopes = ["https://gateway.internal/invoke"]
+```hcl
+client_configs = {
+  platform = {
+    allowed_scopes = ["https://gateway.internal/invoke"]
+    description    = "Platform engineering team"
   }
-  team-beta = {
-    scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]
+  ml-ops = {
+    allowed_scopes = ["https://gateway.internal/invoke", "https://gateway.internal/admin"]
+    description    = "ML Operations team"
   }
 }
 ```
 
-Each team receives its own `client_id` and `client_secret` from the Cognito User Pool. They use the standard `client_credentials` grant to obtain tokens scoped to their permissions. The ALB JWT listener validates the `scope` claim, ensuring teams can only access endpoints their scopes allow.
+Each team receives its own `client_id` and `client_secret` from the Cognito User Pool (exposed via the `client_ids` and `client_secrets` Terraform outputs, keyed by team). They use the standard `client_credentials` grant to obtain tokens scoped to their permissions. The ALB JWT listener validates the `scope` claim, ensuring teams can only access endpoints their scopes allow.
 
 :::tip
 Use the `admin` scope sparingly. Most consuming services only need `invoke` to call LLM endpoints through the gateway.
@@ -70,7 +74,11 @@ Use the `admin` scope sparingly. Most consuming services only need `invoke` to c
 
 agentgateway routes across providers using **priority-group failover**, declared in the rendered config (`compute/agentgateway-config.yaml.tftpl`) under `ai.groups`. This is **always on** — there is no enable/disable toggle for failover itself. Each group is a list of providers; the gateway tries the first group, then falls through to the next on failure. The default config makes **Bedrock the primary** and **Anthropic-direct the fallback**. Bedrock uses ambient ECS task-role credentials (SigV4, no static key); the Anthropic fallback uses an API key from Secrets Manager.
 
-The optional **dynamic routing API** (Lambda + DynamoDB, gated by `enable_routing_api`) lets operators manage routing rules at runtime; the `routing_config` Lambda renders them into the agentgateway backend config.
+The optional **dynamic routing API** (Lambda + DynamoDB, gated by `enable_routing_api`) lets operators author and version routing rules; the `routing_config` Lambda renders them into the agentgateway backend config.
+
+:::note[Routing changes are not live-reloaded today]
+Routing lives in the static rendered agentgateway config baked into the container at deploy time. Changes made through the routing-config admin API are persisted to DynamoDB but take effect on the **next config render + ECS task reload**, not instantly and not per team at request time. The render-and-reload path (and xDS-style dynamic delivery) is a documented follow-up — see [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/) and [Routing Strategies](/ai-gateway/user-guide/routing-strategies/).
+:::
 
 **How it works:**
 

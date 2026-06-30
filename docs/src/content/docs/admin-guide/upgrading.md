@@ -164,7 +164,7 @@ Dependabot is configured to open PRs for Terraform provider updates in the `terr
 
 ## Enabling Features
 
-All optional features are controlled by Terraform boolean variables and can be enabled independently. See [Feature Toggles](/ai-gateway/admin-guide/features/) for the full list.
+Most optional features are controlled by Terraform boolean toggle variables and can be enabled independently. Per-team Cognito clients are the exception: they are driven by the `client_configs` map (non-empty enables the `clients` module), not a boolean. See [Feature Toggles](/ai-gateway/admin-guide/features/) for the full list.
 
 ### How to Enable a Feature
 
@@ -172,8 +172,15 @@ All optional features are controlled by Terraform boolean variables and can be e
 
 ```hcl
 # Platform features
-enable_multi_client     = true
 enable_cost_attribution = true
+
+# Per-team Cognito clients (map-driven, not a boolean toggle)
+client_configs = {
+  platform = {
+    allowed_scopes = ["https://gateway.internal/invoke"]
+    description    = "Platform engineering team"
+  }
+}
 
 # Metering & governance
 enable_admin_api = true
@@ -195,7 +202,7 @@ terraform apply -var-file=envs/dev.tfvars
 ```
 
 :::tip
-Features are independent. You can enable SSO without multi-client, or enable guardrails without cost attribution. The only dependency is that rate limiting and group mapping both benefit from multi-client being enabled, but they function without it.
+Features are independent. You can enable SSO without per-team clients, or enable guardrails without cost attribution. The only dependency is that rate limiting and group mapping both benefit from per-team Cognito clients (`client_configs`) being defined, but they function without it.
 :::
 
 ### Disabling a Feature

@@ -108,3 +108,14 @@ variable "bedrock_guardrail_version" {
   type        = string
   default     = ""
 }
+
+variable "mantle_host" {
+  description = "ADR-015 mantle lane: pinned host:port of the OpenAI-compatible Bedrock mantle endpoint (e.g. bedrock-mantle.us-east-1.api.aws:443) for the OpenAI Responses lane. Empty disables the lane (no /openai/v1 route, no mantle secret). Host is pinned server-side; callers cannot override it."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.mantle_host == "" || can(regex("^[a-zA-Z0-9.-]+:[0-9]+$", var.mantle_host))
+    error_message = "mantle_host must be empty or in host:port form (e.g. bedrock-mantle.us-east-1.api.aws:443)."
+  }
+}

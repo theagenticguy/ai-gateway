@@ -15,11 +15,12 @@
 #
 # These ARG defaults are a FALLBACK for bare `docker build .`; the canonical pin
 # lives in versions.env and CI passes it via --build-arg.
-ARG AGENTGATEWAY_REF=v0.5.6
-ARG AGENTGATEWAY_VERSION=0.5.6
-# Pin by digest. Keep in sync with versions.env. The default below is a
-# placeholder; CI overrides it with the resolved digest from versions.env.
-ARG AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway:v0.5.6
+ARG AGENTGATEWAY_REF=v1.3.1
+ARG AGENTGATEWAY_VERSION=1.3.1
+# Pin by digest. Keep in sync with versions.env. CI overrides this with the
+# resolved digest from versions.env; the default is digest-pinned too so a bare
+# `docker build .` is reproducible (the tag is informational, the digest binds).
+ARG AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@sha256:c3ce7b75da90fef70239befcc1c3adc05152d7b9dd21fcb8351178026a2c4381
 
 # Single stage: re-tag the pinned upstream image. We intentionally do NOT add
 # layers (no shell, no package manager) so the distroless attack surface is

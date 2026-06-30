@@ -112,12 +112,17 @@ resource "aws_kms_alias" "secrets" {
 }
 
 locals {
-  secrets = {
-    openai    = "ai-gateway/openai-api-key"
-    anthropic = "ai-gateway/anthropic-api-key"
-    google    = "ai-gateway/google-api-key"
-    azure     = "ai-gateway/azure-api-key"
-  }
+  secrets = merge(
+    {
+      openai    = "ai-gateway/openai-api-key"
+      anthropic = "ai-gateway/anthropic-api-key"
+      google    = "ai-gateway/google-api-key"
+      azure     = "ai-gateway/azure-api-key"
+    },
+    # mantle lane (ADR-015): the Bedrock API key the gateway re-issues to the
+    # mantle OpenAI-compatible endpoint. Only provisioned when the lane is on.
+    var.mantle_host != "" ? { mantle = "ai-gateway/mantle-bedrock-api-key" } : {},
+  )
 }
 
 resource "aws_secretsmanager_secret" "secrets" {
@@ -290,6 +295,7 @@ locals {
     budget_enforcement_webhook_host = local.budget_enforcement_webhook_host
     bedrock_guardrail_id            = var.bedrock_guardrail_id
     bedrock_guardrail_version       = var.bedrock_guardrail_version
+    mantle_host                     = var.mantle_host
   })
 }
 
@@ -376,12 +382,18 @@ module "ecs_service" {
       # delivered inline via `-c`, not via env, so no runtime env vars are set.
       environment = []
 
-      secrets = [
-        { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },
-        { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["anthropic"].arn },
-        { name = "GOOGLE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["google"].arn },
-        { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
-      ]
+      secrets = concat(
+        [
+          { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },
+          { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["anthropic"].arn },
+          { name = "GOOGLE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["google"].arn },
+          { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
+        ],
+        # mantle lane key (ADR-015) — only when the lane is enabled.
+        var.mantle_host != "" ? [
+          { name = "MANTLE_BEDROCK_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["mantle"].arn },
+        ] : [],
+      )
 
       # agentgateway exposes a readiness endpoint on readinessAddr (config block).
       healthCheck = {

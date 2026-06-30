@@ -166,6 +166,58 @@ class RoutingConfig(BaseModel):
 
         return {"groups": groups}
 
+    def migration_warnings(self) -> list[str]:
+        """Return human-readable warnings for every lossy part of the render.
+
+        agentgateway's ``ai.groups`` model does not reproduce all of the
+        strategy semantics this config can express. Rendering silently drops
+        the unsupported parts, so this method surfaces exactly what was lost.
+        The handler attaches these to the API response, logs them, and emits a
+        metric, so a lossy migration is loud rather than silent (ADR-017).
+        """
+        warnings: list[str] = []
+
+        if self.strategy.mode == StrategyMode.CONDITIONAL:
+            warnings.append(
+                "conditional routing has no agentgateway equivalent: the "
+                f"{len(self.strategy.conditions)} request-predicate condition(s) "
+                "are dropped and the targets collapse to an ordered fallback chain. "
+                "Split into per-condition configs or route by model alias instead."
+            )
+
+        if self.strategy.on_status_codes:
+            warnings.append(
+                f"strategy.on_status_codes {self.strategy.on_status_codes} is ignored: "
+                "agentgateway fails over on connection/health eviction, not on "
+                "specific upstream status codes."
+            )
+
+        if self.strategy.mode == StrategyMode.LOADBALANCE:
+            weighted = [t.name for t in self.targets if t.weight is not None]
+            if weighted:
+                warnings.append(
+                    f"loadbalance weights on {weighted} are not honored as 0-1 ratios: "
+                    "agentgateway load-balances within a group by capacity-aware "
+                    "power-of-two-choices, so the configured split is approximate."
+                )
+
+        retried = [t.name for t in self.targets if t.retry]
+        if retried:
+            warnings.append(
+                f"per-target retry config on {retried} is ignored: agentgateway has "
+                "no per-target retry-on-status equivalent in the ai.groups backend."
+            )
+
+        virtual_keyed = [t.name for t in self.targets if t.virtual_key]
+        if virtual_keyed:
+            warnings.append(
+                f"virtual_key on {virtual_keyed} is not rendered: agentgateway resolves "
+                "provider credentials from backendAuth (task-role SigV4 for Bedrock, "
+                "env-injected keys otherwise), not per-target virtual keys."
+            )
+
+        return warnings
+
 
 class RoutingConfigSummary(BaseModel):
     """Summary of a routing config for list responses."""

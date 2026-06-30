@@ -185,6 +185,10 @@ module "compute" {
   # task-role SigV4 for the call. id/version come from the guardrails module.
   bedrock_guardrail_id      = var.enable_guardrails ? module.guardrails.guardrail_id : ""
   bedrock_guardrail_version = var.enable_guardrails ? module.guardrails.guardrail_version : ""
+
+  # ADR-015 mantle lane (OpenAI Responses on Bedrock). Empty by default; set
+  # mantle_host to the pinned bedrock-mantle endpoint to enable the lane.
+  mantle_host = var.mantle_host
 }
 
 # -----------------------------------------------------------------------------

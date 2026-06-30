@@ -70,6 +70,12 @@ A `conditional` config is still accepted by the routing-config API for backward 
 
 The `routing_config` Lambda exposes a CRUD API (available when the Admin API is enabled). Custom configs are stored in DynamoDB as the rendered agentgateway backend JSON. Mutations require the **admin** scope and emit audit events.
 
+:::note[Routing changes are not live-reloaded today]
+Routing lives in the **static rendered agentgateway config** baked into the container at deploy time (`infrastructure/modules/compute/agentgateway-config.yaml.tftpl`, delivered inline at container start). A change made through the routing-config API is **persisted to DynamoDB**, but it does **not** take effect instantly and is **not** applied per team at request time. It takes effect on the **next config render + ECS task reload** — that is, when Terraform re-renders the gateway config and the ECS service rolls new tasks.
+
+This is a current-state limitation. A render-and-reload path (and ultimately xDS-style dynamic config delivery) is the documented follow-up — see [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/). Until then, treat the routing-config API as a way to author and version configs that become live on the next deploy, not as a live routing control plane.
+:::
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/routing/configs` | List custom config summaries |

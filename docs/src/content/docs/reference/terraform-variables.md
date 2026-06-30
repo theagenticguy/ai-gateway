@@ -18,6 +18,7 @@ All Terraform input variables for the AI Gateway infrastructure, organized by ca
 | `project_name` | `string` | `"ai-gateway"` | Project name used for resource naming |
 | `vpc_cidr` | `string` | `"10.0.0.0/16"` | CIDR block for the VPC |
 | `gateway_image` | `string` | `"ghcr.io/agentgateway/agentgateway:latest"` | Docker image URI for the AI Gateway data plane (agentgateway, ADR-017). Overridden at apply time with the ECR URI pinned + mirrored by the release workflow; the upstream GHCR default keeps `plan`/`validate` resolvable. |
+| `mantle_host` | `string` | `""` | ADR-015 mantle lane: pinned `host:port` of the OpenAI-compatible Bedrock mantle endpoint (e.g. `bedrock-mantle.us-east-1.api.aws:443`) that serves the OpenAI Responses lane for GPT-5.5/5.4. Empty disables the lane entirely (no `/openai/v1` route, no mantle secret provisioned). |
 | `gateway_desired_count` | `number` | `2` | Desired number of gateway ECS tasks |
 | `gateway_cpu` | `number` | `1024` | Total CPU units for the gateway ECS task |
 | `gateway_memory` | `number` | `2048` | Total memory (MiB) for the gateway ECS task |
@@ -245,3 +246,5 @@ A summary of every feature toggle and its default state:
 | `enable_admin_api` | `false` | API Gateway admin plane (metering and governance features) |
 | `enable_inspector` | `false` | Amazon Inspector ECR scanning |
 | `enable_appconfig` | `false` | AWS AppConfig feature flags |
+| `mantle_host` | `""` (disabled) | ADR-015 OpenAI Responses → Bedrock mantle lane; set to the pinned `host:port` endpoint to enable |
+| `client_configs` | `{}` (no clients) | Per-team Cognito app clients; a non-empty map enables the `clients` module (no boolean toggle) |

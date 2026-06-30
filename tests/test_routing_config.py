@@ -246,6 +246,70 @@ class TestRoutingConfig:
         assert "openAI" in backend["groups"][0]["providers"][0]["provider"]
         assert "azure" in backend["groups"][1]["providers"][0]["provider"]
 
+    # ── migration warnings: lossy renders are surfaced, not silent ───────────
+
+    def test_warnings_empty_for_clean_fallback(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(name="primary", provider="bedrock"),
+                RoutingTarget(name="fallback", provider="anthropic"),
+            ],
+        )
+        assert config.migration_warnings() == []
+
+    def test_warning_for_conditional(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(
+                mode=StrategyMode.CONDITIONAL,
+                conditions=[
+                    RoutingCondition(query={"max_tokens": {"$lte": 100}}, then="small"),
+                    RoutingCondition(default="big"),
+                ],
+            ),
+            targets=[
+                RoutingTarget(name="small", provider="bedrock"),
+                RoutingTarget(name="big", provider="bedrock"),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("conditional routing has no agentgateway equivalent" in w for w in warnings)
+
+    def test_warning_for_on_status_codes(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK, on_status_codes=[429, 503]),
+            targets=[RoutingTarget(name="a", provider="bedrock")],
+        )
+        warnings = config.migration_warnings()
+        assert any("on_status_codes" in w for w in warnings)
+
+    def test_warning_for_loadbalance_weights(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.LOADBALANCE),
+            targets=[
+                RoutingTarget(name="a", provider="bedrock", weight=0.6),
+                RoutingTarget(name="b", provider="anthropic", weight=0.4),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("weights" in w and "not honored" in w for w in warnings)
+
+    def test_warning_for_per_target_retry_and_virtual_key(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(
+                    name="a",
+                    provider="bedrock",
+                    retry={"attempts": 2},
+                    virtual_key="vk-123",
+                ),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("retry config" in w for w in warnings)
+        assert any("virtual_key" in w for w in warnings)
+
 
 class TestRoutingConfigSummary:
     def test_summary(self) -> None:

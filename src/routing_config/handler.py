@@ -112,6 +112,27 @@ def _audit(event: dict[str, Any], principal: auth.Principal, **kw: Any) -> None:
     audit.emit(audit.event_from_request(event, actor=principal.sub, team=principal.team, **kw))
 
 
+def _surface_migration_warnings(name: str, config: RoutingConfig) -> list[str]:
+    """Log + meter any lossy parts of the agentgateway render for this config.
+
+    Rendering a routing config to agentgateway's ``ai.groups`` shape silently
+    drops semantics agentgateway can't express (conditional predicates,
+    on_status_codes, weight ratios, per-target retry/virtual_key). This makes
+    that loss loud: each warning is logged, and a metric fires so a dashboard /
+    alarm can catch teams shipping configs that won't behave as written.
+    """
+    warnings = config.migration_warnings()
+    if warnings:
+        emit_metric(
+            "RoutingConfigMigrationWarning",
+            len(warnings),
+            dimensions={"Mode": config.strategy.mode.value},
+        )
+        for w in warnings:
+            logger.warning("routing config %s lossy on agentgateway render: %s", name, w)
+    return warnings
+
+
 def _validate_body(event: dict[str, Any]) -> dict[str, Any]:
     try:
         body = json.loads(request_body(event))
@@ -180,10 +201,16 @@ def _create_config(event: dict[str, Any], principal: auth.Principal) -> dict[str
     except ClientError as e:
         raise errors.UpstreamError("Failed to store config") from e
 
+    warnings = _surface_migration_warnings(name, config)
     logger.info("Created custom routing config: %s", name)
     _audit(event, principal, action="routing.create", resource=name, status=201)
     return ok(
-        {"name": name, "config": config.to_agentgateway_backend(), "message": "Config created successfully"},
+        {
+            "name": name,
+            "config": config.to_agentgateway_backend(),
+            "migration_warnings": warnings,
+            "message": "Config created successfully",
+        },
         status=201,
     )
 
@@ -209,9 +236,17 @@ def _update_config(name: str, event: dict[str, Any], principal: auth.Principal) 
     except ClientError as e:
         raise errors.UpstreamError("Failed to update config") from e
 
+    warnings = _surface_migration_warnings(name, config)
     logger.info("Updated custom routing config: %s (v%d)", name, config.metadata.version)
     _audit(event, principal, action="routing.update", resource=name, detail=f"v{config.metadata.version}")
-    return ok({"name": name, "config": config.to_agentgateway_backend(), "message": "Config updated successfully"})
+    return ok(
+        {
+            "name": name,
+            "config": config.to_agentgateway_backend(),
+            "migration_warnings": warnings,
+            "message": "Config updated successfully",
+        }
+    )
 
 
 def _delete_config(name: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:

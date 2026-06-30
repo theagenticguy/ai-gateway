@@ -39,6 +39,52 @@ binds:
 - port: 8787
   listeners:
   - routes:
+%{ if mantle_host != "" ~}
+    # mantle lane (ADR-015): OpenAI Responses on Bedrock. The flagship
+    # GPT-5.5/5.4 models are Responses-only, served at the OpenAI-compatible
+    # mantle endpoint (bedrock-mantle.<region>.api.aws/openai/v1). agentgateway
+    # serves this via a CUSTOM provider with `formats: [{type: responses}]` and
+    # a pinned `hostOverride` to mantle — the Responses request is proxied, not
+    # translated to Converse. This route precedes the /v1 catch-all because its
+    # prefix is more specific (agentgateway matches routes in order).
+    #
+    # The host is PINNED here and callers cannot override it (ADR-015 demonstrated
+    # a live egress hole where a caller-supplied host could reach api.openai.com);
+    # egress to OpenAI SaaS is also denied at the VPC as defense-in-depth. The
+    # Bedrock API key is held server-side and injected as MANTLE_BEDROCK_API_KEY.
+    - matches:
+      - path:
+          pathPrefix: /openai/v1
+      backends:
+      - ai:
+          groups:
+          - providers:
+            - name: mantle-responses
+              provider:
+                custom:
+                  # provider_override tags cost/telemetry under a catalog key.
+                  providerOverride: bedrock-mantle
+                  formats:
+                  - type: responses
+              hostOverride: "${mantle_host}"
+              policies:
+                backendAuth:
+                  key: $${MANTLE_BEDROCK_API_KEY}
+      policies:
+        ai:
+%{ if budget_enforcement_webhook_host != "" ~}
+          promptGuard:
+            request:
+            - webhook:
+                target:
+                  host: ${budget_enforcement_webhook_host}
+                forwardHeaderMatches:
+                - name: x-amzn-oidc-data
+                  value:
+                    regex: ".*"
+                failureMode: failClosed
+%{ endif ~}
+%{ endif ~}
     # Single route serves both OpenAI /v1/chat/completions and Anthropic
     # /v1/messages; agentgateway selects the route type from the path suffix.
     - matches:
