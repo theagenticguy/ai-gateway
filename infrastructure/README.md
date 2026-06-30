@@ -99,7 +99,7 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | <a name="input_enable_guardrails"></a> [enable\_guardrails](#input\_enable\_guardrails) | Whether to create the Bedrock Guardrail and wire it into the agentgateway data plane (ADR-017). Default true: the guardrail runs inline in detect/log-only mode. | `bool` | `true` | no |
 | <a name="input_enable_inspector"></a> [enable\_inspector](#input\_enable\_inspector) | Whether to enable Amazon Inspector enhanced scanning for ECR repositories | `bool` | `false` | no |
 | <a name="input_enable_jwt_auth"></a> [enable\_jwt\_auth](#input\_enable\_jwt\_auth) | Whether to enable ALB JWT validation. Requires certificate\_arn and cognito\_user\_pool\_id. | `bool` | `false` | no |
-| <a name="input_enable_provider_fallback"></a> [enable\_provider\_fallback](#input\_enable\_provider\_fallback) | Whether to enable provider fallback routing. When true, routing configs are injected into the gateway container as environment variables. | `bool` | `false` | no |
+| <a name="input_enable_provider_fallback"></a> [enable\_provider\_fallback](#input\_enable\_provider\_fallback) | Whether the gateway serves the multi-provider OpenAI/Claude lanes. Consumed by the guards.tf precondition that requires JWT auth whenever this is true (an unauthenticated multi-provider gateway has no per-team attribution). ADR-017: routing is rendered into the agentgateway config, not injected as container env vars. | `bool` | `false` | no |
 | <a name="input_enable_user_auth"></a> [enable\_user\_auth](#input\_enable\_user\_auth) | Whether to enable user-facing SSO authentication (authorization\_code flow) | `bool` | `false` | no |
 | <a name="input_enable_waf"></a> [enable\_waf](#input\_enable\_waf) | Whether to enable WAF on the ALB | `bool` | `true` | no |
 | <a name="input_enforce_guardrails"></a> [enforce\_guardrails](#input\_enforce\_guardrails) | ADR-017: false (default) = detect/LOG-ONLY (filters evaluate and emit assessments but never block/anonymize; topic filters off). true = BLOCK on trip + attach topic filters. Set per environment (e.g. dev=false, prod selectively true). | `bool` | `false` | no |
@@ -120,7 +120,6 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
 | <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
-| <a name="input_routing_configs"></a> [routing\_configs](#input\_routing\_configs) | Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are agentgateway routing JSON. | `map(string)` | `{}` | no |
 | <a name="input_vpc_cidr"></a> [vpc\_cidr](#input\_vpc\_cidr) | CIDR block for the VPC | `string` | `"10.0.0.0/16"` | no |
 
 ## Outputs

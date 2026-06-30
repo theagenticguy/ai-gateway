@@ -5,11 +5,12 @@
 # whose only job is to carry the precondition.
 
 # F.4: the OpenAI lane (and the existing Claude lane) must not run on an
-# unauthenticated gateway. enable_provider_fallback is what injects the routing
-# configs (incl. the gpt-oss configs) into the gateway, so "OpenAI lane enabled"
-# is observable as enable_provider_fallback = true. If that is on while JWT auth
-# is off, fail the plan — per-team attribution and access control both depend on
-# the ALB-verified identity.
+# unauthenticated gateway. enable_provider_fallback signals that the
+# multi-provider lanes are served (ADR-017: the lanes are rendered into the
+# agentgateway config), so "OpenAI lane enabled" is observable as
+# enable_provider_fallback = true. If that is on while JWT auth is off, fail the
+# plan — per-team attribution and access control both depend on the
+# ALB-verified identity.
 resource "terraform_data" "jwt_auth_guard" {
   lifecycle {
     precondition {
