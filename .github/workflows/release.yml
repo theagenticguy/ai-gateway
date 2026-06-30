@@ -60,7 +60,7 @@ jobs:
       # ── AWS + ECR (optional — for self-hosted deployments) ──
       - name: Configure AWS credentials
         if: steps.ecr-check.outputs.enabled == 'true'
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -204,7 +204,7 @@ jobs:
 
       # ── SLSA Provenance ─────────────────────────────────────
       - name: Generate SLSA build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.meta.outputs.digest }}
