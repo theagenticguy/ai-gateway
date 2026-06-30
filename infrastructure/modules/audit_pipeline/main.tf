@@ -23,6 +23,10 @@ locals {
   name      = "${var.project_name}-${var.environment}-audit"
   namespace = "control_plane"
   table     = "audit_events"
+  # ADR-017 Option A: a second Iceberg table in the same bucket/namespace for
+  # guardrail decisions emitted by the data plane (Bedrock ApplyGuardrail run in
+  # detect/log-only mode). Same Firehose-role + error-bucket pattern as audit.
+  guardrail_table = "guardrail_events"
 }
 
 # -----------------------------------------------------------------------------
@@ -50,6 +54,22 @@ resource "aws_s3tables_table" "audit" {
   # at the table-bucket level, which is exactly the small-files remediation the
   # Parquet+Glue path lacked. Override via aws_s3tables_table_bucket_maintenance_
   # configuration only if the defaults prove insufficient.
+}
+
+# Guardrail decisions table (ADR-017). Schema is managed by the writer (Firehose
+# evolves Iceberg columns on first write). Intended columns: ts, request_id,
+# team, model, provider, phase (INPUT/OUTPUT), action (NONE/BLOCKED/ANONYMIZED),
+# detected (bool), categories (list), guardrail_id, guardrail_version,
+# enforce_mode (bool). In detect-only mode action is NONE and detected captures
+# what WOULD have tripped. Full per-category fidelity depends on the agentgateway
+# detect-and-log enhancement (ADR-017 Option B); until then the gateway's
+# guardrail_checks decision (phase + allow/mask/reject) feeds this table.
+resource "aws_s3tables_table" "guardrail" {
+  count            = var.enable_audit_pipeline ? 1 : 0
+  name             = local.guardrail_table
+  namespace        = aws_s3tables_namespace.audit[0].namespace
+  table_bucket_arn = aws_s3tables_table_bucket.audit[0].arn
+  format           = "ICEBERG"
 }
 
 # -----------------------------------------------------------------------------
@@ -149,6 +169,7 @@ resource "aws_iam_role_policy" "firehose" {
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${local.namespace}",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${local.namespace}/${local.table}",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${local.namespace}/${local.guardrail_table}",
         ]
       },
       {
@@ -211,6 +232,49 @@ resource "aws_kinesis_firehose_delivery_stream" "audit" {
       enabled         = true
       log_group_name  = aws_cloudwatch_log_group.firehose[0].name
       log_stream_name = aws_cloudwatch_log_stream.firehose[0].name
+    }
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Guardrail-events Firehose stream → Iceberg (ADR-017 Option A)
+# -----------------------------------------------------------------------------
+# Reuses the audit Firehose role + error bucket + log group; writes to the
+# guardrail_events table. The data plane (or a thin metric/log subscription)
+# PutRecords guardrail decisions here; consumers query via Athena alongside
+# audit_events in the same control_plane namespace.
+
+resource "aws_cloudwatch_log_stream" "guardrail" {
+  count          = var.enable_audit_pipeline ? 1 : 0
+  name           = "guardrail-iceberg-delivery"
+  log_group_name = aws_cloudwatch_log_group.firehose[0].name
+}
+
+resource "aws_kinesis_firehose_delivery_stream" "guardrail" {
+  count       = var.enable_audit_pipeline ? 1 : 0
+  name        = "${local.name}-guardrail"
+  destination = "iceberg"
+
+  iceberg_configuration {
+    role_arn           = aws_iam_role.firehose[0].arn
+    catalog_arn        = "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog"
+    buffering_size     = 5
+    buffering_interval = 60
+
+    destination_table_configuration {
+      database_name = local.namespace
+      table_name    = local.guardrail_table
+    }
+
+    s3_configuration {
+      role_arn   = aws_iam_role.firehose[0].arn
+      bucket_arn = aws_s3_bucket.errors[0].arn
+    }
+
+    cloudwatch_logging_options {
+      enabled         = true
+      log_group_name  = aws_cloudwatch_log_group.firehose[0].name
+      log_stream_name = aws_cloudwatch_log_stream.guardrail[0].name
     }
   }
 }

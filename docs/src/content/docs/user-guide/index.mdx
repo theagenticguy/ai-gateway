@@ -16,8 +16,8 @@ This guide is for **developers using the AI Gateway** to route LLM requests from
 You are a developer who wants to:
 
 - Route AI agent requests through a centralized gateway instead of hitting provider APIs directly
-- Use any of the 6 supported AI coding agents (Claude Code, OpenCode, Goose, Continue.dev, LangChain, Codex CLI)
-- Access multiple model providers (Anthropic, OpenAI, Google, Azure OpenAI) with a single set of credentials
+- Use any of the supported AI coding agents (Claude Code, OpenCode, Goose, Continue.dev, LangChain, Codex CLI)
+- Access multiple model providers (Bedrock, Anthropic, OpenAI, Google, Azure OpenAI) with a single set of credentials
 - Avoid managing individual provider API keys on your local machine
 
 ---
@@ -26,8 +26,8 @@ You are a developer who wants to:
 
 | Capability | Description |
 |---|---|
-| **Route to any provider** | Switch between Anthropic, OpenAI, Google, and Azure OpenAI by changing a single header |
-| **Use either API format** | Send requests in OpenAI Chat Completions format (`/v1/chat/completions`) or Anthropic Messages format (`/v1/messages`) |
+| **Route across providers** | The gateway config selects the provider and fails over across a priority chain (Bedrock primary, Anthropic-direct fallback) without client changes |
+| **Use either API format** | Send requests in OpenAI Chat Completions format (`/v1/chat/completions`) or Anthropic Messages format (`/v1/messages`) on one port |
 | **Authenticate once** | Use a single Cognito M2M token instead of per-provider API keys |
 | **Use any compatible agent** | Configure Claude Code, OpenCode, Goose, Continue.dev, LangChain, or Codex CLI |
 
@@ -47,7 +47,7 @@ You are a developer who wants to:
     [API reference](/ai-gateway/user-guide/api-reference/)
   </Card>
   <Card title="Routing Strategies">
-    Provider fallback, load balancing, and per-request routing configuration.
+    Provider failover and load balancing via agentgateway priority groups.
 
     [Routing strategies](/ai-gateway/user-guide/routing-strategies/)
   </Card>

@@ -3,7 +3,13 @@
 # =============================================================================
 
 variable "enable_guardrails" {
-  description = "Whether to enable Bedrock Guardrails for content safety filtering"
+  description = "Whether to create the Bedrock Guardrail and wire it into the agentgateway data plane (ADR-017). Default true: the guardrail runs inline in detect/log-only mode."
+  type        = bool
+  default     = true
+}
+
+variable "enforce_guardrails" {
+  description = "ADR-017: false (default) = detect/LOG-ONLY (filters evaluate and emit assessments but never block/anonymize; topic filters off). true = BLOCK on trip + attach topic filters. Set per environment (e.g. dev=false, prod selectively true)."
   type        = bool
   default     = false
 }

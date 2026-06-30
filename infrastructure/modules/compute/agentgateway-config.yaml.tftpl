@@ -1,0 +1,179 @@
+# agentgateway data-plane config (ADR-017). Rendered by templatefile() in
+# compute/main.tf and passed to the container via `-c <inline>`. Schema:
+# https://agentgateway.dev/schema/config
+#
+# Field shapes are grounded in agentgateway schema/config.json + Rust source:
+#   - frontendPolicies.accessLog.add: CEL field map (cost_attribution reads these)
+#   - promptGuard.webhook.target: SimpleBackendReference {host:"h:port"}
+#   - backendAuth.aws: {} -> ambient ECS task-role SigV4 (Bedrock)
+#   - llm CEL fields are camelCase: llm.inputTokens, llm.outputTokens, etc.
+
+# Runtime addresses. statsAddr is scraped by the ADOT sidecar for Prometheus
+# metrics; readinessAddr backs the ECS container health check.
+config:
+  statsAddr: "0.0.0.0:15020"
+  readinessAddr: "0.0.0.0:15021"
+  adminAddr: "off"
+
+# Access log + tracing. The accessLog.add map is the contract cost_attribution
+# depends on: it re-keys agentgateway's camelCase CEL token fields to the flat
+# names LogRecord parses (prompt_tokens/completion_tokens/...), and emits the
+# ALB JWT as a flat `oidc_data` field for identity attribution.
+frontendPolicies:
+  tracing:
+    host: localhost:4317        # ADOT sidecar OTLP gRPC receiver
+    protocol: grpc
+    randomSampling: true
+  accessLog:
+    add:
+      prompt_tokens: 'llm.inputTokens'
+      completion_tokens: 'llm.outputTokens'
+      total_tokens: 'llm.totalTokens'
+      cached_input_tokens: 'llm.cachedInputTokens'
+      cache_creation_input_tokens: 'llm.cacheCreationInputTokens'
+      model: 'llm.requestModel'
+      provider: 'llm.provider'
+      oidc_data: 'request.headers["x-amzn-oidc-data"]'
+
+binds:
+- port: 8787
+  listeners:
+  - routes:
+%{ if mantle_host != "" ~}
+    # mantle lane (ADR-015): OpenAI Responses on Bedrock. The flagship
+    # GPT-5.5/5.4 models are Responses-only, served at the OpenAI-compatible
+    # mantle endpoint (bedrock-mantle.<region>.api.aws/openai/v1). agentgateway
+    # serves this via a CUSTOM provider with `formats: [{type: responses}]` and
+    # a pinned `hostOverride` to mantle — the Responses request is proxied, not
+    # translated to Converse. This route precedes the /v1 catch-all because its
+    # prefix is more specific (agentgateway matches routes in order).
+    #
+    # The host is PINNED here and callers cannot override it (ADR-015 demonstrated
+    # a live egress hole where a caller-supplied host could reach api.openai.com);
+    # egress to OpenAI SaaS is also denied at the VPC as defense-in-depth. The
+    # Bedrock API key is held server-side and injected as MANTLE_BEDROCK_API_KEY.
+    - matches:
+      - path:
+          pathPrefix: /openai/v1
+      backends:
+      - ai:
+          groups:
+          - providers:
+            - name: mantle-responses
+              provider:
+                custom:
+                  # provider_override tags cost/telemetry under a catalog key.
+                  providerOverride: bedrock-mantle
+                  formats:
+                  - type: responses
+              hostOverride: "${mantle_host}"
+              policies:
+                backendAuth:
+                  key: $${MANTLE_BEDROCK_API_KEY}
+      policies:
+        ai:
+%{ if budget_enforcement_webhook_host != "" ~}
+          promptGuard:
+            request:
+            - webhook:
+                target:
+                  host: ${budget_enforcement_webhook_host}
+                forwardHeaderMatches:
+                - name: x-amzn-oidc-data
+                  value:
+                    regex: ".*"
+                failureMode: failClosed
+%{ endif ~}
+%{ endif ~}
+    # Single route serves both OpenAI /v1/chat/completions and Anthropic
+    # /v1/messages; agentgateway selects the route type from the path suffix.
+    - matches:
+      - path:
+          pathPrefix: /v1
+      backends:
+      - ai:
+          # Priority-group failover: Bedrock primary, then Anthropic-direct.
+          # Bedrock uses ambient ECS task-role credentials (no static key).
+          groups:
+          - providers:
+            - name: bedrock-primary
+              provider:
+                bedrock:
+                  model: anthropic.claude-sonnet-4-20250514-v1:0
+                  region: ${aws_region}
+              policies:
+                backendAuth:
+                  aws: {}
+          - providers:
+            - name: anthropic-fallback
+              provider:
+                anthropic:
+                  model: claude-sonnet-4-20250514
+              policies:
+                backendAuth:
+                  key: $${ANTHROPIC_API_KEY}
+      policies:
+        ai:
+          modelAliases:
+            "gpt-4*": anthropic.claude-sonnet-4-20250514-v1:0
+          # ADR-017: there is no response cache; we rely on provider-native
+          # prompt caching instead. agentgateway's promptCaching is OPT-IN (no
+          # markers are added unless this block is present), so it must be set
+          # explicitly. It injects Bedrock `cachePoint` markers on the
+          # bedrock-primary provider (system + message history, gated at
+          # minTokens). NOTE: this policy only affects the Bedrock path; the
+          # anthropic-fallback provider ignores it — caching there depends on the
+          # client sending `cache_control`, which agentgateway passes through.
+          # Prompt caching cuts input-token cost on prefix reuse; it is NOT a
+          # response cache (it still round-trips to the model and bills output).
+          promptCaching:
+            cacheSystem: true
+            cacheMessages: true
+            cacheTools: true
+            minTokens: 1024
+          promptGuard:
+            request:
+%{ if budget_enforcement_webhook_host != "" ~}
+            # budget_enforcement Lambda (speaks the agentgateway {action}
+            # contract). failClosed guards the transport; the Lambda itself
+            # fails open on a DynamoDB outage. NOTE (ADR-017): this remains the
+            # one in-path Lambda; it moves off-path to RLS sync in the budget
+            # redesign (pending the dollar hard-stop decision).
+            - webhook:
+                target:
+                  host: ${budget_enforcement_webhook_host}
+                forwardHeaderMatches:
+                - name: x-amzn-oidc-data
+                  value:
+                    regex: ".*"
+                failureMode: failClosed
+%{ endif ~}
+%{ if bedrock_guardrail_id != "" ~}
+            # Bedrock Guardrails, called INLINE via the ApplyGuardrail API
+            # (ADR-017 Option A). Content safety runs in-path with no Lambda:
+            # the gateway signs the call with its ECS task role.
+            # DETECT/LOG-ONLY by default — the guardrail RESOURCE sets every
+            # filter action to NONE (see modules/guardrails, enforce_guardrails),
+            # so ApplyGuardrail returns action=NONE and the gateway passes the
+            # request through untouched. Flip enforce_guardrails per env to BLOCK.
+            # source INPUT here (request); OUTPUT is set in the response array.
+            - bedrockGuardrails:
+                guardrailIdentifier: ${bedrock_guardrail_id}
+                guardrailVersion: "${bedrock_guardrail_version}"
+                region: ${aws_region}
+                policies:
+                  backendAuth:
+                    aws: {}
+%{ endif ~}
+%{ if bedrock_guardrail_id != "" ~}
+            response:
+            # Same guardrail on the response path (source OUTPUT). Detect-only
+            # unless enforce_guardrails flips filter actions to BLOCK/ANONYMIZE.
+            - bedrockGuardrails:
+                guardrailIdentifier: ${bedrock_guardrail_id}
+                guardrailVersion: "${bedrock_guardrail_version}"
+                region: ${aws_region}
+                policies:
+                  backendAuth:
+                    aws: {}
+%{ endif ~}

@@ -112,12 +112,17 @@ resource "aws_kms_alias" "secrets" {
 }
 
 locals {
-  secrets = {
-    openai    = "ai-gateway/openai-api-key"
-    anthropic = "ai-gateway/anthropic-api-key"
-    google    = "ai-gateway/google-api-key"
-    azure     = "ai-gateway/azure-api-key"
-  }
+  secrets = merge(
+    {
+      openai    = "ai-gateway/openai-api-key"
+      anthropic = "ai-gateway/anthropic-api-key"
+      google    = "ai-gateway/google-api-key"
+      azure     = "ai-gateway/azure-api-key"
+    },
+    # mantle lane (ADR-015): the Bedrock API key the gateway re-issues to the
+    # mantle OpenAI-compatible endpoint. Only provisioned when the lane is on.
+    var.mantle_host != "" ? { mantle = "ai-gateway/mantle-bedrock-api-key" } : {},
+  )
 }
 
 resource "aws_secretsmanager_secret" "secrets" {
@@ -276,39 +281,22 @@ locals {
   gateway_cpu    = var.gateway_cpu - 256
   gateway_memory = var.gateway_memory - 256
 
-  # Build before_request_hooks array based on which webhook URLs are provided
-  before_request_hooks = concat(
-    var.budget_enforcement_webhook_url != "" ? [
-      {
-        type = "guardrail"
-        id   = "budget-enforcement"
-        deny = true
-        checks = [{
-          id = "budget_check"
-          "default.webhook" = {
-            webhookURL = var.budget_enforcement_webhook_url
-          }
-        }]
-      }
-    ] : [],
-    var.content_scanner_webhook_url != "" ? [
-      {
-        type = "guardrail"
-        id   = "content-scanner"
-        deny = true
-        checks = [{
-          id = "content_scan"
-          "default.webhook" = {
-            webhookURL = var.content_scanner_webhook_url
-          }
-        }]
-      }
-    ] : []
-  )
+  # ADR-017: agentgateway's webhook target is a host:port reference, so strip
+  # the scheme/path from the Lambda Function URL. budget_enforcement remains the
+  # one in-path webhook (it speaks the {action} contract via gwcore.agentgateway)
+  # until the RLS budget redesign. Content safety is handled inline by the
+  # Bedrock ApplyGuardrail policy below, so no scanner webhook is rendered.
+  budget_enforcement_webhook_host = var.budget_enforcement_webhook_url != "" ? "${replace(replace(var.budget_enforcement_webhook_url, "https://", ""), "/", "")}:443" : ""
 
-  portkey_config = length(local.before_request_hooks) > 0 ? {
-    before_request_hooks = local.before_request_hooks
-  } : null
+  # Render the agentgateway YAML config. Delivered to the container via `-c`
+  # (inline string).
+  agentgateway_config = templatefile("${path.module}/agentgateway-config.yaml.tftpl", {
+    aws_region                      = var.aws_region
+    budget_enforcement_webhook_host = local.budget_enforcement_webhook_host
+    bedrock_guardrail_id            = var.bedrock_guardrail_id
+    bedrock_guardrail_version       = var.bedrock_guardrail_version
+    mantle_host                     = var.mantle_host
+  })
 }
 
 module "ecs_cluster" {
@@ -365,12 +353,17 @@ module "ecs_service" {
   container_definitions = {
     gateway = {
       essential = true
-      image     = var.portkey_image
+      image     = var.gateway_image
       cpu       = local.gateway_cpu
       memory    = local.gateway_memory
 
-      # Keep the root filesystem read-only; Portkey only needs a writable /tmp,
-      # provided by the ephemeral `gateway-tmp` task volume mounted below.
+      # ADR-017: agentgateway reads its config inline from `-c`. Routing,
+      # providers, guardrail webhooks, and access-log shaping all live in the
+      # rendered YAML (see agentgateway-config.yaml.tftpl).
+      command = ["-c", local.agentgateway_config]
+
+      # Keep the root filesystem read-only; the binary needs only a writable
+      # /tmp, provided by the ephemeral `gateway-tmp` task volume mounted below.
       readonlyRootFilesystem = true
       mountPoints = [{
         sourceVolume  = "gateway-tmp"
@@ -383,36 +376,28 @@ module "ecs_service" {
         protocol      = "tcp"
       }]
 
-      environment = concat(
+      # Provider API keys arrive from Secrets Manager as env vars; the
+      # agentgateway config references $${ANTHROPIC_API_KEY} etc. via shell
+      # expansion. Bedrock uses the ECS task role (no static key). The config is
+      # delivered inline via `-c`, not via env, so no runtime env vars are set.
+      environment = []
+
+      secrets = concat(
         [
-          { name = "NODE_ENV", value = "production" },
-          { name = "PORT", value = "8787" },
+          { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },
+          { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["anthropic"].arn },
+          { name = "GOOGLE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["google"].arn },
+          { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
         ],
-        [for name, config in var.portkey_routing_configs : {
-          name  = "PORTKEY_DEFAULT_CONFIG_${upper(name)}"
-          value = config
-        }],
-        var.cache_enabled ? [
-          { name = "CACHE_STORE", value = "redis" },
-          { name = "REDIS_URL", value = var.redis_url },
+        # mantle lane key (ADR-015) — only when the lane is enabled.
+        var.mantle_host != "" ? [
+          { name = "MANTLE_BEDROCK_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["mantle"].arn },
         ] : [],
-        local.portkey_config != null ? [
-          {
-            name  = "PORTKEY_CONFIG"
-            value = base64encode(jsonencode(local.portkey_config))
-          }
-        ] : []
       )
 
-      secrets = [
-        { name = "OPENAI_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["openai"].arn },
-        { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["anthropic"].arn },
-        { name = "GOOGLE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["google"].arn },
-        { name = "AZURE_API_KEY", valueFrom = aws_secretsmanager_secret.secrets["azure"].arn },
-      ]
-
+      # agentgateway exposes a readiness endpoint on readinessAddr (config block).
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q --spider http://localhost:8787/ || exit 1"]
+        command     = ["CMD-SHELL", "wget -q --spider http://localhost:15021/ || exit 1"]
         interval    = 15
         timeout     = 5
         retries     = 3

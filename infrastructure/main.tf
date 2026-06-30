@@ -14,12 +14,11 @@ data "aws_availability_zones" "available" {
 module "observability" {
   source = "./modules/observability"
 
-  project_name         = var.project_name
-  environment          = var.environment
-  aws_region           = var.aws_region
-  account_id           = data.aws_caller_identity.current.account_id
-  enable_cost_widgets  = var.enable_cost_attribution
-  enable_cache_widgets = var.enable_cache
+  project_name        = var.project_name
+  environment         = var.environment
+  aws_region          = var.aws_region
+  account_id          = data.aws_caller_identity.current.account_id
+  enable_cost_widgets = var.enable_cost_attribution
 
   # Alarm configuration
   alarm_sns_topic_arns          = var.alarm_sns_topic_arns
@@ -154,7 +153,7 @@ module "compute" {
   project_name             = var.project_name
   environment              = var.environment
   aws_region               = var.aws_region
-  portkey_image            = var.portkey_image
+  gateway_image            = var.gateway_image
   gateway_desired_count    = var.gateway_desired_count
   gateway_cpu              = var.gateway_cpu
   gateway_memory           = var.gateway_memory
@@ -172,18 +171,24 @@ module "compute" {
   otel_log_group_name    = module.observability.otel_log_group_name
   otel_config_content    = file("${path.module}/otel-config.yaml")
 
-  # Routing
-  portkey_routing_configs = var.enable_provider_fallback ? {
-    for name, config in var.routing_configs : name => base64encode(config)
-  } : {}
+  # ADR-017: routing now lives in the rendered agentgateway config. Per-team
+  # dynamic routing is a follow-up (xDS or a config-render-and-reload path);
+  # see ADR-017 migration notes.
 
-  # Cache
-  cache_enabled = var.enable_cache
-  redis_url     = var.enable_cache ? module.cache.redis_connection_url : ""
-
-  # Webhook URLs for pre-request hooks
+  # budget_enforcement is the one remaining in-path webhook (until the RLS
+  # budget redesign). Content safety is handled by the inline Bedrock guardrail
+  # (see bedrock_guardrail_* below), so there is no separate scanner in the path.
   budget_enforcement_webhook_url = var.enable_budgets ? module.budgets[0].function_url : ""
-  content_scanner_webhook_url    = var.enable_content_scanner ? module.content_scanner.function_url : ""
+
+  # ADR-017 Option A: Bedrock Guardrails called inline by agentgateway via the
+  # ApplyGuardrail API (detect/log-only by default). The gateway uses its ECS
+  # task-role SigV4 for the call. id/version come from the guardrails module.
+  bedrock_guardrail_id      = var.enable_guardrails ? module.guardrails.guardrail_id : ""
+  bedrock_guardrail_version = var.enable_guardrails ? module.guardrails.guardrail_version : ""
+
+  # ADR-015 mantle lane (OpenAI Responses on Bedrock). Empty by default; set
+  # mantle_host to the pinned bedrock-mantle endpoint to enable the lane.
+  mantle_host = var.mantle_host
 }
 
 # -----------------------------------------------------------------------------
@@ -213,26 +218,8 @@ module "cost_attribution" {
   jwt_auth_enforced = var.enable_jwt_auth
 }
 
-# Content Scanner (Lambda: PII redaction + prompt injection detection)
-# -----------------------------------------------------------------------------
-
-module "content_scanner" {
-  source = "./modules/content_scanner"
-
-  project_name           = var.project_name
-  environment            = var.environment
-  aws_region             = var.aws_region
-  account_id             = data.aws_caller_identity.current.account_id
-  enable_content_scanner = var.enable_content_scanner
-  default_pii_mode       = var.content_scanner_default_pii_mode
-  default_injection_mode = var.content_scanner_default_injection_mode
-
-  # AppConfig feature flag path (hot-path toggle)
-  appconfig_path = var.enable_appconfig ? module.appconfig.appconfig_resource_path : ""
-}
-
 # =============================================================================
-# AppConfig — Feature flags for content scanner and future toggles
+# AppConfig — Feature flags and dynamic configuration toggles
 # =============================================================================
 
 module "appconfig" {
@@ -241,7 +228,7 @@ module "appconfig" {
   enable_appconfig   = var.enable_appconfig
   project_name       = var.project_name
   environment        = var.environment
-  rollback_alarm_arn = "" # TODO: Wire CloudWatch alarm for scanner errors
+  rollback_alarm_arn = "" # TODO: wire a CloudWatch alarm for AppConfig deployment rollback
   tags               = {}
 }
 
@@ -255,26 +242,10 @@ module "guardrails" {
   environment  = var.environment
 
   enable_guardrails       = var.enable_guardrails
+  enforce_guardrails      = var.enforce_guardrails
   content_filter_strength = var.guardrails_content_filter_strength
   blocked_topics          = var.guardrails_blocked_topics
   blocked_words           = var.guardrails_blocked_words
-}
-
-# -----------------------------------------------------------------------------
-# Cache (ElastiCache Redis for response caching)
-# -----------------------------------------------------------------------------
-
-module "cache" {
-  source = "./modules/cache"
-
-  project_name    = var.project_name
-  environment     = var.environment
-  enable_cache    = var.enable_cache
-  cache_node_type = var.cache_node_type
-
-  private_subnet_ids    = module.networking.private_subnets
-  vpc_id                = module.networking.vpc_id
-  ecs_security_group_id = module.compute.ecs_security_group_id
 }
 
 # -----------------------------------------------------------------------------

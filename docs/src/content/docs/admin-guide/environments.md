@@ -73,7 +73,7 @@ Terragrunt provides a cleaner multi-environment workflow. The directory layout:
 terragrunt/
     terragrunt.hcl          # Root config: remote state, provider generation
     _env/
-        common.hcl          # Shared inputs (project_name, portkey_image)
+        common.hcl          # Shared inputs (project_name, gateway_image)
     dev/
         env.hcl             # Dev-specific locals (environment, region)
         terragrunt.hcl      # Dev inputs (CPU, memory, WAF, scaling)
@@ -249,7 +249,7 @@ CPU and memory are allocated at the ECS task level, then split between the gatew
 | `gateway_memory = 1024` | 1024 MiB | 768 MiB | 256 MiB |
 | `gateway_memory = 2048` | 2048 MiB | 1792 MiB | 256 MiB |
 
-The ADOT sidecar always receives 256 CPU units and 256 MiB memory. The remainder goes to the Portkey gateway container.
+The ADOT sidecar always receives 256 CPU units and 256 MiB memory. The remainder goes to the agentgateway container.
 
 ### Autoscaling Thresholds
 

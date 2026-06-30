@@ -136,7 +136,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: "AI Gateway",
           description:
-            "Lightweight LLM inference gateway on AWS — Portkey OSS on ECS Fargate with Cognito M2M auth, multi-provider routing, and dual API format support.",
+            "Lightweight LLM inference gateway on AWS — agentgateway on ECS Fargate with Cognito M2M auth, multi-provider routing, and dual API format support.",
           promote: ["index*", "getting-started/*"],
           exclude: ["reference/devtools-research", "reference/infra-stack-research", "adrs/*"],
         }),

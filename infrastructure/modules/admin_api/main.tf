@@ -15,7 +15,7 @@ terraform {
 # This module provisions a REST API for admin/secondary endpoints.
 # The ALB handles the inference path (/v1/chat/completions, /v1/messages).
 # Each admin handler gets a dedicated path prefix with AWS_PROXY Lambda
-# integration: /teams, /budgets, /routing, /scanner, /pricing.
+# integration: /teams, /budgets, /routing, /pricing.
 # The root resource (/) retains a MOCK integration for health checks.
 # =============================================================================
 
@@ -265,75 +265,6 @@ resource "aws_lambda_permission" "routing" {
 }
 
 # ---------------------------------------------------------------------------
-# /scanner → content_scanner Lambda
-# ---------------------------------------------------------------------------
-
-resource "aws_api_gateway_resource" "scanner" {
-  count       = var.enable_admin_api ? 1 : 0
-  rest_api_id = aws_api_gateway_rest_api.admin[0].id
-  parent_id   = aws_api_gateway_rest_api.admin[0].root_resource_id
-  path_part   = "scanner"
-}
-
-resource "aws_api_gateway_resource" "scanner_proxy" {
-  count       = var.enable_admin_api ? 1 : 0
-  rest_api_id = aws_api_gateway_rest_api.admin[0].id
-  parent_id   = aws_api_gateway_resource.scanner[0].id
-  path_part   = "{proxy+}"
-}
-
-#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
-resource "aws_api_gateway_method" "scanner_any" {
-  count                = var.enable_admin_api ? 1 : 0
-  rest_api_id          = aws_api_gateway_rest_api.admin[0].id
-  resource_id          = aws_api_gateway_resource.scanner[0].id
-  http_method          = "ANY"
-  authorization        = "COGNITO_USER_POOLS"
-  authorizer_id        = aws_api_gateway_authorizer.cognito[0].id
-  authorization_scopes = [var.required_scope]
-}
-
-#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler Pydantic models
-resource "aws_api_gateway_method" "scanner_proxy_any" {
-  count                = var.enable_admin_api ? 1 : 0
-  rest_api_id          = aws_api_gateway_rest_api.admin[0].id
-  resource_id          = aws_api_gateway_resource.scanner_proxy[0].id
-  http_method          = "ANY"
-  authorization        = "COGNITO_USER_POOLS"
-  authorizer_id        = aws_api_gateway_authorizer.cognito[0].id
-  authorization_scopes = [var.required_scope]
-}
-
-resource "aws_api_gateway_integration" "scanner" {
-  count                   = var.enable_admin_api ? 1 : 0
-  rest_api_id             = aws_api_gateway_rest_api.admin[0].id
-  resource_id             = aws_api_gateway_resource.scanner[0].id
-  http_method             = aws_api_gateway_method.scanner_any[0].http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = var.content_scanner_invoke_arn
-}
-
-resource "aws_api_gateway_integration" "scanner_proxy" {
-  count                   = var.enable_admin_api ? 1 : 0
-  rest_api_id             = aws_api_gateway_rest_api.admin[0].id
-  resource_id             = aws_api_gateway_resource.scanner_proxy[0].id
-  http_method             = aws_api_gateway_method.scanner_proxy_any[0].http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = var.content_scanner_invoke_arn
-}
-
-resource "aws_lambda_permission" "scanner" {
-  count         = var.enable_admin_api ? 1 : 0
-  statement_id  = "AllowAPIGatewayInvoke-scanner"
-  action        = "lambda:InvokeFunction"
-  function_name = var.content_scanner_function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.admin[0].execution_arn}/*"
-}
-
-# ---------------------------------------------------------------------------
 # /pricing → pricing_admin Lambda
 # ---------------------------------------------------------------------------
 
@@ -449,7 +380,7 @@ resource "aws_api_gateway_integration_response" "root_200" {
   status_code = aws_api_gateway_method_response.root_200[0].status_code
 
   response_templates = {
-    "application/json" = jsonencode({ message = "Admin API — use /teams, /budgets, /routing, /scanner, or /pricing" })
+    "application/json" = jsonencode({ message = "Admin API — use /teams, /budgets, /routing, or /pricing" })
   }
 }
 
@@ -488,13 +419,6 @@ resource "aws_api_gateway_deployment" "admin" {
       aws_api_gateway_method.routing_proxy_any[0].id,
       aws_api_gateway_integration.routing[0].id,
       aws_api_gateway_integration.routing_proxy[0].id,
-      # /scanner
-      aws_api_gateway_resource.scanner[0].id,
-      aws_api_gateway_resource.scanner_proxy[0].id,
-      aws_api_gateway_method.scanner_any[0].id,
-      aws_api_gateway_method.scanner_proxy_any[0].id,
-      aws_api_gateway_integration.scanner[0].id,
-      aws_api_gateway_integration.scanner_proxy[0].id,
       # /pricing
       aws_api_gateway_resource.pricing[0].id,
       aws_api_gateway_resource.pricing_proxy[0].id,
@@ -518,8 +442,6 @@ resource "aws_api_gateway_deployment" "admin" {
     aws_api_gateway_integration.budgets_proxy,
     aws_api_gateway_integration.routing,
     aws_api_gateway_integration.routing_proxy,
-    aws_api_gateway_integration.scanner,
-    aws_api_gateway_integration.scanner_proxy,
     aws_api_gateway_integration.pricing,
     aws_api_gateway_integration.pricing_proxy,
   ]

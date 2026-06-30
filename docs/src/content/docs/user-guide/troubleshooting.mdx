@@ -84,9 +84,8 @@ The gateway could not reach the upstream LLM provider.
 
 1. Test a different provider to isolate the issue:
    ```bash
-   # Try anthropic instead of openai, or vice versa
+   # Send a request for a different model to exercise the fallback chain
    curl -H "Authorization: Bearer $TOKEN" \
-        -H "x-portkey-provider: anthropic" \
         -H "Content-Type: application/json" \
         -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
         ${GATEWAY_URL}/v1/chat/completions
@@ -189,34 +188,29 @@ The gateway URL is unreachable.
 
 ---
 
-## Missing `x-portkey-provider` Header
+## No Provider Header Needed
 
-```
-{"error": "provider is not set"}
-```
+If you are migrating from an earlier (Portkey-based) release, you may have configured an `x-portkey-provider` header on every request. agentgateway selects the provider server-side from its rendered config, so this header is gone -- there is no longer a `{"error": "provider is not set"}` failure mode.
 
-Every request must include the `x-portkey-provider` header. Verify per agent:
+Remove any leftover `x-portkey-*` headers from your agent configuration:
 
 <Tabs>
 <TabItem label="Claude Code">
 
 
-Check that `ANTHROPIC_CUSTOM_HEADERS` is set (newline-separated format):
+Unset `ANTHROPIC_CUSTOM_HEADERS` if it carries a provider header -- it is no longer needed:
 ```bash
-echo "$ANTHROPIC_CUSTOM_HEADERS"
-# Should output: x-portkey-provider: anthropic
+unset ANTHROPIC_CUSTOM_HEADERS
 ```
 
 </TabItem>
 <TabItem label="OpenCode">
 
 
-Check that `options.headers` is present in `opencode.json`:
+Remove any `options.headers` block from `opencode.json`. Only `baseURL` is required:
 ```json
 "options": {
-  "headers": {
-    "x-portkey-provider": "openai"
-  }
+  "baseURL": "${GATEWAY_URL}/v1"
 }
 ```
 
@@ -224,32 +218,27 @@ Check that `options.headers` is present in `opencode.json`:
 <TabItem label="Goose">
 
 
-Check that `OPENAI_EXTRA_HEADERS` is set:
+Goose needs only `GOOSE_PROVIDER`, `OPENAI_HOST`, and `OPENAI_API_KEY`. Unset any leftover header var:
 ```bash
-echo "$OPENAI_EXTRA_HEADERS"
-# Should output: x-portkey-provider: openai
+unset OPENAI_EXTRA_HEADERS
 ```
 
 </TabItem>
 <TabItem label="Continue.dev">
 
 
-Check that `requestOptions.headers` is present in `~/.continue/config.yaml`:
-```yaml
-requestOptions:
-  headers:
-    x-portkey-provider: openai
-```
+Remove the `requestOptions.headers` block from `~/.continue/config.yaml`. Only `apiBase`, `apiKey`, and `model` are required.
 
 </TabItem>
 <TabItem label="LangChain">
 
 
-Check that `default_headers` is passed to `ChatOpenAI`:
+Drop `default_headers` from `ChatOpenAI` -- pass only `base_url`, `api_key`, and `model`:
 ```python
 llm = ChatOpenAI(
-    default_headers={"x-portkey-provider": "openai"},
-    ...
+    base_url="${GATEWAY_URL}/v1",
+    api_key=token,
+    model="gpt-4.1",
 )
 ```
 
@@ -257,11 +246,7 @@ llm = ChatOpenAI(
 <TabItem label="Codex CLI">
 
 
-Check that the headers section exists in `~/.codex/config.toml`:
-```toml
-[model_providers.gateway.headers]
-x-portkey-provider = "openai"
-```
+Remove the `[model_providers.gateway.headers]` section from `~/.codex/config.toml`. Only `name`, `base_url`, and `env_key` are required.
 
 </TabItem>
 </Tabs>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -55,7 +56,6 @@ class UsageMetrics(BaseModel):
 class RequestHeaders(BaseModel):
     """Relevant headers from the gateway request."""
 
-    x_portkey_provider: str = Field(default="", alias="x-portkey-provider")
     x_amzn_oidc_data: str = Field(default="", alias="x-amzn-oidc-data")
 
     model_config = {"populate_by_name": True}
@@ -68,19 +68,57 @@ class RequestInfo(BaseModel):
 
 
 class LogRecord(BaseModel):
-    """A parsed gateway log record containing usage and routing info."""
+    """A parsed agentgateway access-log record containing usage and routing info.
+
+    agentgateway emits a flat top-level shape (ADR-017): flat token fields
+    (``prompt_tokens`` / ``completion_tokens`` / ``total_tokens``,
+    ``cached_input_tokens`` / ``cache_creation_input_tokens``), ``model``,
+    ``provider``, and the ALB JWT as a flat ``oidc_data`` field. The
+    access-log ``add`` block emits these flat keys, so the nested ``usage``
+    block is synthesized here for downstream pricing.
+    """
 
     usage: UsageMetrics | None = None
     model: str = Field(default="unknown")
     provider: str = Field(default="")
     req: RequestInfo = Field(default_factory=RequestInfo)
+    # agentgateway flat identity field (CEL: request.headers["x-amzn-oidc-data"]).
+    oidc_data: str = Field(default="", description="ALB JWT when the access log emits it flat")
+
+    @model_validator(mode="before")
+    @classmethod
+    def synthesize_nested_from_flat(cls, data: Any) -> Any:
+        """Build a nested ``usage`` block from agentgateway flat token fields.
+
+        Runs only when no nested ``usage`` is present but flat token fields are.
+        """
+        if not isinstance(data, dict):
+            return data
+        flat_token_keys = (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
+        )
+        if data.get("usage") is None and any(k in data for k in flat_token_keys):
+            data = dict(data)
+            data["usage"] = {
+                # agentgateway's access log re-keys CEL inputTokens/outputTokens
+                # to prompt_tokens/completion_tokens; accept either spelling.
+                "prompt_tokens": data.get("prompt_tokens", data.get("input_tokens", 0)),
+                "completion_tokens": data.get("completion_tokens", data.get("output_tokens", 0)),
+                "total_tokens": data.get("total_tokens", 0),
+                "cache_read_input_tokens": data.get("cached_input_tokens", 0),
+                "cache_creation_input_tokens": data.get("cache_creation_input_tokens", 0),
+            }
+        return data
 
     @property
     def resolved_provider(self) -> str:
-        """Resolve provider from header, then field, then 'unknown'."""
-        header_provider = self.req.headers.x_portkey_provider
-        if header_provider:
-            return header_provider
+        """Resolve provider from the flat ``provider`` field, else 'unknown'."""
         return self.provider or "unknown"
 
 

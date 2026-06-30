@@ -188,14 +188,14 @@ Terragrunt automatically:
 
 ## Updating the Gateway Image Version
 
-The deployed image is a **custom hardened image built from pinned Portkey source** — not the upstream `portkeyai/gateway` image. The Portkey *version* is controlled by `versions.env` at the repo root (`PORTKEY_VERSION` + `PORTKEY_TARBALL_SHA256`), and the release workflow builds and pushes the image to ECR/GHCR. See [Upgrading](/ai-gateway/admin-guide/upgrading/) for the full version-bump flow.
+The deployed image is the upstream [agentgateway](https://github.com/agentgateway/agentgateway) image **pinned by digest and re-tagged into ECR** ([ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)) — no layers are added. The pin is controlled by `versions.env` at the repo root (`AGENTGATEWAY_REF` + `AGENTGATEWAY_IMAGE_DIGEST`), and the release workflow re-tags and pushes the image to ECR/GHCR. See [Upgrading](/ai-gateway/admin-guide/upgrading/) for the full version-bump flow.
 
-The `portkey_image` variable selects **which built image URI** ECS runs. Override it only when pinning to a specific published tag (for example, a rollback to a prior SHA); the normal upgrade path is to bump `versions.env` and let the workflow publish a new image.
+The `gateway_image` variable selects **which image URI** ECS runs. Override it only when pinning to a specific published image (for example, a rollback to a prior digest); the normal upgrade path is to bump `versions.env` (and the `gateway_image` default in `infrastructure/variables.tf`) and let the workflow publish a new image.
 
-1. **Set the image URI** in the appropriate tfvars or Terragrunt inputs to a tag published by the release workflow:
+1. **Set the image URI** in the appropriate tfvars or Terragrunt inputs to an image published by the release workflow:
 
     ```hcl
-    portkey_image = "ghcr.io/theagenticguy/ai-gateway:<tag>"
+    gateway_image = "<account>.dkr.ecr.us-east-1.amazonaws.com/ai-gateway:<tag>"
     ```
 
     Or for Terragrunt, update `_env/common.hcl`:
@@ -203,7 +203,7 @@ The `portkey_image` variable selects **which built image URI** ECS runs. Overrid
     ```hcl
     locals {
       project_name  = "ai-gateway"
-      portkey_image = "ghcr.io/theagenticguy/ai-gateway:<tag>"
+      gateway_image = "<account>.dkr.ecr.us-east-1.amazonaws.com/ai-gateway:<tag>"
     }
     ```
 
@@ -234,7 +234,7 @@ When you update the task definition (via `terraform apply` or `aws ecs update-se
 4. Stops old tasks
 
 :::note
-The CI/CD pipeline (`ci.yml`) automates this for pushes to `main`: it pulls the Portkey image, re-tags it into ECR, then calls `aws ecs update-service --force-new-deployment` and waits for stability.
+The CI/CD pipeline (`ci.yml`) automates this for pushes to `main`: it pulls the pinned upstream agentgateway image by digest, re-tags it into ECR, then calls `aws ecs update-service --force-new-deployment` and waits for stability.
 :::
 
 

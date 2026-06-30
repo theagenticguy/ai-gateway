@@ -3,7 +3,7 @@
 Triggered by Step Functions on the 1st of each month. Queries DynamoDB
 usage and budget tables, generates an HTML report, and uploads to S3.
 
-Step-Functions-invoked, not HTTP / Portkey: no request authorization, and the
+Step-Functions-invoked, not an HTTP webhook: no request authorization, and the
 report lands in S3 rather than the audit pipeline. Migrated onto gwcore
 (ADR-016) for the lightest touch — structured JSON logging plus operational EMF
 metrics for the report-generation outcome (success / failures by stage).

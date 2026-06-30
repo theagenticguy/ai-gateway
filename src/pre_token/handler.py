@@ -4,7 +4,7 @@ Extracts IdP group memberships from the trigger event and maps them
 to custom gateway claims (team, org_unit, cost_center, tenant_tier)
 using a configurable GROUP_MAPPING environment variable.
 
-This is a Cognito trigger, not an HTTP / Portkey webhook: it always returns the
+This is a Cognito trigger, not an HTTP guardrail webhook: it always returns the
 (possibly augmented) Cognito event, performs no authorization, and touches no
 DynamoDB. Migrated onto gwcore (ADR-016) for the lightest touch — structured
 JSON logging plus claim-mapping metrics. No audit events are emitted: the

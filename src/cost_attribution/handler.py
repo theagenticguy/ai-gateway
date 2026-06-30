@@ -4,7 +4,7 @@ A CloudWatch Logs subscription Lambda: it parses gateway access logs, derives
 per-request cost/token metrics, publishes them as *billing* CloudWatch metrics
 (rich Provider/Model/Team dimensions), accumulates usage in DynamoDB, fires SNS
 budget alerts, and writes usage records to the audit Firehose. It is event-
-driven (no HTTP, no Portkey contract) and does no authorization.
+driven (no HTTP, no guardrail-webhook contract) and does no authorization.
 
 Migrated onto gwcore (ADR-016) for the lightest touch: structured JSON logging
 plus operational EMF metrics for handler outcomes (decode failures, processed /
@@ -104,6 +104,10 @@ def _extract_identity(log_event_raw: dict[str, Any]) -> tuple[str, str]:
         req = log_event_raw.get("req", {})
         headers = req.get("headers", {}) if isinstance(req, dict) else {}
         jwt_token = headers.get("x-amzn-oidc-data", "") if isinstance(headers, dict) else ""
+        # agentgateway emits the JWT as a flat access-log field (ADR-017), not
+        # under req.headers. Fall back to it when the nested header is absent.
+        if not jwt_token:
+            jwt_token = log_event_raw.get("oidc_data", "") or ""
         if not jwt_token:
             return ("unknown", "unknown")
 

@@ -5,9 +5,21 @@ sidebar:
   order: 15
 ---
 
-**Status**: Accepted
+**Status**: Accepted (implementation updated 2026-06-30 — see note below)
 **Date**: 2026-06-11
 **Deciders**: AI Engineering NAMER
+
+:::note[Update (2026-06-30): now served by agentgateway, not Portkey]
+The mantle lane is **now ported into the rendered agentgateway config** (it was previously "not yet ported"). The decision below — *serve the OpenAI Responses lane through the gateway, mantle is a native OpenAI-compatible upstream, host is pinned* — still holds. **What changed is the mechanism**, since the data plane moved from Portkey to agentgateway ([ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)):
+
+- The lane is an agentgateway **custom provider** with `formats: [{type: responses}]` and a pinned **`hostOverride`** to the mantle endpoint in **host:port** form (e.g. `bedrock-mantle.us-east-1.api.aws:443`) — superseding the Portkey `openai` provider + `custom_host` described in the body below.
+- It is gated by a new Terraform variable, **`mantle_host`** (empty by default = lane disabled: no `/openai/v1` route is rendered and no mantle secret is provisioned). Setting `mantle_host` to the pinned endpoint enables the lane.
+- The route matches **`pathPrefix: /openai/v1`** and is rendered **before** the `/v1` catch-all (agentgateway matches routes in order, most-specific prefix first).
+- The Bedrock API key is held server-side, injected as the **`MANTLE_BEDROCK_API_KEY`** secret (Secrets Manager path `ai-gateway/mantle-bedrock-api-key`). The host is **pinned** — callers cannot override it — and egress to OpenAI SaaS is denied at the VPC as defense-in-depth.
+- The mantle route runs the **`budget_enforcement` webhook** but **not** the inline Bedrock guardrail (the guardrail is Converse/Chat-shaped; the mantle lane is Responses-shaped).
+
+Verified against the live agentgateway v1.3.1 binary. The Portkey `custom_host` mechanism in the body below is retained as historical context.
+:::
 
 ## Context
 

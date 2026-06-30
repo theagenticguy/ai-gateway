@@ -33,7 +33,7 @@ body:
       label: Component
       description: Which part of the gateway is affected?
       options:
-        - Gateway (Portkey routing)
+        - Gateway (agentgateway data plane)
         - Authentication (Cognito/JWT)
         - Infrastructure (Terraform)
         - CI/CD Pipeline

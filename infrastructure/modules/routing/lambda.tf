@@ -80,7 +80,7 @@ resource "aws_lambda_function" "routing_config" {
   #checkov:skip=CKV_AWS_272:Code-signing not required for internal dev
   count            = var.enable_routing_api ? 1 : 0
   function_name    = "${var.project_name}-${var.environment}-routing-config"
-  description      = "Routing config CRUD API — serves built-in and custom Portkey routing configs"
+  description      = "Routing config CRUD API — serves custom agentgateway routing configs"
   runtime          = "python3.13"
   handler          = "handler.handler"
   role             = aws_iam_role.routing_lambda[0].arn
@@ -93,7 +93,6 @@ resource "aws_lambda_function" "routing_config" {
   environment {
     variables = {
       ROUTING_CONFIGS_TABLE = aws_dynamodb_table.routing_configs[0].name
-      PORTKEY_CONFIGS_DIR   = "/var/task/portkey-configs"
     }
   }
 

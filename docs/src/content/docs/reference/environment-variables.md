@@ -5,20 +5,19 @@ sidebar:
   order: 3
 ---
 
-The AI Gateway ECS task runs two containers: the **gateway** (Portkey) and the **OTel collector** (AWS Distro for OpenTelemetry). Each receives environment variables through the Terraform task definition. Provider API keys are injected securely from AWS Secrets Manager.
+The AI Gateway ECS task runs two containers: the **gateway** ([agentgateway](https://github.com/agentgateway/agentgateway), a Rust proxy on a distroless base) and the **OTel collector** (AWS Distro for OpenTelemetry). Provider API keys are injected securely from AWS Secrets Manager. Everything else about routing, providers, guardrails, and access-log shaping lives in the YAML config that Terraform renders and passes to agentgateway inline via `-c` -- not through environment variables.
 
 ---
 
 ## Gateway Container
 
-### Core Variables
+### Runtime Configuration
 
-These variables are always set on the gateway container:
+agentgateway takes its entire configuration **inline** from the `-c` argument (the rendered `agentgateway-config.yaml.tftpl`), so the container sets **no runtime environment variables** (`environment = []` in the task definition). The container listens on port `8787`, which matches the ALB target group health check; that port is fixed in the config, not set via an env var.
 
-| Variable | Value | Description |
-|---|---|---|
-| `NODE_ENV` | `production` | Node.js runtime environment |
-| `PORT` | `8787` | Port the gateway listens on (must match ALB target group health check) |
+:::note[No `NODE_ENV` / `PORT`]
+Earlier (Portkey OSS) releases ran a Node.js container that read `NODE_ENV` and `PORT` from the environment. agentgateway is a Rust binary configured entirely by its inline YAML, so those variables no longer exist.
+:::
 
 ### Provider API Keys (Secrets)
 
@@ -35,12 +34,16 @@ Provider API keys are injected from AWS Secrets Manager using the ECS secrets in
 Secret values are initialized to `REPLACE_ME` at deployment time. You must update each secret in the AWS Secrets Manager console or via the CLI before the gateway can route to that provider. Requests to a provider with a placeholder key will return `502 Bad Gateway`.
 :::
 
+:::note[Bedrock needs no key]
+Bedrock is reached with the gateway's ECS task-role credentials (SigV4), not a static API key. The four secrets above cover the direct provider APIs (OpenAI, Anthropic, Google, Azure OpenAI). The agentgateway config references them via shell expansion, e.g. `key: ${ANTHROPIC_API_KEY}`.
+:::
+
 #### How secrets are injected
 
 1. Terraform creates four `aws_secretsmanager_secret` resources under the `ai-gateway/` prefix, encrypted with a dedicated KMS key (`alias/ai-gateway-secrets`).
 2. The ECS task definition references each secret by ARN in the `secrets` block (not `environment`).
 3. At task launch, the ECS agent calls `secretsmanager:GetSecretValue` using the task execution role and injects the plaintext value as the named environment variable.
-4. The gateway process reads the variable at startup -- the secret value never appears in the task definition or CloudWatch logs.
+4. The agentgateway config references the variable via shell expansion (e.g. `${ANTHROPIC_API_KEY}`); the secret value never appears in the task definition or CloudWatch logs.
 
 ```bash
 # Update a secret via CLI
@@ -59,85 +62,21 @@ aws ecs update-service --cluster ai-gateway-prod \
 
 ---
 
-### Cache Variables (Conditional)
+### Routing, Guardrails, and Budget Enforcement (Inline Config, No Env Vars)
 
-These variables are injected only when `enable_cache = true` in the Terraform configuration:
+None of routing, guardrails, prompt caching, or budget enforcement is configured through environment variables. They are all rendered into the inline YAML config (`agentgateway-config.yaml.tftpl`):
 
-| Variable | Example Value | Description |
+| Concern | Where it lives | Notes |
 |---|---|---|
-| `CACHE_STORE` | `redis` | Tells Portkey to use Redis for response caching |
-| `REDIS_URL` | `rediss://{endpoint}:6379` | TLS-encrypted Redis endpoint (ElastiCache Serverless) |
+| Provider routing / failover | `ai.groups` priority groups | Bedrock primary, Anthropic-direct fallback by default. See [Routing Strategies](/ai-gateway/user-guide/routing-strategies/). |
+| Model aliases | `policies.ai.modelAliases` | Maps requested model IDs onto backend models. |
+| Prompt caching | `policies.ai.promptCaching` | Opt-in, Bedrock-only (injects `cachePoint` markers). Not a response cache. |
+| Budget enforcement | `promptGuard.request` webhook | Points at the `budget_enforcement` Lambda Function URL (`budget_enforcement_webhook_url`). Renders only when set. |
+| Content safety | `promptGuard` `bedrockGuardrails` | Inline Bedrock Guardrails (ApplyGuardrail), keyed by `bedrock_guardrail_id`. Renders only when set. |
 
-:::note
-The `CACHE_TTL` is not set as an environment variable by the Terraform module. Portkey uses its built-in default TTL for cache entries. If you need to customize TTL, set `CACHE_TTL` (value in seconds) by adding it to the container environment in the compute module.
+:::note[No response cache, no content-scanner env var]
+There is no `CACHE_STORE` / `REDIS_URL` -- the ElastiCache Redis response cache was removed; agentgateway uses provider-native prompt caching instead. There is no `PORTKEY_DEFAULT_CONFIG_*`, no `PORTKEY_CONFIG`, and no `content_scanner_*` variable -- the standalone content-scanner Lambda was removed in favor of inline Bedrock Guardrails.
 :::
-
----
-
-### Routing Variables (Conditional)
-
-When `enable_provider_fallback = true`, each entry in the `routing_configs` Terraform variable is injected as a separate environment variable:
-
-| Variable Pattern | Description |
-|---|---|
-| `PORTKEY_DEFAULT_CONFIG_{NAME}` | Portkey-compatible routing JSON for the named config |
-
-The `{NAME}` suffix is the uppercased key from the `routing_configs` map. For example, if you define:
-
-```hcl
-routing_configs = {
-  anthropic = "{\"strategy\":{\"mode\":\"fallback\"},\"targets\":[...]}"
-  openai    = "{\"strategy\":{\"mode\":\"loadbalance\"},\"targets\":[...]}"
-}
-```
-
-The gateway container receives:
-
-- `PORTKEY_DEFAULT_CONFIG_ANTHROPIC`
-- `PORTKEY_DEFAULT_CONFIG_OPENAI`
-
----
-
-### Portkey Config Variable (Conditional)
-
-When guardrail webhook hooks are configured (budget enforcement and/or content scanner), the gateway receives:
-
-| Variable | Description |
-|---|---|
-| `PORTKEY_CONFIG` | Base64-encoded JSON containing `before_request_hooks` for budget enforcement and content scanning |
-
-This variable is built automatically by Terraform from the `budget_enforcement_webhook_url` and `content_scanner_webhook_url` module inputs. Each configured webhook is registered as a Portkey guardrail hook that runs before every request.
-
-The decoded JSON has the following structure:
-
-```json
-{
-  "before_request_hooks": [
-    {
-      "type": "guardrail",
-      "id": "budget-enforcement",
-      "deny": true,
-      "checks": [{
-        "id": "budget_check",
-        "default.webhook": {
-          "webhookURL": "https://..."
-        }
-      }]
-    },
-    {
-      "type": "guardrail",
-      "id": "content-scanner",
-      "deny": true,
-      "checks": [{
-        "id": "content_scan",
-        "default.webhook": {
-          "webhookURL": "https://..."
-        }
-      }]
-    }
-  ]
-}
-```
 
 ---
 
@@ -209,6 +148,10 @@ The EMF exporter publishes the following metrics to the `AIGateway` namespace:
 | `CacheHits` | Provider | Cache hit count |
 | `CacheMisses` | Provider | Cache miss count |
 | `CacheCostSavingsUsd` | Provider | Cost savings from cache hits |
+
+:::note[Cache metrics now mean prompt caching]
+These cache metrics are still declared in `otel-config.yaml`, but they now track provider-native **prompt caching** (agentgateway's `promptCaching` to Bedrock `cachePoint`), which cuts input-token cost on prefix reuse. They are not a response cache -- the ElastiCache Redis response cache was removed in the agentgateway migration. agentgateway emits `cached_input_tokens` and `cache_creation_input_tokens` on the access log; the OTel pipeline maps these into the cache metrics and `gen_ai.usage.cached_tokens`.
+:::
 
 #### Pipelines
 

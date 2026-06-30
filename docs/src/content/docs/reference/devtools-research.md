@@ -7,7 +7,11 @@ sidebar:
 **Project**: AI Gateway (LLM API Gateway)
 **Date**: 2026-03-18
 **Researcher Domain**: DevTools
-**Stack Context**: Python 3.13, uv, ECS Fargate, Terraform, Portkey OSS
+**Stack Context**: Python 3.13, uv, ECS Fargate, Terraform, Portkey OSS (data plane)
+
+:::note[Historical research snapshot]
+This is a point-in-time research report from 2026-03-18, when the data plane was Portkey OSS. The data plane has since been migrated to [agentgateway](https://github.com/agentgateway/agentgateway) (a Rust LLM/MCP proxy; see ADR-017). The Python tooling, uv, security-pipeline, and git-hook findings below are unaffected by that migration -- only the proxy container changed. Treat any "Portkey" mention here as the original data plane, not the current one.
+:::
 
 ---
 

@@ -5,7 +5,9 @@ evaporates on cold start — no external dependency, no per-request network cost
 Used for hot, slowly-changing config (pricing table, routing configs, tier
 defaults) and for the JWKS key set (see ``gwcore.auth``).
 
-This is deliberately NOT the LLM response cache — that stays at Redis (ADR-012).
+This is deliberately NOT an LLM response cache. The Redis exact-match response
+cache (ADR-012) was decommissioned with the agentgateway data-plane swap
+(ADR-017); the data plane relies on provider-native prompt caching instead.
 
 Time is injected via a ``clock`` callable so tests are deterministic; it
 defaults to ``time.monotonic`` (immune to wall-clock jumps).

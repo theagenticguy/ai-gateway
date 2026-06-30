@@ -120,7 +120,6 @@ The response body is an AWS WAF default block page (HTML), not a JSON payload.
 1. **Check for the WAF header** in the response:
    ```bash
    curl -v -H "Authorization: Bearer $TOKEN" \
-        -H "x-portkey-provider: openai" \
         ${GATEWAY_URL}/v1/chat/completions 2>&1 | grep -i waf
    ```
 
@@ -178,9 +177,19 @@ If DynamoDB is unreachable, the rate limiter allows the request through and logs
 
 ### Budget Enforcement
 
-When `enable_budgets = true`, the budget enforcement webhook runs as a Portkey `before_request_hook`. If a team's monthly budget is exhausted (utilization reaches the hard limit percentage, default 100%), the request is denied before reaching the provider. The enforcement Lambda also supports model-level budget caps -- if a specific model's spend exceeds its configured limit, only that model is blocked.
+When budgets are enabled, the `budget_enforcement` Lambda runs in-path as an agentgateway `promptGuard` **request webhook**. If a team's monthly budget is exhausted (utilization reaches the hard limit percentage, default 100%), the Lambda returns agentgateway's reject contract:
+
+```json
+{"action": "reject"}
+```
+
+agentgateway maps `action: reject` to an **HTTP 429** for the client; the request never reaches the provider. The Lambda also supports model-level budget caps -- if a specific model's spend exceeds its configured limit, only that model is rejected.
 
 Budget enforcement includes a warning threshold (default 80%). Requests are allowed when the warning is reached, but a warning is logged.
+
+:::note[Fails open]
+The webhook transport is configured `failClosed`, but the Lambda itself fails **open**: on a DynamoDB outage it returns an allow decision rather than rejecting, so a data-store failure never blocks the inference path.
+:::
 
 ### Provider Rate Limit
 
@@ -212,7 +221,6 @@ The gateway passes through the upstream provider's error response when available
 1. **Test a different provider** to isolate the issue:
    ```bash
    curl -H "Authorization: Bearer $TOKEN" \
-        -H "x-portkey-provider: anthropic" \
         -H "Content-Type: application/json" \
         -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
         ${GATEWAY_URL}/v1/chat/completions
@@ -281,20 +289,16 @@ The ALB returns its default 503 page (HTML). There is no JSON body.
 
 ## Gateway Application Errors
 
-These errors come from the Portkey gateway application itself (HTTP 200 status code but with an error in the JSON body, or a non-standard HTTP status).
+These errors come from the agentgateway proxy itself or are passed through from the upstream provider.
 
-### Missing Provider Header
+### No Provider Header (migration note)
 
-```json
-{"error": "provider is not set"}
-```
-
-Every request must include the `x-portkey-provider` header. See the [API Reference](/ai-gateway/user-guide/api-reference/) for valid provider values and the [Troubleshooting guide](/ai-gateway/user-guide/troubleshooting/#missing-x-portkey-provider-header) for per-agent configuration.
+agentgateway selects the provider server-side from its rendered config, so there is **no** `x-portkey-provider` header and no `{"error": "provider is not set"}` failure mode. If you are migrating from an earlier (Portkey-based) release, remove any `x-portkey-*` headers from your client. See the [API Reference](/ai-gateway/user-guide/api-reference/#provider-and-model-selection) for how provider and model selection works now.
 
 ### Invalid Model
 
-The provider rejected the model name. This typically means:
-- The model does not exist at the specified provider
+The provider rejected the model name, or no `modelAlias` / backend in the active chain serves it. This typically means:
+- The model does not exist at the resolved provider
 - The model name is misspelled
 - The provider account does not have access to the model
 
@@ -336,47 +340,26 @@ The requested scope is not configured on the Cognito app client. This is a stand
 
 ---
 
-## Content Scanner Errors
-
-When `enable_content_scanner = true`, the content scanner Lambda runs as a Portkey `before_request_hook` and can block requests. The scanner supports four modes per team: `off`, `detect`, `redact`, and `block`.
-
-### PII Detected (block mode)
-
-When the team's PII mode is set to `block` and PII entities are found, the request is denied. The scanner returns a Portkey `verdict: false` response, and the gateway blocks the request before it reaches the upstream provider.
-
-### Injection Detected (block mode)
-
-When the team's injection mode is set to `block` and a prompt injection pattern is matched, the request is denied. Critical-severity injections in `redact` mode are also escalated to a block.
-
-### Scanner Behavior by Mode
-
-| Mode | PII Behavior | Injection Behavior |
-|---|---|---|
-| `off` | No scan | No scan |
-| `detect` | Allow, log detections | Allow, log detections |
-| `redact` | Strip PII, forward sanitized request | Allow (block critical severity only) |
-| `block` | Deny request | Deny request |
-
-:::note
-The scanner fails open. If the Lambda encounters an internal error, the request is allowed through and a warning is logged. A broken scanner never blocks legitimate traffic.
-:::
-
----
-
 ## Guardrail Errors
 
-When `enable_guardrails = true`, Bedrock Guardrails evaluate both the input and output of each request.
+Content safety is **inline Bedrock Guardrails**. agentgateway's `promptGuard` policy calls the `ApplyGuardrail` API in-path on both the request (source `INPUT`) and the response (source `OUTPUT`), signed with the gateway's ECS task role. There is no separate content-scanner Lambda and no per-team PII-mode endpoint.
 
-### Request Blocked by Guardrail
+### Detect / Log-Only by Default
 
-The response includes a Bedrock Guardrails action indicator. The exact format depends on the guardrail policy that triggered:
+With `enable_guardrails = true` and `enforce_guardrails = false` (the default), every filter action is `NONE`: `ApplyGuardrail` evaluates the content and emits assessments to the logs, but the gateway passes the request through untouched. In this mode a tripped guardrail does **not** produce an error.
+
+### Blocking Mode
+
+When `enforce_guardrails = true`, filters BLOCK on a trip (and topic filters are attached). A blocked request is denied before (or after) the provider call, depending on whether the input or output filter tripped. The exact response depends on the guardrail policy that triggered:
 
 | Policy | Example Reason |
 |---|---|
 | Content filter | Harmful content detected (hate, violence, sexual, misconduct) |
-| PII blocking | PII detected in response (SSN, credit card, email, phone) |
+| PII blocking | PII detected in input or output (SSN, credit card, email, phone) |
 | Topic policy | Request matches a blocked topic (e.g., competitor products, internal financials) |
 | Word policy | Request or response contains a blocked word or phrase |
+
+See [Terraform Variables -- Guardrails](/ai-gateway/reference/terraform-variables/#guardrails) for the toggles.
 
 ---
 
@@ -386,8 +369,8 @@ The response includes a Bedrock Guardrails action indicator. The exact format de
 |---|---|---|
 | HTML error page, no JSON | `401` or `503` | ALB-level rejection; check JWT or ECS health |
 | `x-amzn-waf-action: BLOCK` header | `403` | WAF rule triggered; check IP and request patterns |
-| `"provider is not set"` | Varies | Missing `x-portkey-provider` header |
-| `"allowed": false` with `retry_after_seconds` | `429` | Team rate limit or budget exceeded |
-| Request blocked by content scanner | Varies | Content scanner in `block` mode denied the request |
-| Provider error passthrough | `502` | Check API key in Secrets Manager; test alternate provider |
+| `"allowed": false` with `retry_after_seconds` | `429` | Team rate limit (Admin-API counter) exceeded |
+| `429` with no provider response | `429` | Budget exhausted; `budget_enforcement` returned `{"action": "reject"}` |
+| Request blocked in enforce mode | Varies | Bedrock Guardrail tripped with `enforce_guardrails = true` |
+| Provider error passthrough | `502` | Check API key in Secrets Manager; test an alternate model/provider |
 | No response / timeout | -- | Check gateway URL, VPN, and ECS service status |

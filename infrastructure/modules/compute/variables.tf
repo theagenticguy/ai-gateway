@@ -13,8 +13,8 @@ variable "aws_region" {
   type        = string
 }
 
-variable "portkey_image" {
-  description = "Docker image for the Portkey AI Gateway"
+variable "gateway_image" {
+  description = "Docker image for the agentgateway data-plane proxy (ADR-017)"
   type        = string
 }
 
@@ -88,32 +88,34 @@ variable "otel_config_content" {
   type        = string
 }
 
-variable "portkey_routing_configs" {
-  description = "Map of named Portkey routing configurations (base64-encoded JSON)."
-  type        = map(string)
-  default     = {}
-}
-
-variable "cache_enabled" {
-  description = "Whether response caching via Redis is enabled"
-  type        = bool
-  default     = false
-}
-
-variable "redis_url" {
-  description = "Redis connection URL (rediss:// for TLS). Required when cache_enabled is true."
-  type        = string
-  default     = ""
-}
+# ADR-017: routing now lives in the rendered agentgateway config; there are no
+# routing-config env vars and no response cache.
 
 variable "budget_enforcement_webhook_url" {
-  description = "Function URL for the budget enforcement Lambda (Portkey webhook hook)"
+  description = "Function URL for the budget enforcement Lambda (agentgateway promptGuard webhook)"
   type        = string
   default     = ""
 }
 
-variable "content_scanner_webhook_url" {
-  description = "Function URL for the content scanner Lambda (Portkey webhook hook)"
+variable "bedrock_guardrail_id" {
+  description = "ADR-017: Bedrock Guardrail ID for the inline ApplyGuardrail promptGuard policy. Empty disables the guardrail block in the rendered config."
   type        = string
   default     = ""
+}
+
+variable "bedrock_guardrail_version" {
+  description = "ADR-017: Bedrock Guardrail version for the inline ApplyGuardrail promptGuard policy."
+  type        = string
+  default     = ""
+}
+
+variable "mantle_host" {
+  description = "ADR-015 mantle lane: pinned host:port of the OpenAI-compatible Bedrock mantle endpoint (e.g. bedrock-mantle.us-east-1.api.aws:443) for the OpenAI Responses lane. Empty disables the lane (no /openai/v1 route, no mantle secret). Host is pinned server-side; callers cannot override it."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.mantle_host == "" || can(regex("^[a-zA-Z0-9.-]+:[0-9]+$", var.mantle_host))
+    error_message = "mantle_host must be empty or in host:port form (e.g. bedrock-mantle.us-east-1.api.aws:443)."
+  }
 }

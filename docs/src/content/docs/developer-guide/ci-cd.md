@@ -84,7 +84,7 @@ On pull requests, only the 4 gate jobs run. Build-and-push and deploy only execu
 | Step | What It Checks |
 |------|---------------|
 | Hadolint | Dockerfile best practices (ShellCheck integration, SARIF output) |
-| Trivy | Vulnerability scan of the Portkey gateway image (CRITICAL + HIGH, exit code 1 on findings) |
+| Trivy | Vulnerability scan of the agentgateway data-plane image (CRITICAL + HIGH, exit code 1 on findings) |
 | Syft | SBOM generation in CycloneDX format (uploaded as artifact, 90-day retention) |
 
 **Fails when**: Hadolint finds violations, or trivy finds CRITICAL/HIGH vulnerabilities in the container image.
@@ -97,7 +97,7 @@ On pull requests, only the 4 gate jobs run. Build-and-push and deploy only execu
 |------|-------------|
 | Configure AWS credentials | OIDC-based assume-role (no long-lived keys) |
 | Login to ECR | Authenticate with Amazon ECR |
-| Build custom image | Build the hardened image from the pinned Portkey source (`Dockerfile` with `PORTKEY_VERSION` / `PORTKEY_TARBALL_SHA256` build args from `versions.env`) |
+| Build gateway image | Re-tag the pinned upstream agentgateway image by digest (`Dockerfile` with `AGENTGATEWAY_REF` / `AGENTGATEWAY_VERSION` / `AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@<digest>` build args from `versions.env`) |
 | Tag + push | Tag with the commit SHA and `latest`, push to ECR |
 | cosign sign | Keyless image signing via Sigstore OIDC |
 
@@ -215,7 +215,7 @@ To create a release:
     ```
 
 3. The release workflow automatically:
-    - Pulls and tags the Portkey gateway image with the version.
+    - Re-tags the pinned upstream agentgateway image (by digest) with the version.
     - Pushes to ECR with version, SHA, and `latest` tags.
     - Signs the image with cosign (keyless via Sigstore OIDC).
     - Generates dual SBOMs (CycloneDX + SPDX).

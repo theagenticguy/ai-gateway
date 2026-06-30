@@ -17,7 +17,8 @@ All Terraform input variables for the AI Gateway infrastructure, organized by ca
 | `environment` | `string` | -- (required) | Deployment environment (`dev` or `prod`) |
 | `project_name` | `string` | `"ai-gateway"` | Project name used for resource naming |
 | `vpc_cidr` | `string` | `"10.0.0.0/16"` | CIDR block for the VPC |
-| `portkey_image` | `string` | `"ghcr.io/theagenticguy/ai-gateway:latest"` | Docker image URI for the AI Gateway (custom-built from Portkey OSS, pushed to ECR + GHCR by release workflow) |
+| `gateway_image` | `string` | `"ghcr.io/agentgateway/agentgateway:latest"` | Docker image URI for the AI Gateway data plane (agentgateway, ADR-017). Overridden at apply time with the ECR URI pinned + mirrored by the release workflow; the upstream GHCR default keeps `plan`/`validate` resolvable. |
+| `mantle_host` | `string` | `""` | ADR-015 mantle lane: pinned `host:port` of the OpenAI-compatible Bedrock mantle endpoint (e.g. `bedrock-mantle.us-east-1.api.aws:443`) that serves the OpenAI Responses lane for GPT-5.5/5.4. Empty disables the lane entirely (no `/openai/v1` route, no mantle secret provisioned). |
 | `gateway_desired_count` | `number` | `2` | Desired number of gateway ECS tasks |
 | `gateway_cpu` | `number` | `1024` | Total CPU units for the gateway ECS task |
 | `gateway_memory` | `number` | `2048` | Total memory (MiB) for the gateway ECS task |
@@ -106,20 +107,23 @@ client_configs = {
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `enable_provider_fallback` | `bool` | `false` | Whether to enable provider fallback routing. When true, routing configs are injected into the gateway container as environment variables. |
-| `routing_configs` | `map(string)` | `{}` | Map of named routing configurations as JSON strings. Keys are config names (e.g. `anthropic`, `openai`), values are Portkey-compatible routing JSON. |
+| `enable_provider_fallback` | `bool` | `false` | Whether to enable provider fallback routing. When true, routing configs are wired into the gateway. |
+| `routing_configs` | `map(string)` | `{}` | Map of named routing configurations as JSON strings. Keys are config names (e.g. `anthropic`, `openai`), values are agentgateway routing JSON (`ai.groups` priority tiers). |
 
-:::tip
-When `enable_provider_fallback` is true, each entry in `routing_configs` is injected as `PORTKEY_DEFAULT_CONFIG_{UPPER(key)}` in the gateway container.
+:::note
+Routing lives in the agentgateway YAML config, not in environment variables. The default provider chain (Bedrock primary, Anthropic-direct fallback) is rendered into the inline config; named custom configs are managed through the routing-config API. See [Routing Strategies](/ai-gateway/user-guide/routing-strategies/).
 :::
 
 ---
 
 ## Guardrails
 
+Content safety is **inline Bedrock Guardrails** (the `ApplyGuardrail` API, called in-path by agentgateway's `promptGuard` policy on both request and response). There is no separate content-scanner Lambda.
+
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `enable_guardrails` | `bool` | `false` | Whether to enable Bedrock Guardrails for content safety filtering |
+| `enable_guardrails` | `bool` | `true` | Whether to create the Bedrock Guardrail and wire it into the agentgateway data plane (ADR-017). When true, the guardrail runs inline in detect/log-only mode by default. |
+| `enforce_guardrails` | `bool` | `false` | `false` = detect/LOG-ONLY (filters evaluate and emit assessments but never block or anonymize; topic filters off). `true` = BLOCK on trip and attach topic filters. Set per environment (e.g. dev=false, prod selectively true). |
 | `guardrails_blocked_topics` | `list(object)` | See below | List of topics to block, each with a name, definition, and optional examples |
 | `guardrails_blocked_words` | `list(string)` | `[]` | List of words or phrases to block in inputs and outputs |
 | `guardrails_content_filter_strength` | `string` | `"HIGH"` | Strength of content filters (`LOW`, `MEDIUM`, or `HIGH`) |
@@ -145,14 +149,9 @@ When `enable_provider_fallback` is true, each entry in `routing_configs` is inje
 The `guardrails_content_filter_strength` variable is validated at plan time. Only `LOW`, `MEDIUM`, and `HIGH` are accepted.
 :::
 
----
-
-## Cache
-
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `enable_cache` | `bool` | `false` | Whether to deploy an ElastiCache Redis cluster for response caching |
-| `cache_node_type` | `string` | `"cache.t4g.micro"` | ElastiCache node instance type |
+:::note[Guardrail ID/version are computed, not set]
+The `bedrock_guardrail_id` and `bedrock_guardrail_version` consumed by the compute module are **outputs of the guardrails module**, wired in `main.tf` (they are not root input variables). Setting `enable_guardrails = true` creates the guardrail and passes its ID/version into the rendered agentgateway config. Setting it to `false` leaves them empty, which omits the guardrail block from the config.
+:::
 
 ---
 
@@ -212,18 +211,6 @@ Enabling the Admin API unlocks the metering and governance features: rate limiti
 
 ---
 
-## Content Scanner
-
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `enable_content_scanner` | `bool` | `false` | Whether to deploy the content scanner Lambda (PII redaction + injection detection) |
-| `content_scanner_default_pii_mode` | `string` | `"detect"` | Default PII scan mode when team config is missing (`off`, `detect`, `redact`, `block`) |
-| `content_scanner_default_injection_mode` | `string` | `"detect"` | Default injection scan mode when team config is missing (`off`, `detect`, `redact`, `block`) |
-
-Both mode variables are validated at plan time. Accepted values: `off`, `detect`, `redact`, `block`.
-
----
-
 ## Inspector
 
 | Variable | Type | Default | Description |
@@ -236,7 +223,7 @@ Both mode variables are validated at plan time. Accepted values: `off`, `detect`
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `enable_appconfig` | `bool` | `false` | Enable AWS AppConfig for feature flag management (scanner toggle) |
+| `enable_appconfig` | `bool` | `false` | Enable AWS AppConfig for feature flag and dynamic configuration management |
 
 ---
 
@@ -247,16 +234,17 @@ A summary of every feature toggle and its default state:
 | Toggle | Default | Feature |
 |---|---|---|
 | `enable_waf` | `true` | AWS WAF on the ALB |
+| `enable_guardrails` | `true` | Inline Bedrock Guardrails content safety (detect/log-only unless `enforce_guardrails`) |
+| `enforce_guardrails` | `false` | Flip guardrails from detect/log-only to BLOCK |
 | `enable_jwt_auth` | `false` | ALB JWT validation via Cognito |
 | `enable_user_auth` | `false` | User-facing SSO (authorization_code flow) |
 | `enable_provider_fallback` | `false` | Provider fallback routing |
-| `enable_guardrails` | `false` | Bedrock Guardrails content safety |
-| `enable_cache` | `false` | ElastiCache Redis response caching |
 | `enable_cost_attribution` | `false` | Cost attribution Lambda pipeline |
 | `enable_budgets` | `false` | Budget and usage tracking |
 | `enable_chargeback` | `false` | Monthly chargeback report pipeline |
 | `enable_audit_log` | `false` | Firehose-to-S3 audit logging |
 | `enable_admin_api` | `false` | API Gateway admin plane (metering and governance features) |
-| `enable_content_scanner` | `false` | PII redaction + injection detection |
 | `enable_inspector` | `false` | Amazon Inspector ECR scanning |
 | `enable_appconfig` | `false` | AWS AppConfig feature flags |
+| `mantle_host` | `""` (disabled) | ADR-015 OpenAI Responses → Bedrock mantle lane; set to the pinned `host:port` endpoint to enable |
+| `client_configs` | `{}` (no clients) | Per-team Cognito app clients; a non-empty map enables the `clients` module (no boolean toggle) |

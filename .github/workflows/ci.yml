@@ -382,9 +382,9 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_NAME }}:ci
           build-args: |
-            PORTKEY_REF=${{ env.PORTKEY_REF }}
-            PORTKEY_VERSION=${{ env.PORTKEY_VERSION }}
-            PORTKEY_TARBALL_SHA256=${{ env.PORTKEY_TARBALL_SHA256 }}
+            AGENTGATEWAY_REF=${{ env.AGENTGATEWAY_REF }}
+            AGENTGATEWAY_VERSION=${{ env.AGENTGATEWAY_VERSION }}
+            AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway@${{ env.AGENTGATEWAY_IMAGE_DIGEST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

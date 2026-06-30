@@ -1,216 +1,173 @@
 ---
 title: Provider Routing Strategies
-description: "Provider routing strategies: fallback, load-balance, cost-optimized, and more."
+description: "Provider routing with agentgateway priority groups: fallback and load balancing, plus the routing-config API."
 sidebar:
   order: 4
 ---
-The AI Gateway uses [Portkey's routing engine](https://portkey.ai/docs/product/ai-gateway) to control how requests are distributed across LLM providers. This document covers the available strategies, pre-built config templates, and how to use them.
+The AI Gateway is the [agentgateway](https://github.com/agentgateway/agentgateway) proxy. Routing is expressed as agentgateway `ai.groups` **priority-group failover**: the gateway tries the providers in group 0, then group 1, and so on. The active chain is rendered into the gateway's YAML config by Terraform and delivered inline at container start.
 
-## Available Strategies
+This page covers how the strategies map onto agentgateway, how to manage custom configs through the routing-config API, and the known limitations carried over from the previous (Portkey) routing engine.
 
-### Single (default)
+:::note[Server-side, not per-request]
+agentgateway selects the provider chain from its rendered config. There is **no** per-request routing override -- the `x-portkey-config` and `x-routing-config` headers from earlier releases no longer exist. To change routing you update the rendered config (for the default chain) or the routing-config API (for named custom configs).
+:::
 
-Sends every request to exactly one provider. This is the default behavior when no routing config is supplied. The provider is determined by the `x-portkey-provider` header on each request.
+## How Routing Works
+
+The default rendered config ships a two-tier chain:
+
+```yaml
+backends:
+- ai:
+    groups:
+    - providers:
+      - name: bedrock-primary       # group 0: tried first
+        provider:
+          bedrock:
+            model: anthropic.claude-sonnet-4-20250514-v1:0
+    - providers:
+      - name: anthropic-fallback    # group 1: tried if group 0 is evicted
+        provider:
+          anthropic:
+            model: claude-sonnet-4-20250514
+```
+
+A route also carries an `ai` policy with `modelAliases`, which maps a requested model ID onto a backend model (for example, `gpt-4*` to a Bedrock Claude model). The `model` field in the request body is resolved against these aliases and the active chain.
+
+agentgateway fails over between groups on **connection failure and health eviction**. It does not fail over on a specific upstream HTTP status code -- there is no per-edge `on_status_codes` trigger like the Portkey engine had. This is the most important behavioral difference to keep in mind when migrating a routing config.
+
+## Strategies and How They Map
+
+The routing-config API accepts three strategy modes. Each renders to agentgateway via `RoutingConfig.to_agentgateway_backend()`:
+
+| Strategy | agentgateway mapping | Notes |
+|---|---|---|
+| **fallback** | Each target becomes its own priority group, in order. | Reproduces an ordered fallback chain. Failover is on connection/health eviction, not on a status code. |
+| **loadbalance** | All targets in **one** group. | agentgateway load-balances within a group using power-of-two-choices. Balancing is **capacity-based**, not a 0--1 weight ratio. A per-target `weight` is carried but does not set an exact traffic split. |
+| **conditional** | Request-field predicates are **dropped**; targets collapse to an ordered fallback chain. | agentgateway has no request-field predicate routing (e.g. on `max_tokens`). See the limitation below. |
 
 ### Fallback
 
-Tries providers in order. If the primary provider returns a qualifying error (e.g. 429, 500, 502, 503, 504), the gateway automatically retries the request against the next provider in the chain. No client-side retry logic needed.
+Tries providers in priority order. If the primary group is connection-failed or evicted by health checks, agentgateway moves to the next group. Use this for "Bedrock primary, Anthropic-direct backup" style resilience.
 
 ### Load Balance
 
-Distributes requests across providers based on configured weights. Useful for spreading traffic between Bedrock and direct API access, or across regions.
+Spreads requests across the targets in a single group. agentgateway uses power-of-two-choices load balancing weighted by backend capacity. This is good for spreading traffic across providers or regions, but it does **not** implement an exact percentage split -- so it is not a precise A/B-test traffic splitter.
 
-### Cost-Optimized (conditional)
+:::caution[Weights are not exact ratios]
+The routing-config API still accepts a `weight` (0.0--1.0) per target for `loadbalance` mode and validates that weights sum to ~1.0, but agentgateway's load balancing is capacity-based. Treat weights as a hint, not a guaranteed split.
+:::
 
-Routes requests to the cheapest appropriate model based on prompt complexity. Uses Portkey's conditional routing mode to inspect the `max_tokens` parameter and select a model tier:
+### Conditional (limitation)
 
-- Requests with `max_tokens <= 100` go to Haiku (cheapest)
-- Requests with `max_tokens <= 1000` go to Sonnet
-- All other requests default to Sonnet
+The Portkey engine could inspect a request field such as `max_tokens` and route to a different model tier (a "cost-optimized" pattern). agentgateway has no equivalent request-field predicate routing.
 
-This strategy reduces costs by steering simple, short-output tasks to smaller models while preserving quality for complex tasks.
+:::caution[Conditional routing is not supported]
+A `conditional` config is still accepted by the routing-config API for backward compatibility, but the conditions are **dropped** on render: the targets collapse to a single priority-ordered fallback chain. If you depend on predicate-based model selection (e.g. short prompts to a cheaper model), implement it client-side by sending a different `model`. Flag any conditional configs during migration.
+:::
 
-### A/B Testing (weighted load balance)
+## Managing Custom Configs via the API
 
-Routes a configurable percentage of traffic to a variant model for side-by-side comparison. Built on the loadbalance mode with asymmetric weights:
+The `routing_config` Lambda exposes a CRUD API (available when the Admin API is enabled). Custom configs are stored in DynamoDB as the rendered agentgateway backend JSON. Mutations require the **admin** scope and emit audit events.
 
-- Control group (90% default): Receives the established production model
-- Variant group (10% default): Receives the candidate model being evaluated
+:::note[Routing changes are not live-reloaded today]
+Routing lives in the **static rendered agentgateway config** baked into the container at deploy time (`infrastructure/modules/compute/agentgateway-config.yaml.tftpl`, delivered inline at container start). A change made through the routing-config API is **persisted to DynamoDB**, but it does **not** take effect instantly and is **not** applied per team at request time. It takes effect on the **next config render + ECS task reload** — that is, when Terraform re-renders the gateway config and the ECS service rolls new tasks.
 
-Adjust the weights in the config to control the traffic split. Combine with observability to compare latency, cost, and quality metrics across groups.
+This is a current-state limitation. A render-and-reload path (and ultimately xDS-style dynamic config delivery) is the documented follow-up — see [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/). Until then, treat the routing-config API as a way to author and version configs that become live on the next deploy, not as a live routing control plane.
+:::
 
-### Latency-Optimized (multi-provider load balance)
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/routing/configs` | List custom config summaries |
+| `GET` | `/routing/configs/{name}` | Get a specific custom config |
+| `POST` | `/routing/configs` | Create a custom config |
+| `PUT` | `/routing/configs/{name}` | Update a custom config |
+| `DELETE` | `/routing/configs/{name}` | Delete a custom config |
 
-Distributes traffic across multiple providers to minimize overall latency. Uses weighted load balancing with error-triggered redistribution:
-
-- Bedrock (50%): Primary provider with the most capacity
-- Anthropic direct (30%): Secondary provider
-- OpenAI GPT-4o (20%): Tertiary provider for diversification
-
-Providers that return 429/500/502/503 have their traffic automatically redistributed to healthy providers.
-
-## Selecting a Strategy Per Request
-
-There are three ways to select a routing strategy:
-
-### 1. Per-request header
-
-Pass a base64-encoded Portkey config in the `x-portkey-config` header:
-
-```bash
-CONFIG=$(echo -n '{"strategy":{"mode":"fallback"},"targets":[{"provider":"bedrock"},{"provider":"anthropic"}]}' | base64 -w0)
-
-curl -X POST https://gateway.example.com/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "x-portkey-config: $CONFIG" \
-  -d '{
-    "messages": [{"role": "user", "content": "Hello"}],
-    "model": "claude-sonnet-4-20250514"
-  }'
-```
-
-### 2. Named config header
-
-Reference a config by name via the `x-routing-config` header. The gateway resolves the name against built-in and custom configs:
-
-```bash
-curl -X POST https://gateway.example.com/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "x-routing-config: cost-optimized" \
-  -d '{
-    "messages": [{"role": "user", "content": "Summarize this in one sentence"}],
-    "model": "claude-sonnet-4-20250514",
-    "max_tokens": 50
-  }'
-```
-
-### 3. Server-side defaults
-
-When `enable_provider_fallback = true` in Terraform, the pre-built fallback configs are injected as defaults. No header needed.
-
-## Pre-Built Config Templates
-
-Config templates live in `infrastructure/portkey-configs/`.
-
-### fallback-anthropic.json
-
-**Use when:** You want Bedrock as the primary Anthropic provider with automatic fallback to the direct Anthropic API if Bedrock returns errors.
-
-- Primary: Bedrock (`anthropic.claude-sonnet-4-20250514-v1:0`) with 2 retries on 429/500/502/503
-- Fallback: Anthropic direct (`claude-sonnet-4-20250514`)
-- Triggers on: 429, 500, 502, 503, 504
-
-### fallback-openai.json
-
-**Use when:** You want OpenAI as the primary provider with automatic fallback to Azure OpenAI if OpenAI returns errors.
-
-- Primary: OpenAI (`gpt-4.1`) with 2 retries on 429/500/502/503
-- Fallback: Azure OpenAI (`gpt-4.1`)
-- Triggers on: 429, 500, 502, 503, 504
-
-### loadbalance-multi.json
-
-**Use when:** You want to spread Anthropic model traffic across Bedrock (60%) and the direct Anthropic API (40%) for cost optimization or quota management.
-
-### cost-optimized.json
-
-**Use when:** You want to minimize cost by routing simple requests to Haiku and complex requests to Sonnet. Ideal for workloads with a mix of simple classification/extraction tasks and longer generative tasks.
-
-- Condition 1: `max_tokens <= 100` routes to Haiku (`anthropic.claude-haiku-4-5-20251001-v1:0`)
-- Condition 2: `max_tokens <= 1000` routes to Sonnet (`anthropic.claude-sonnet-4-20250514-v1:0`)
-- Default: Sonnet
-
-### ab-test-template.json
-
-**Use when:** You want to compare two models in production. The template ships with a 90/10 split between Sonnet 4 (control) and Sonnet 4.5 (variant).
-
-- Control (90%): Bedrock Sonnet 4 (`anthropic.claude-sonnet-4-20250514-v1:0`)
-- Variant (10%): Bedrock Sonnet 4.5 (`anthropic.claude-sonnet-4-5-20250514-v1:0`)
-- Error failover on: 429, 500, 502, 503
-
-### lowest-latency.json
-
-**Use when:** You want to minimize latency by spreading traffic across multiple providers, with automatic failover away from slow or erroring providers.
-
-- Bedrock Claude Sonnet (50%): Primary capacity
-- Anthropic direct (30%): Lower-latency for smaller payloads
-- OpenAI GPT-4o (20%): Cross-provider diversification
-- Error failover on: 429, 500, 502, 503
-
-## Creating Custom Configs via the API
-
-The routing config API allows you to create, update, and delete custom routing configurations stored in DynamoDB. Built-in configs (from `infrastructure/portkey-configs/`) are always available and read-only.
+:::note[No built-in presets]
+Earlier releases shipped eight preset config files under `infrastructure/portkey-configs/`. Those files were removed in the agentgateway migration. The API now serves only custom configs that you create; every config returned is `builtin: false`.
+:::
 
 ### List all configs
 
 ```bash
-curl https://<routing-api-url>/routing/configs
+curl -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  https://<admin-api-url>/routing/configs
 ```
 
 ### Get a specific config
 
 ```bash
-curl https://<routing-api-url>/routing/configs/cost-optimized
+curl -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  https://<admin-api-url>/routing/configs/my-fallback
 ```
 
-### Create a custom config
+### Create a fallback config
+
+Each target becomes its own priority group, tried in order:
 
 ```bash
-curl -X POST https://<routing-api-url>/routing/configs \
+curl -X POST https://<admin-api-url>/routing/configs \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "my-ab-test",
-    "strategy": {
-      "mode": "loadbalance",
-      "on_status_codes": [429, 500]
-    },
+    "name": "bedrock-then-anthropic",
+    "strategy": {"mode": "fallback"},
     "targets": [
-      {"name": "control", "provider": "bedrock", "weight": 0.8, "override_params": {"model": "anthropic.claude-sonnet-4-20250514-v1:0"}},
-      {"name": "variant", "provider": "bedrock", "weight": 0.2, "override_params": {"model": "anthropic.claude-sonnet-4-5-20250514-v1:0"}}
+      {"name": "primary", "provider": "bedrock", "override_params": {"model": "anthropic.claude-sonnet-4-20250514-v1:0"}},
+      {"name": "backup", "provider": "anthropic", "override_params": {"model": "claude-sonnet-4-20250514"}}
     ],
-    "metadata": {"description": "80/20 A/B test for Sonnet 4 vs 4.5"}
+    "metadata": {"description": "Bedrock primary, Anthropic-direct fallback"}
   }'
 ```
 
-### Update a custom config
+### Create a load-balance config
+
+All targets share one group; agentgateway balances by capacity:
 
 ```bash
-curl -X PUT https://<routing-api-url>/routing/configs/my-ab-test \
+curl -X POST https://<admin-api-url>/routing/configs \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
+    "name": "spread-bedrock-anthropic",
     "strategy": {"mode": "loadbalance"},
     "targets": [
-      {"name": "control", "provider": "bedrock", "weight": 0.5, "override_params": {"model": "anthropic.claude-sonnet-4-20250514-v1:0"}},
-      {"name": "variant", "provider": "bedrock", "weight": 0.5, "override_params": {"model": "anthropic.claude-sonnet-4-5-20250514-v1:0"}}
-    ]
+      {"name": "bedrock", "provider": "bedrock", "weight": 0.6, "override_params": {"model": "anthropic.claude-sonnet-4-20250514-v1:0"}},
+      {"name": "anthropic", "provider": "anthropic", "weight": 0.4, "override_params": {"model": "claude-sonnet-4-20250514"}}
+    ],
+    "metadata": {"description": "Spread Anthropic-model traffic across Bedrock and direct"}
   }'
 ```
 
 ### Delete a custom config
 
 ```bash
-curl -X DELETE https://<routing-api-url>/routing/configs/my-ab-test
+curl -X DELETE https://<admin-api-url>/routing/configs/spread-bedrock-anthropic \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}"
 ```
 
 ## Config Field Reference
 
-| Field | Description |
-|---|---|
-| `strategy.mode` | `"fallback"`, `"loadbalance"`, or `"conditional"` |
-| `strategy.on_status_codes` | HTTP status codes that trigger failover/rebalance |
-| `strategy.conditions` | Array of condition objects (conditional mode only) |
-| `targets[].name` | Unique target name within the config |
-| `targets[].provider` | Provider name: `bedrock`, `anthropic`, `openai`, `azure-openai`, `google` |
-| `targets[].override_params.model` | Model ID to use for this target |
-| `targets[].retry.attempts` | Number of retries before moving to next target |
-| `targets[].retry.on_status_codes` | Status codes that trigger a retry within this target |
-| `targets[].weight` | Traffic weight (loadbalance mode only, 0.0-1.0, must sum to 1.0) |
-| `targets[].virtual_key` | Portkey virtual key for this target |
-| `metadata.description` | Human-readable description of the config |
+The routing-config API accepts the following fields. Note which ones still affect agentgateway behavior and which are carried for compatibility only.
 
-## Server-Side Default Configs
+| Field | Description | agentgateway effect |
+|---|---|---|
+| `strategy.mode` | `"fallback"`, `"loadbalance"`, or `"conditional"` | Determines how targets map to priority groups (see table above) |
+| `strategy.on_status_codes` | HTTP status codes that triggered failover under Portkey | **No effect** -- agentgateway fails over on connection/health eviction |
+| `strategy.conditions` | Condition objects (conditional mode only) | **Dropped on render** -- no predicate routing |
+| `targets[].name` | Unique target name within the config | Carried as the provider `name` |
+| `targets[].provider` | `bedrock`, `anthropic`, `openai`, `azure-openai`, `google` | Mapped to the agentgateway provider key (`openai` to `openAI`, `azure-openai` to `azure`, `google` to `gemini`) |
+| `targets[].override_params.model` | Model ID for this target | Set as the provider `model` |
+| `targets[].weight` | Traffic weight, 0.0--1.0 (loadbalance only) | Carried, but balancing is capacity-based -- not an exact ratio |
+| `targets[].retry` | Per-target retry config | **No effect** -- no per-edge retry equivalent |
+| `targets[].virtual_key` | Provider virtual-key reference | **No effect** -- credentials come from Secrets Manager / the ECS task role |
+| `metadata.description` | Human-readable description | Stored with the config |
 
-When `enable_provider_fallback = true` in Terraform, the pre-built configs are injected into the gateway container as base64-encoded environment variables:
+:::note[Bedrock authentication]
+Bedrock targets are rendered with `policies.backendAuth.aws: {}`, which uses the gateway's ECS task-role credentials with SigV4 -- no static key. Other providers read their API key from Secrets Manager (injected as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
+:::
 
-- `PORTKEY_DEFAULT_CONFIG_ANTHROPIC` -- Anthropic fallback config
-- `PORTKEY_DEFAULT_CONFIG_OPENAI` -- OpenAI fallback config
+## Editing the Default Chain
+
+The default provider chain (served to requests with no custom config) lives in the rendered gateway config, `infrastructure/modules/compute/agentgateway-config.yaml.tftpl`. To change which providers are reachable or their failover order, edit that template and re-apply Terraform. The `enable_provider_fallback` and `routing_configs` Terraform variables control whether named configs are wired in. See the [Admin Guide](/ai-gateway/admin-guide/) for the deployment workflow.

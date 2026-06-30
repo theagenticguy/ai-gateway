@@ -26,12 +26,19 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
-variable "portkey_image" {
-  description = "Docker image URI for the AI Gateway (custom-built from Portkey OSS, pushed to ECR + GHCR by release workflow)"
+variable "gateway_image" {
+  description = "Docker image URI for the AI Gateway data plane (agentgateway, ADR-017; pinned + mirrored to ECR by the release workflow)"
   type        = string
   # Overridden at apply time with the ECR URI from the release workflow.
-  # GHCR fallback ensures a resolvable default for plan/validate.
-  default = "ghcr.io/theagenticguy/ai-gateway:latest"
+  # Upstream GHCR fallback (digest-pinned, matches versions.env) ensures a
+  # resolvable, immutable default for plan/validate.
+  default = "ghcr.io/agentgateway/agentgateway@sha256:c3ce7b75da90fef70239befcc1c3adc05152d7b9dd21fcb8351178026a2c4381"
+}
+
+variable "mantle_host" {
+  description = "ADR-015 mantle lane: pinned host:port of the OpenAI-compatible Bedrock mantle endpoint (e.g. bedrock-mantle.us-east-1.api.aws:443) that serves the OpenAI Responses lane for GPT-5.5/5.4. Empty disables the lane entirely (no /openai/v1 route, no mantle secret provisioned)."
+  type        = string
+  default     = ""
 }
 
 variable "gateway_desired_count" {

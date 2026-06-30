@@ -16,13 +16,13 @@ This guide is for **infrastructure engineers and platform team members** who dep
 | [Environments](environments.md) | Dev vs prod configuration, Terragrunt multi-environment setup, customizations |
 | [Security](security.md) | WAFv2, JWT auth, Cognito, Secrets Manager, network isolation, CI security pipeline |
 | [Monitoring](monitoring.md) | CloudWatch logs/dashboards, OTel collector, saved queries, key metrics |
-| [Feature Toggles](features.md) | Multi-client, fallback routing, cost attribution, guardrails, caching, rate limiting, audit log, SSO |
+| [Feature Toggles](features.md) | Multi-client, fallback routing, cost attribution, guardrails, prompt caching, rate limiting, audit log, SSO |
 | [Admin API](admin-api.md) | Admin API endpoints for teams, budgets, pricing, routing, and usage |
-| [Upgrading](upgrading.md) | Upgrade Portkey versions, Terraform providers, and enable new feature series |
+| [Upgrading](upgrading.md) | Bump the agentgateway data-plane image, upgrade Terraform providers, and enable new features |
 
 ## Architecture Overview
 
-The AI Gateway runs Portkey AI Gateway OSS (v1.15.2) on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 17 modules.
+The AI Gateway runs [agentgateway](https://github.com/agentgateway/agentgateway) — a Rust LLM/MCP proxy on a distroless base, pinned by image digest ([ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)) — on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 17 modules.
 
 ```mermaid
 flowchart TB
@@ -46,7 +46,7 @@ flowchart TB
 
             subgraph priv["Private Subnets (2 AZs)"]
                 subgraph ecs["ECS Fargate Cluster"]
-                    GW["Portkey Gateway\nPort 8787"]
+                    GW["agentgateway\nPort 8787"]
                     OT["ADOT Sidecar\nOTel Collector"]
                 end
             end
@@ -109,7 +109,7 @@ flowchart LR
 ## Key Design Decisions
 
 - **Single NAT Gateway** -- cost-optimized for non-critical workloads; upgrade to per-AZ NAT for production HA requirements.
-- **Portkey OSS as upstream image** -- pulled from Docker Hub and re-tagged into ECR; no custom Dockerfile required.
+- **agentgateway as the data-plane image** -- the upstream agentgateway image is pinned by digest and re-tagged into ECR (no layers added); see [ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/).
 - **ADOT sidecar** -- the AWS Distro for OpenTelemetry collector runs as a sidecar container in each ECS task, exporting traces to X-Ray and metrics via EMF.
 - **S3 + DynamoDB backend** -- Terraform state is stored in S3 with DynamoDB locking, one state file per environment.
 - **ALB JWT validation** -- native ALB action (no Lambda authorizer) validates Cognito-issued JWTs, requiring AWS provider v6.22+.

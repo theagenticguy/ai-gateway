@@ -11,7 +11,7 @@ The AI Gateway exports telemetry through three channels: structured logs to Clou
 ```mermaid
 flowchart LR
     subgraph task["ECS Task"]
-        GW["Portkey Gateway\nPort 8787"]
+        GW["agentgateway\nPort 8787"]
         ADOT["ADOT Sidecar\nOTel Collector"]
     end
 
@@ -39,7 +39,7 @@ flowchart LR
 
 | Log Group | Source | Retention | Encryption |
 |---|---|---|---|
-| `/ecs/ai-gateway/gateway` | Portkey gateway container (pino JSON via Fastify) | 365 days | KMS (`alias/ai-gateway-logs`) |
+| `/ecs/ai-gateway/gateway` | agentgateway container (structured JSON access log) | 365 days | KMS (`alias/ai-gateway-logs`) |
 | `/ecs/ai-gateway/otel` | ADOT sidecar container operational logs | 365 days | KMS (`alias/ai-gateway-logs`) |
 | `/ecs/ai-gateway/otel-logs` | OTLP logs exported by the collector pipeline | 365 days | KMS (`alias/ai-gateway-logs`) |
 | `/ecs/ai-gateway/metrics` | EMF-formatted metrics from the collector | 365 days | KMS (`alias/ai-gateway-logs`) |
@@ -79,7 +79,7 @@ The `memory_limiter` processor is placed first in each pipeline to protect the s
 
 ## Saved CloudWatch Logs Insights Queries
 
-Four pre-built queries are deployed as CloudWatch saved queries, targeting the gateway log group. All query the pino JSON logs emitted by the Portkey Fastify server.
+Pre-built queries are deployed as CloudWatch saved queries, targeting the gateway log group. All query the structured JSON access log agentgateway emits, where `provider` and `model` are flat fields re-keyed by the config's `accessLog.add` map.
 
 ### 1. Requests per Hour by Provider
 
@@ -88,7 +88,7 @@ Four pre-built queries are deployed as CloudWatch saved queries, targeting the g
 ```
 fields @timestamp, @message
 | filter ispresent(responseTime)
-| stats count(*) as requests by bin(1h), `req.headers.x-portkey-provider` as provider
+| stats count(*) as requests by bin(1h), provider
 | sort bin(1h) desc
 ```
 
@@ -102,7 +102,7 @@ fields @timestamp, @message
 | stats count(*) as total,
         sum(res.statusCode >= 400) as errors,
         (sum(res.statusCode >= 400) / count(*)) * 100 as error_pct
-  by `req.headers.x-portkey-provider` as provider
+  by provider
 | sort error_pct desc
 ```
 
@@ -111,13 +111,13 @@ fields @timestamp, @message
 **Saved as:** `ai-gateway/latency-percentiles-by-provider`
 
 ```
-fields @timestamp, responseTime
+fields @timestamp, responseTime, provider, model
 | filter ispresent(responseTime)
 | stats pct(responseTime, 50) as p50,
         pct(responseTime, 95) as p95,
         pct(responseTime, 99) as p99,
         avg(responseTime) as avg_ms
-  by `req.headers.x-portkey-provider` as provider
+  by provider, model
 | sort p99 desc
 ```
 

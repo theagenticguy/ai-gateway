@@ -5,7 +5,7 @@ variable "enable_provider_fallback" {
 }
 
 variable "routing_configs" {
-  description = "Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are Portkey-compatible routing JSON."
+  description = "Map of named routing configurations as JSON strings. Keys are config names (e.g. 'anthropic', 'openai'), values are agentgateway routing JSON."
   type        = map(string)
   default     = {}
 }

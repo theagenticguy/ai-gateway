@@ -105,8 +105,7 @@ Each admin endpoint is backed by a dedicated Lambda function:
 |---|---|---|
 | `/teams` | `team_registration` | Self-service onboarding |
 | `/budgets` | `budget_admin` | Budget CRUD |
-| `/routing` | `routing_config` | Routing rule management |
-| `/scanner` | `content_scanner` | Guardrails configuration |
+| `/routing` | `routing_config` | Routing rule management — renders the agentgateway backend config |
 | `/pricing` | `pricing_admin` | Dynamic pricing overrides |
 | `/usage` | `usage_api` | Real-time usage self-service |
 

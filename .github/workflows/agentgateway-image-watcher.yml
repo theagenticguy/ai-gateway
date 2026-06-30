@@ -1,0 +1,143 @@
+# ──────────────────────────────────────────────────────────────
+# agentgateway data-plane image watcher (ADR-017)
+# ──────────────────────────────────────────────────────────────
+# Replaces the retired portkey-release-scanner. The data plane is the pinned
+# upstream agentgateway image (AGENTGATEWAY_REF + AGENTGATEWAY_IMAGE_DIGEST in
+# versions.env). This workflow polls the upstream registry for the latest
+# stable release, resolves its multi-arch digest, and — when the pin is behind —
+# opens a PR bumping both fields together. CI's image scans (Trivy/Grype/
+# Inspector) then run against the proposed digest before a human merges.
+#
+# It only PROPOSES (a PR); it never auto-merges, so a maintainer reviews every
+# data-plane version change. Image CVE coverage between bumps continues via the
+# nightly scans in ci.yml + rescan-on-advisory.yml.
+name: agentgateway Image Watcher
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # Daily at 07:00 UTC (after the 06:00 advisory rescan)
+  workflow_dispatch: {} # Manual trigger for an immediate check
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentgateway-image-watcher
+  cancel-in-progress: true
+
+jobs:
+  check-and-propose:
+    name: Check upstream agentgateway release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the bump branch
+      pull-requests: write # open the bump PR
+    env:
+      UPSTREAM_REPO: agentgateway/agentgateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Read current pin from versions.env
+        run: grep -E '^[A-Z_][A-Z0-9_]*=' versions.env >> "$GITHUB_ENV"
+
+      - name: Resolve latest stable upstream release + digest
+        id: resolve
+        run: |
+          set -euo pipefail
+          REPO="${UPSTREAM_REPO}"
+
+          # Anonymous pull token for the public GHCR repo.
+          TOKEN="$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO}:pull&service=ghcr.io" | jq -r .token)"
+
+          # List tags, keep only semver (vX.Y.Z or X.Y.Z), drop .sig/.att and
+          # sha256- entries, sort by version, take the newest stable.
+          LATEST="$(
+            curl -fsSL -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${REPO}/tags/list?n=1000" \
+              | jq -r '.tags[]' \
+              | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sed 's/^v//' \
+              | sort -t. -k1,1n -k2,2n -k3,3n \
+              | tail -1
+          )"
+          # Re-apply the upstream tag prefix: this repo's tags are vX.Y.Z at >=1.0.
+          if curl -fsSL -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${REPO}/tags/list?n=1000" \
+               | jq -r '.tags[]' | grep -qxF "v${LATEST}"; then
+            REF="v${LATEST}"
+          else
+            REF="${LATEST}"
+          fi
+
+          # Resolve the multi-arch index digest for that ref (Docker-Content-Digest).
+          DIGEST="$(
+            curl -fsSL -I -H "Authorization: Bearer ${TOKEN}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/${REPO}/manifests/${REF}" \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}'
+          )"
+
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::could not resolve digest for ${REPO}:${REF}"
+            exit 1
+          fi
+
+          {
+            echo "latest_ref=${REF}"
+            echo "latest_version=${LATEST}"
+            echo "latest_digest=${DIGEST}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved upstream ${REF} -> ${DIGEST}"
+          echo "Current pin: ${AGENTGATEWAY_REF} / ${AGENTGATEWAY_IMAGE_DIGEST}"
+
+      - name: Determine whether a bump is needed
+        id: diff
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.resolve.outputs.latest_digest }}" = "${AGENTGATEWAY_IMAGE_DIGEST}" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Pin is current (${AGENTGATEWAY_IMAGE_DIGEST}); nothing to do."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Bump needed: ${AGENTGATEWAY_REF} -> ${{ steps.resolve.outputs.latest_ref }}"
+          fi
+
+      - name: Rewrite versions.env
+        if: steps.diff.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          REF="${{ steps.resolve.outputs.latest_ref }}"
+          VERSION="${{ steps.resolve.outputs.latest_version }}"
+          DIGEST="${{ steps.resolve.outputs.latest_digest }}"
+          sed -i \
+            -e "s|^AGENTGATEWAY_REF=.*|AGENTGATEWAY_REF=${REF}|" \
+            -e "s|^AGENTGATEWAY_VERSION=.*|AGENTGATEWAY_VERSION=${VERSION}|" \
+            -e "s|^AGENTGATEWAY_IMAGE_DIGEST=.*|AGENTGATEWAY_IMAGE_DIGEST=${DIGEST}|" \
+            versions.env
+          echo "---- versions.env after bump ----"
+          grep -E '^AGENTGATEWAY_' versions.env
+
+      - name: Open or update the bump PR
+        if: steps.diff.outputs.needed == 'true'
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        with:
+          branch: deps/agentgateway-${{ steps.resolve.outputs.latest_ref }}
+          commit-message: "chore(deps): bump agentgateway data-plane image to ${{ steps.resolve.outputs.latest_ref }}"
+          title: "chore(deps): bump agentgateway data-plane image to ${{ steps.resolve.outputs.latest_ref }}"
+          body: |
+            Automated data-plane image bump (replaces the retired portkey-release-scanner, ADR-017).
+
+            | | current | proposed |
+            |---|---|---|
+            | `AGENTGATEWAY_REF` | `${{ env.AGENTGATEWAY_REF }}` | `${{ steps.resolve.outputs.latest_ref }}` |
+            | `AGENTGATEWAY_IMAGE_DIGEST` | `${{ env.AGENTGATEWAY_IMAGE_DIGEST }}` | `${{ steps.resolve.outputs.latest_digest }}` |
+
+            The digest is the multi-arch OCI index digest resolved from `ghcr.io/${{ env.UPSTREAM_REPO }}`.
+
+            **Before merging:**
+            - CI's image scans (Trivy / Grype / Inspector) run against the new digest on this PR.
+            - Re-render the agentgateway config and run `agentgateway --validate-only` against the new image to catch any config-schema drift introduced by the upstream bump.
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          labels: dependencies, data-plane
+          delete-branch: true

@@ -1,14 +1,13 @@
 """Tests for the routing config Lambda.
 
-Covers model validation, built-in config loading, CRUD operations,
-and handler routing for all HTTP methods.
+Covers model validation, custom-config CRUD operations, and handler routing
+for all HTTP methods.
 """
 
 from __future__ import annotations
 
 import base64
 import json
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -20,7 +19,6 @@ from pydantic import ValidationError
 
 from routing_config.handler import (
     _config_name,
-    _load_builtin_configs,
     _path_method,
     handler,
 )
@@ -185,26 +183,6 @@ class TestRoutingConfig:
                 targets=[],
             )
 
-    def test_to_portkey_config(self) -> None:
-        config = RoutingConfig(
-            strategy=RoutingStrategy(mode=StrategyMode.LOADBALANCE, on_status_codes=[429, 500]),
-            targets=[
-                RoutingTarget(
-                    name="bedrock",
-                    provider="bedrock",
-                    weight=0.6,
-                    override_params={"model": "anthropic.claude-sonnet-4-20250514-v1:0"},
-                ),
-                RoutingTarget(name="anthropic", provider="anthropic", weight=0.4),
-            ],
-        )
-        portkey = config.to_portkey_config()
-        assert portkey["strategy"]["mode"] == "loadbalance"
-        assert portkey["strategy"]["on_status_codes"] == [429, 500]
-        assert len(portkey["targets"]) == 2
-        assert portkey["targets"][0]["weight"] == 0.6
-        assert portkey["targets"][0]["override_params"]["model"] == "anthropic.claude-sonnet-4-20250514-v1:0"
-
     def test_metadata_defaults(self) -> None:
         config = RoutingConfig(
             strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
@@ -212,6 +190,125 @@ class TestRoutingConfig:
         )
         assert config.metadata.version == 1
         assert config.metadata.created_by == "system"
+
+    # ── agentgateway backend renderer (ADR-017) ──────────────────────────────
+
+    def test_to_agentgateway_fallback_one_group_per_target(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK, on_status_codes=[429, 500]),
+            targets=[
+                RoutingTarget(
+                    name="primary",
+                    provider="bedrock",
+                    override_params={"model": "anthropic.claude-sonnet-4-20250514-v1:0"},
+                ),
+                RoutingTarget(
+                    name="fallback",
+                    provider="anthropic",
+                    override_params={"model": "claude-sonnet-4-20250514"},
+                ),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # fallback -> ordered priority groups, one target each
+        assert len(backend["groups"]) == 2
+        g0 = backend["groups"][0]["providers"][0]
+        assert g0["name"] == "primary"
+        assert g0["provider"]["bedrock"]["model"] == "anthropic.claude-sonnet-4-20250514-v1:0"
+        # Bedrock gets ambient AWS SigV4 auth
+        assert g0["policies"]["backendAuth"]["aws"] == {}
+        g1 = backend["groups"][1]["providers"][0]
+        assert g1["provider"]["anthropic"]["model"] == "claude-sonnet-4-20250514"
+
+    def test_to_agentgateway_loadbalance_single_group(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.LOADBALANCE),
+            targets=[
+                RoutingTarget(name="a", provider="bedrock", weight=0.6),
+                RoutingTarget(name="b", provider="anthropic", weight=0.4),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # loadbalance -> one group with all providers
+        assert len(backend["groups"]) == 1
+        assert len(backend["groups"][0]["providers"]) == 2
+
+    def test_to_agentgateway_provider_key_mapping(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(name="o", provider="openai", override_params={"model": "gpt-4o"}),
+                RoutingTarget(name="z", provider="azure-openai"),
+            ],
+        )
+        backend = config.to_agentgateway_backend()
+        # openai -> openAI, azure-openai -> azure (agentgateway provider keys)
+        assert "openAI" in backend["groups"][0]["providers"][0]["provider"]
+        assert "azure" in backend["groups"][1]["providers"][0]["provider"]
+
+    # ── migration warnings: lossy renders are surfaced, not silent ───────────
+
+    def test_warnings_empty_for_clean_fallback(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(name="primary", provider="bedrock"),
+                RoutingTarget(name="fallback", provider="anthropic"),
+            ],
+        )
+        assert config.migration_warnings() == []
+
+    def test_warning_for_conditional(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(
+                mode=StrategyMode.CONDITIONAL,
+                conditions=[
+                    RoutingCondition(query={"max_tokens": {"$lte": 100}}, then="small"),
+                    RoutingCondition(default="big"),
+                ],
+            ),
+            targets=[
+                RoutingTarget(name="small", provider="bedrock"),
+                RoutingTarget(name="big", provider="bedrock"),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("conditional routing has no agentgateway equivalent" in w for w in warnings)
+
+    def test_warning_for_on_status_codes(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK, on_status_codes=[429, 503]),
+            targets=[RoutingTarget(name="a", provider="bedrock")],
+        )
+        warnings = config.migration_warnings()
+        assert any("on_status_codes" in w for w in warnings)
+
+    def test_warning_for_loadbalance_weights(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.LOADBALANCE),
+            targets=[
+                RoutingTarget(name="a", provider="bedrock", weight=0.6),
+                RoutingTarget(name="b", provider="anthropic", weight=0.4),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("weights" in w and "not honored" in w for w in warnings)
+
+    def test_warning_for_per_target_retry_and_virtual_key(self) -> None:
+        config = RoutingConfig(
+            strategy=RoutingStrategy(mode=StrategyMode.FALLBACK),
+            targets=[
+                RoutingTarget(
+                    name="a",
+                    provider="bedrock",
+                    retry={"attempts": 2},
+                    virtual_key="vk-123",
+                ),
+            ],
+        )
+        warnings = config.migration_warnings()
+        assert any("retry config" in w for w in warnings)
+        assert any("virtual_key" in w for w in warnings)
 
 
 class TestRoutingConfigSummary:
@@ -278,43 +375,12 @@ class TestAuthorization:
         assert json.loads(result["body"])["error"]["code"] == "forbidden"
 
 
-# -- Built-in config loading ---------------------------------------------------
-
-
-class TestBuiltinConfigs:
-    def test_load_builtin_configs_from_directory(self, tmp_path: Path) -> None:
-        """Verify built-in configs load from a directory of JSON files."""
-        (tmp_path / "test-config.json").write_text(
-            json.dumps({"strategy": {"mode": "fallback"}, "targets": [{"provider": "bedrock"}]})
-        )
-        with patch("routing_config.handler.CONFIGS_DIR", str(tmp_path)):
-            import routing_config.handler as mod
-
-            mod._BUILTIN_CONFIGS = None
-            configs = _load_builtin_configs()
-
-        assert "test-config" in configs
-        assert configs["test-config"]["strategy"]["mode"] == "fallback"
-
-    def test_missing_directory_returns_empty(self) -> None:
-        with patch("routing_config.handler.CONFIGS_DIR", "/nonexistent/path"):
-            configs = _load_builtin_configs()
-        assert configs == {}
-
-
 # -- Handler CRUD tests --------------------------------------------------------
 
 
 class TestHandlerListConfigs:
     @patch("routing_config.handler._list_custom_configs")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_list_returns_builtin_and_custom(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {
-            "fallback-anthropic": {
-                "strategy": {"mode": "fallback"},
-                "targets": [{"provider": "bedrock"}, {"provider": "anthropic"}],
-            }
-        }
+    def test_list_returns_custom(self, mock_custom: Any) -> None:
         mock_custom.return_value = [
             {
                 "config_name": "my-custom",
@@ -329,17 +395,12 @@ class TestHandlerListConfigs:
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["total"] == 2
+        assert body["total"] == 1
         names = [c["name"] for c in body["configs"]]
-        assert "fallback-anthropic" in names
         assert "my-custom" in names
 
     @patch("routing_config.handler._list_custom_configs")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_list_dynamo_failure_still_returns_builtin(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {
-            "cost-optimized": {"strategy": {"mode": "conditional"}, "targets": [{"provider": "bedrock"}]},
-        }
+    def test_list_dynamo_failure_returns_empty(self, mock_custom: Any) -> None:
         mock_custom.side_effect = ClientError(
             {"Error": {"Code": "ServiceUnavailable", "Message": "DDB down"}},
             "Scan",
@@ -350,27 +411,12 @@ class TestHandlerListConfigs:
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["total"] == 1
+        assert body["total"] == 0
 
 
 class TestHandlerGetConfig:
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_get_builtin(self, mock_builtin: Any) -> None:
-        config_data = {"strategy": {"mode": "fallback"}, "targets": [{"provider": "bedrock"}]}
-        mock_builtin.return_value = {"fallback-anthropic": config_data}
-
-        event = _make_function_url_event("GET", "/routing/configs/fallback-anthropic")
-        result = handler(event)
-
-        assert result["statusCode"] == 200
-        body = json.loads(result["body"])
-        assert body["builtin"] is True
-        assert body["config"]["strategy"]["mode"] == "fallback"
-
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_get_custom(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_get_custom(self, mock_custom: Any) -> None:
         mock_custom.return_value = {"strategy": {"mode": "loadbalance"}, "targets": []}
 
         event = _make_function_url_event("GET", "/routing/configs/my-config")
@@ -381,9 +427,7 @@ class TestHandlerGetConfig:
         assert body["builtin"] is False
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_get_not_found(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_get_not_found(self, mock_custom: Any) -> None:
         mock_custom.return_value = None
 
         event = _make_function_url_event("GET", "/routing/configs/nonexistent")
@@ -395,9 +439,7 @@ class TestHandlerGetConfig:
 class TestHandlerCreateConfig:
     @patch("routing_config.handler._put_custom_config")
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_success(self, mock_builtin: Any, mock_existing: Any, mock_put: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_success(self, mock_existing: Any, mock_put: Any) -> None:
         mock_existing.return_value = None
 
         body = {
@@ -416,24 +458,8 @@ class TestHandlerCreateConfig:
         assert body_resp["name"] == "my-new-config"
         mock_put.assert_called_once()
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_conflict_with_builtin(self, mock_builtin: Any) -> None:
-        mock_builtin.return_value = {"cost-optimized": {}}
-
-        body = {
-            "name": "cost-optimized",
-            "strategy": {"mode": "fallback"},
-            "targets": [{"name": "t", "provider": "bedrock"}],
-        }
-        event = _make_function_url_event("POST", "/routing/configs", body)
-        result = handler(event)
-
-        assert result["statusCode"] == 409
-
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_conflict_with_existing_custom(self, mock_builtin: Any, mock_existing: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_conflict_with_existing_custom(self, mock_existing: Any) -> None:
         mock_existing.return_value = {"strategy": {"mode": "fallback"}}
 
         body = {
@@ -447,10 +473,7 @@ class TestHandlerCreateConfig:
         assert result["statusCode"] == 409
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_missing_name(self, mock_builtin: Any, mock_existing: Any) -> None:
-        mock_builtin.return_value = {}
-
+    def test_create_missing_name(self, mock_existing: Any) -> None:
         body = {
             "strategy": {"mode": "fallback"},
             "targets": [{"name": "t", "provider": "bedrock"}],
@@ -461,9 +484,7 @@ class TestHandlerCreateConfig:
         assert result["statusCode"] == 400
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_invalid_config(self, mock_builtin: Any, mock_existing: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_invalid_config(self, mock_existing: Any) -> None:
         mock_existing.return_value = None
 
         body = {
@@ -491,9 +512,7 @@ class TestHandlerCreateConfig:
 class TestHandlerUpdateConfig:
     @patch("routing_config.handler._put_custom_config")
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_success(self, mock_builtin: Any, mock_existing: Any, mock_put: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_update_success(self, mock_existing: Any, mock_put: Any) -> None:
         mock_existing.return_value = {"strategy": {"mode": "fallback"}}
 
         body = {
@@ -509,23 +528,8 @@ class TestHandlerUpdateConfig:
         assert result["statusCode"] == 200
         mock_put.assert_called_once()
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_builtin_forbidden(self, mock_builtin: Any) -> None:
-        mock_builtin.return_value = {"cost-optimized": {}}
-
-        body = {
-            "strategy": {"mode": "fallback"},
-            "targets": [{"name": "t", "provider": "bedrock"}],
-        }
-        event = _make_function_url_event("PUT", "/routing/configs/cost-optimized", body)
-        result = handler(event)
-
-        assert result["statusCode"] == 403
-
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_not_found(self, mock_builtin: Any, mock_existing: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_update_not_found(self, mock_existing: Any) -> None:
         mock_existing.return_value = None
 
         body = {
@@ -540,9 +544,7 @@ class TestHandlerUpdateConfig:
 
 class TestHandlerDeleteConfig:
     @patch("routing_config.handler._delete_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_delete_success(self, mock_builtin: Any, mock_delete: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_delete_success(self, mock_delete: Any) -> None:
         mock_delete.return_value = True
 
         event = _make_function_url_event("DELETE", "/routing/configs/my-config")
@@ -550,19 +552,8 @@ class TestHandlerDeleteConfig:
 
         assert result["statusCode"] == 200
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_delete_builtin_forbidden(self, mock_builtin: Any) -> None:
-        mock_builtin.return_value = {"fallback-anthropic": {}}
-
-        event = _make_function_url_event("DELETE", "/routing/configs/fallback-anthropic")
-        result = handler(event)
-
-        assert result["statusCode"] == 403
-
     @patch("routing_config.handler._delete_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_delete_not_found(self, mock_builtin: Any, mock_delete: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_delete_not_found(self, mock_delete: Any) -> None:
         mock_delete.return_value = False
 
         event = _make_function_url_event("DELETE", "/routing/configs/nonexistent")
@@ -593,18 +584,14 @@ class TestHandlerStorageErrors:
         assert json.loads(result["body"])["status"] == "healthy"
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_get_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_get_storage_error(self, mock_custom: Any) -> None:
         mock_custom.side_effect = _client_error()
         result = handler(_make_function_url_event("GET", "/routing/configs/x"))
         assert result["statusCode"] == 502
         assert json.loads(result["body"])["error"]["code"] == "upstream_error"
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_conflict_check_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_conflict_check_storage_error(self, mock_custom: Any) -> None:
         mock_custom.side_effect = _client_error()
         body = {"name": "c", "strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
         result = handler(_make_function_url_event("POST", "/routing/configs", body))
@@ -612,27 +599,21 @@ class TestHandlerStorageErrors:
 
     @patch("routing_config.handler._put_custom_config")
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_put_storage_error(self, mock_builtin: Any, mock_custom: Any, mock_put: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_put_storage_error(self, mock_custom: Any, mock_put: Any) -> None:
         mock_custom.return_value = None
         mock_put.side_effect = _client_error("PutItem")
         body = {"name": "c", "strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
         result = handler(_make_function_url_event("POST", "/routing/configs", body))
         assert result["statusCode"] == 502
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_invalid_config(self, mock_builtin: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_update_invalid_config(self) -> None:
         body = {"strategy": {"mode": "loadbalance"}, "targets": []}
         result = handler(_make_function_url_event("PUT", "/routing/configs/x", body))
         assert result["statusCode"] == 400
         assert json.loads(result["body"])["error"]["code"] == "validation_failed"
 
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_existence_check_storage_error(self, mock_builtin: Any, mock_custom: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_update_existence_check_storage_error(self, mock_custom: Any) -> None:
         mock_custom.side_effect = _client_error()
         body = {"strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
         result = handler(_make_function_url_event("PUT", "/routing/configs/x", body))
@@ -640,9 +621,7 @@ class TestHandlerStorageErrors:
 
     @patch("routing_config.handler._put_custom_config")
     @patch("routing_config.handler._get_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_update_put_storage_error(self, mock_builtin: Any, mock_custom: Any, mock_put: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_update_put_storage_error(self, mock_custom: Any, mock_put: Any) -> None:
         mock_custom.return_value = {"strategy": {"mode": "fallback"}}
         mock_put.side_effect = _client_error("PutItem")
         body = {"strategy": {"mode": "fallback"}, "targets": [{"name": "t", "provider": "bedrock"}]}
@@ -650,25 +629,23 @@ class TestHandlerStorageErrors:
         assert result["statusCode"] == 502
 
     @patch("routing_config.handler._delete_custom_config")
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_delete_storage_error(self, mock_builtin: Any, mock_delete: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_delete_storage_error(self, mock_delete: Any) -> None:
         mock_delete.side_effect = _client_error("DeleteItem")
         result = handler(_make_function_url_event("DELETE", "/routing/configs/x"))
         assert result["statusCode"] == 502
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_create_body_not_object(self, mock_builtin: Any) -> None:
-        mock_builtin.return_value = {}
+    def test_create_body_not_object(self) -> None:
         event = _make_function_url_event("POST", "/routing/configs")
         event["body"] = "[1, 2, 3]"
         result = handler(event)
         assert result["statusCode"] == 400
         assert json.loads(result["body"])["error"]["code"] == "validation_failed"
 
-    @patch("routing_config.handler._get_builtin_configs")
-    def test_unhandled_error_returns_500(self, mock_builtin: Any) -> None:
-        mock_builtin.side_effect = RuntimeError("boom")
+    @patch("routing_config.handler._list_custom_configs")
+    def test_unhandled_error_returns_500(self, mock_custom: Any) -> None:
+        # A non-ClientError from the scan escapes _list_configs' ClientError catch
+        # and trips the handler's outer catch-all -> 500.
+        mock_custom.side_effect = RuntimeError("boom")
         result = handler(_make_function_url_event("GET", "/routing/configs"))
         assert result["statusCode"] == 500
         assert json.loads(result["body"])["error"]["code"] == "internal_error"
@@ -707,67 +684,7 @@ class TestPropertyBased:
             "body": body_text,
             "isBase64Encoded": False,
         }
-        with patch("routing_config.handler._get_builtin_configs", return_value={}):
+        with patch("routing_config.handler._get_custom_config", return_value=None):
             result = handler(event)
         assert "statusCode" in result
         assert result["statusCode"] in (200, 201, 400, 403, 404, 405, 409, 500)
-
-
-# -- Portkey config JSON file tests -------------------------------------------
-
-
-class TestPortkeyConfigFiles:
-    """Validate the static Portkey config JSON files."""
-
-    @pytest.fixture
-    def configs_dir(self) -> Path:
-        return Path(__file__).resolve().parent.parent / "infrastructure" / "portkey-configs"
-
-    def test_cost_optimized_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "cost-optimized.json").read_text())
-        assert data["strategy"]["mode"] == "conditional"
-        assert len(data["strategy"]["conditions"]) == 3
-        assert len(data["targets"]) == 2
-        target_names = [t["name"] for t in data["targets"]]
-        assert "haiku-target" in target_names
-        assert "sonnet-target" in target_names
-
-    def test_ab_test_template_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "ab-test-template.json").read_text())
-        assert data["strategy"]["mode"] == "loadbalance"
-        assert len(data["targets"]) == 2
-        weights = [t["weight"] for t in data["targets"]]
-        assert sum(weights) == pytest.approx(1.0)
-        names = [t["name"] for t in data["targets"]]
-        assert "control" in names
-        assert "variant" in names
-
-    def test_lowest_latency_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "lowest-latency.json").read_text())
-        assert data["strategy"]["mode"] == "loadbalance"
-        assert len(data["targets"]) == 3
-        weights = [t["weight"] for t in data["targets"]]
-        assert sum(weights) == pytest.approx(1.0)
-        providers = [t["provider"] for t in data["targets"]]
-        assert "bedrock" in providers
-        assert "anthropic" in providers
-        assert "openai" in providers
-
-    def test_fallback_anthropic_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "fallback-anthropic.json").read_text())
-        assert data["strategy"]["mode"] == "fallback"
-
-    def test_fallback_openai_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "fallback-openai.json").read_text())
-        assert data["strategy"]["mode"] == "fallback"
-
-    def test_loadbalance_multi_valid_json(self, configs_dir: Path) -> None:
-        data = json.loads((configs_dir / "loadbalance-multi.json").read_text())
-        assert data["strategy"]["mode"] == "loadbalance"
-
-    def test_all_configs_are_valid_json(self, configs_dir: Path) -> None:
-        """Every .json file in portkey-configs/ should be valid JSON."""
-        for config_file in configs_dir.glob("*.json"):
-            data = json.loads(config_file.read_text())
-            assert "strategy" in data, f"{config_file.name} missing 'strategy' key"
-            assert "targets" in data, f"{config_file.name} missing 'targets' key"

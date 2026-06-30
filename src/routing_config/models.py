@@ -13,7 +13,7 @@ _MIN_PATH_PARTS_WITH_NAME = 3
 
 
 class StrategyMode(StrEnum):
-    """Supported Portkey routing strategy modes."""
+    """Supported routing strategy modes."""
 
     LOADBALANCE = "loadbalance"
     FALLBACK = "fallback"
@@ -35,7 +35,7 @@ class RoutingTarget(BaseModel):
         le=1.0,
         description="Traffic weight for loadbalance mode (0.0-1.0)",
     )
-    virtual_key: str | None = Field(default=None, description="Portkey virtual key for this target")
+    virtual_key: str | None = Field(default=None, description="Provider virtual-key reference for this target")
     retry: dict[str, Any] | None = Field(
         default=None,
         description="Per-target retry config (attempts, on_status_codes)",
@@ -75,7 +75,7 @@ class ConfigMetadata(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    """Complete routing configuration for Portkey."""
+    """Complete provider routing configuration."""
 
     strategy: RoutingStrategy
     targets: list[RoutingTarget] = Field(min_length=1, description="At least one routing target is required")
@@ -116,31 +116,107 @@ class RoutingConfig(BaseModel):
                     raise ValueError(msg)
         return self
 
-    def to_portkey_config(self) -> dict[str, Any]:
-        """Convert to Portkey-native JSON config format."""
-        config: dict[str, Any] = {
-            "strategy": {"mode": self.strategy.mode.value},
+    def to_agentgateway_backend(self) -> dict[str, Any]:
+        """Render this routing config as an agentgateway AI-backend block (ADR-017).
+
+        Maps the routing strategy onto agentgateway's ``ai.groups`` priority
+        tiers (the shape under ``backends: - ai:``):
+
+        - **fallback**: each target becomes its own priority group, in order.
+          agentgateway tries group 0, then group 1, etc., which reproduces an
+          ordered fallback chain. The ``on_status_codes`` trigger has no
+          per-edge equivalent; agentgateway fails over on connection/health
+          eviction, so the mapping is documented as approximate.
+        - **loadbalance**: all targets in ONE group; agentgateway load-balances
+          across a group with power-of-two-choices. Per-target ``weight`` is
+          carried but agentgateway weighting is capacity-based, not 0-1 ratios.
+        - **conditional**: agentgateway has no request-field predicate routing
+          (e.g. on max_tokens), so the conditions are dropped and the targets
+          collapse to a single priority-ordered fallback. This is a known gap
+          (ADR-017); conditional configs should be flagged on migration.
+
+        Returns the value to place under a route's ``backends: - ai:`` key.
+        """
+        provider_key = {
+            "bedrock": "bedrock",
+            "anthropic": "anthropic",
+            "openai": "openAI",
+            "azure-openai": "azure",
+            "azure": "azure",
+            "google": "gemini",
         }
+
+        def provider_block(target: RoutingTarget) -> dict[str, Any]:
+            key = provider_key.get(target.provider, target.provider)
+            spec: dict[str, Any] = {}
+            model = target.override_params.get("model")
+            if model:
+                spec["model"] = model
+            entry: dict[str, Any] = {"name": target.name, "provider": {key: spec}}
+            if key == "bedrock":
+                # Bedrock uses ambient ECS task-role creds + SigV4.
+                entry["policies"] = {"backendAuth": {"aws": {}}}
+            return entry
+
+        if self.strategy.mode == StrategyMode.LOADBALANCE:
+            groups = [{"providers": [provider_block(t) for t in self.targets]}]
+        else:
+            # fallback + conditional both collapse to ordered priority groups.
+            groups = [{"providers": [provider_block(t)]} for t in self.targets]
+
+        return {"groups": groups}
+
+    def migration_warnings(self) -> list[str]:
+        """Return human-readable warnings for every lossy part of the render.
+
+        agentgateway's ``ai.groups`` model does not reproduce all of the
+        strategy semantics this config can express. Rendering silently drops
+        the unsupported parts, so this method surfaces exactly what was lost.
+        The handler attaches these to the API response, logs them, and emits a
+        metric, so a lossy migration is loud rather than silent (ADR-017).
+        """
+        warnings: list[str] = []
+
+        if self.strategy.mode == StrategyMode.CONDITIONAL:
+            warnings.append(
+                "conditional routing has no agentgateway equivalent: the "
+                f"{len(self.strategy.conditions)} request-predicate condition(s) "
+                "are dropped and the targets collapse to an ordered fallback chain. "
+                "Split into per-condition configs or route by model alias instead."
+            )
+
         if self.strategy.on_status_codes:
-            config["strategy"]["on_status_codes"] = self.strategy.on_status_codes
-        if self.strategy.conditions:
-            config["strategy"]["conditions"] = [c.model_dump(exclude_none=True) for c in self.strategy.conditions]
+            warnings.append(
+                f"strategy.on_status_codes {self.strategy.on_status_codes} is ignored: "
+                "agentgateway fails over on connection/health eviction, not on "
+                "specific upstream status codes."
+            )
 
-        targets = []
-        for t in self.targets:
-            target: dict[str, Any] = {"name": t.name, "provider": t.provider}
-            if t.override_params:
-                target["override_params"] = t.override_params
-            if t.weight is not None:
-                target["weight"] = t.weight
-            if t.virtual_key:
-                target["virtual_key"] = t.virtual_key
-            if t.retry:
-                target["retry"] = t.retry
-            targets.append(target)
+        if self.strategy.mode == StrategyMode.LOADBALANCE:
+            weighted = [t.name for t in self.targets if t.weight is not None]
+            if weighted:
+                warnings.append(
+                    f"loadbalance weights on {weighted} are not honored as 0-1 ratios: "
+                    "agentgateway load-balances within a group by capacity-aware "
+                    "power-of-two-choices, so the configured split is approximate."
+                )
 
-        config["targets"] = targets
-        return config
+        retried = [t.name for t in self.targets if t.retry]
+        if retried:
+            warnings.append(
+                f"per-target retry config on {retried} is ignored: agentgateway has "
+                "no per-target retry-on-status equivalent in the ai.groups backend."
+            )
+
+        virtual_keyed = [t.name for t in self.targets if t.virtual_key]
+        if virtual_keyed:
+            warnings.append(
+                f"virtual_key on {virtual_keyed} is not rendered: agentgateway resolves "
+                "provider credentials from backendAuth (task-role SigV4 for Bedrock, "
+                "env-injected keys otherwise), not per-target virtual keys."
+            )
+
+        return warnings
 
 
 class RoutingConfigSummary(BaseModel):

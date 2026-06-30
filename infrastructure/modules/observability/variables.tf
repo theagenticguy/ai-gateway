@@ -24,22 +24,6 @@ variable "enable_cost_widgets" {
   default     = false
 }
 
-variable "enable_cache_widgets" {
-  description = "Whether to include cache performance widgets on the dashboard"
-  type        = bool
-  default     = false
-}
-
-# ---------------------------------------------------------------------------
-# Team list for dashboard widgets
-# ---------------------------------------------------------------------------
-
-variable "teams_list" {
-  description = "List of team names for per-team cache dashboard widgets"
-  type        = list(string)
-  default     = []
-}
-
 # ---------------------------------------------------------------------------
 # SNS / Notifications
 # ---------------------------------------------------------------------------

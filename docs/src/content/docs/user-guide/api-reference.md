@@ -4,7 +4,7 @@ description: Endpoints, headers, request/response formats, and rate limits.
 sidebar:
   order: 3
 ---
-The AI Gateway exposes two endpoints that mirror the native APIs of OpenAI and Anthropic. All requests require a valid JWT and a provider routing header.
+The AI Gateway is the [agentgateway](https://github.com/agentgateway/agentgateway) proxy. It exposes two endpoints that mirror the native APIs of OpenAI and Anthropic on a single port. All requests require a valid JWT. Provider and model selection is handled server-side by the rendered gateway config -- there is no provider routing header.
 
 ---
 
@@ -15,6 +15,8 @@ The AI Gateway exposes two endpoints that mirror the native APIs of OpenAI and A
 | `POST /v1/chat/completions` | OpenAI Chat Completions | Standard OpenAI-compatible chat completions |
 | `POST /v1/messages` | Anthropic Messages | Standard Anthropic-compatible messages |
 
+Both endpoints are served on the same port (`8787` behind the ALB); agentgateway selects the route type from the path suffix.
+
 ---
 
 ## Required Headers
@@ -24,26 +26,27 @@ Every request must include:
 | Header | Value | Description |
 |---|---|---|
 | `Authorization` | `Bearer <jwt>` | Cognito M2M JWT access token |
-| `x-portkey-provider` | `anthropic`, `openai`, `google`, or `azure-openai` | Tells the gateway which upstream provider to route to |
 
-:::caution[Missing provider header]
-If `x-portkey-provider` is omitted, the gateway returns:
-```json
-{"error": "provider is not set"}
-```
+:::note[No provider header]
+Earlier (Portkey-based) releases required an `x-portkey-provider` header. agentgateway removed it: the active provider and its failover chain live in the gateway's rendered config, and the gateway maps the requested model onto a backend via `modelAliases`. Do not send `x-portkey-*` headers.
 :::
 
 
 ---
 
-## Provider Values
+## Provider and Model Selection
 
-| Value | Upstream Provider | Typical Models |
-|---|---|---|
-| `anthropic` | Anthropic | `claude-sonnet-4-20250514`, `claude-opus-4-20250514` |
-| `openai` | OpenAI | `gpt-4.1`, `gpt-4.1-mini`, `o3` |
-| `google` | Google | `gemini-2.5-pro`, `gemini-2.5-flash` |
-| `azure-openai` | Azure OpenAI | Deployment-specific model names |
+The gateway routes to providers using a server-side priority-group failover chain defined in its config (the default ships Bedrock as primary with Anthropic-direct as fallback). agentgateway types eight providers; this deployment provisions five:
+
+| Provider | Typical Models |
+|---|---|
+| Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` |
+| Anthropic | `claude-sonnet-4-20250514`, `claude-opus-4-20250514` |
+| OpenAI | `gpt-4.1`, `gpt-4.1-mini`, `o3` |
+| Google | `gemini-2.5-pro`, `gemini-2.5-flash` |
+| Azure OpenAI | Deployment-specific model names |
+
+The `model` field in your request body is matched against the gateway's `modelAliases` (for example, `gpt-4*` can be aliased to a Bedrock model) and the active provider chain. To change which providers are reachable or their failover order, update the rendered config (see [Routing Strategies](/ai-gateway/user-guide/routing-strategies/)).
 
 ---
 
@@ -55,7 +58,6 @@ If `x-portkey-provider` is omitted, the gateway returns:
 curl -X POST "${GATEWAY_URL}/v1/chat/completions" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -H "x-portkey-provider: openai" \
   -d '{
     "model": "gpt-4.1",
     "messages": [
@@ -98,7 +100,6 @@ curl -X POST "${GATEWAY_URL}/v1/chat/completions" \
 curl -X POST "${GATEWAY_URL}/v1/messages" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -H "x-portkey-provider: anthropic" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
     "model": "claude-sonnet-4-20250514",
@@ -131,15 +132,14 @@ curl -X POST "${GATEWAY_URL}/v1/messages" \
 }
 ```
 
-### Routing Anthropic Models via OpenAI Format
+### Reaching Anthropic Models via OpenAI Format
 
-You can route requests to Anthropic models using the OpenAI Chat Completions format. The gateway translates the request on the fly:
+You can request Anthropic models through the OpenAI Chat Completions endpoint by setting the `model` field. agentgateway translates the request format on the fly and routes to the provider chain that serves that model:
 
 ```bash
 curl -X POST "${GATEWAY_URL}/v1/chat/completions" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -H "x-portkey-provider: anthropic" \
   -d '{
     "model": "claude-sonnet-4-20250514",
     "messages": [
@@ -149,7 +149,7 @@ curl -X POST "${GATEWAY_URL}/v1/chat/completions" \
   }'
 ```
 
-This is how agents like Continue.dev and LangChain access Anthropic models through the OpenAI-compatible endpoint.
+This is how agents like Continue.dev and LangChain reach Anthropic models through the OpenAI-compatible endpoint.
 
 ---
 
@@ -168,7 +168,7 @@ When WAF rate-limits a request, the gateway returns HTTP 403 with an `x-amzn-waf
 
 ### Team Layer (RPM + Daily Tokens)
 
-Per-team rate limits are enforced via DynamoDB atomic counters (C.1). Each team's tier defines two limits:
+Per-team rate limits are enforced via DynamoDB atomic counters (C.1, available when the Admin API is enabled). Each team's tier defines two limits:
 
 | Tier | RPM | Daily Tokens |
 |---|---|---|
@@ -177,7 +177,7 @@ Per-team rate limits are enforced via DynamoDB atomic counters (C.1). Each team'
 | premium | 500 | 10,000,000 |
 | enterprise | unlimited | unlimited |
 
-When a team exceeds its limit, the response includes:
+When a team exceeds its limit, the rate limiter returns:
 
 ```json
 {
@@ -187,8 +187,12 @@ When a team exceeds its limit, the response includes:
 }
 ```
 
+### Budget Enforcement Layer
+
+When budgets are enabled, the `budget_enforcement` Lambda runs in-path as an agentgateway `promptGuard` request webhook. When a team's budget is exhausted, the Lambda returns agentgateway's `{"action": "reject"}` contract, which agentgateway maps to an **HTTP 429** for the client. See [Error Codes](/ai-gateway/reference/error-codes/#429-too-many-requests).
+
 :::tip[Graceful degradation]
-If DynamoDB is unreachable, requests are allowed through. Rate limiting never blocks requests due to infrastructure failures.
+The budget Lambda fails **open**: on a DynamoDB outage it allows the request through rather than blocking. Enforcement never becomes a single point of failure on the inference path.
 :::
 
 

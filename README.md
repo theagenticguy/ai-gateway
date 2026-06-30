@@ -8,7 +8,7 @@
 
 ## Overview
 
-AI Gateway is a lightweight LLM inference gateway on AWS that routes AI agent requests through [Portkey AI Gateway OSS](https://github.com/Portkey-AI/gateway) to multiple model providers -- Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI -- via a unified API. It serves both the OpenAI Chat Completions format (`/v1/chat/completions`) and the Anthropic Messages format (`/v1/messages`) natively, so every major coding agent works out of the box.
+AI Gateway is a lightweight LLM inference gateway on AWS that routes AI agent requests through [agentgateway](https://github.com/agentgateway/agentgateway) to multiple model providers -- Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI -- via a unified API. It serves both the OpenAI Chat Completions format (`/v1/chat/completions`) and the Anthropic Messages format (`/v1/messages`) natively, so every major coding agent works out of the box. The data plane moved from Portkey OSS to agentgateway in [ADR-017](adr/017-agentgateway-data-plane-spike.md); the control plane and identity layer are unchanged.
 
 Authentication uses Cognito M2M (`client_credentials`) with ALB-native JWT validation, eliminating the need for API Gateway and its per-request costs.
 
@@ -19,7 +19,7 @@ The infrastructure follows a single-region, two-AZ deployment on AWS:
 - **VPC** -- Two public subnets (ALB) and two private subnets (ECS tasks), with a single NAT Gateway for outbound internet and VPC endpoints for ECR, CloudWatch Logs, Secrets Manager, and S3.
 - **ALB** -- Application Load Balancer in public subnets with TLS 1.3, WAF v2 (AWS Managed Rules + IP rate limiting), and native JWT validation.
 - **Cognito** -- User Pool with M2M `client_credentials` grant, custom OAuth scopes, and JWKS endpoint for ALB signature verification.
-- **ECS Fargate** -- Portkey gateway container (port 8787) with an AWS OpenTelemetry Collector sidecar. Autoscales on CPU utilization and ALB request count.
+- **ECS Fargate** -- agentgateway container (port 8787, readiness on 15021) with an AWS OpenTelemetry Collector sidecar. Config is delivered inline; routing, providers, guardrail webhooks, and access-log shaping live in the rendered agentgateway YAML. Autoscales on CPU utilization and ALB request count.
 - **CloudWatch** -- Log groups for gateway and OTel collector, saved Logs Insights queries, and an operational dashboard (requests, errors, latency, top endpoints by provider).
 - **Secrets Manager** -- Stores provider API keys (OpenAI, Anthropic, Google, Azure) injected into ECS tasks at runtime.
 
@@ -164,7 +164,7 @@ All Terraform configuration lives in the `infrastructure/` directory.
 | `alb.tf` | Application Load Balancer, HTTPS/HTTP listeners, target group for gateway |
 | `alb_auth.tf` | ALB JWT validation listener (Cognito-backed, conditionally enabled) |
 | `cognito.tf` | Cognito User Pool, resource server (OAuth scopes), M2M client, domain |
-| `ecs.tf` | ECS Fargate cluster, service, Portkey gateway + OTel sidecar containers, autoscaling |
+| `ecs.tf` | ECS Fargate cluster, service, agentgateway data-plane + OTel sidecar containers, autoscaling |
 | `ecr.tf` | ECR repository with immutable tags, scan-on-push, lifecycle policy |
 | `iam.tf` | Task execution role (ECR + Secrets Manager) and task role (Bedrock + observability) |
 | `secrets.tf` | Secrets Manager entries for provider API keys (OpenAI, Anthropic, Google, Azure) |
@@ -184,13 +184,13 @@ The gateway uses Cognito machine-to-machine (M2M) authentication with ALB-native
 2. **Token issuance** -- Cognito returns a signed JWT access token (1-hour TTL) with the `https://gateway.internal/invoke` scope.
 3. **Request** -- The client sends requests to the ALB with `Authorization: Bearer <jwt>`.
 4. **ALB validation** -- The ALB validates the JWT signature against Cognito's JWKS endpoint, checks `iss`, `exp`, `nbf`, `iat`, and the required `scope` claim. Invalid tokens receive a 401 response directly from the ALB.
-5. **Forwarding** -- Valid requests are forwarded to the ECS Fargate target group running the Portkey gateway.
+5. **Forwarding** -- Valid requests are forwarded to the ECS Fargate target group running the agentgateway data plane.
 
 This approach adds zero additional cost and zero additional latency compared to API Gateway-based JWT validation. See [ADR-005](adr/005-alb-jwt-validation-over-api-gateway.md) and [ADR-007](adr/007-terraform-provider-upgrade-for-jwt.md) for details.
 
 ## Why Not LiteLLM?
 
-We evaluated LiteLLM and rejected it in [ADR-001](adr/001-portkey-oss-over-litellm.md). At evaluation time (March 2026), LiteLLM had 14 known CVEs including critical RCE and active SSRF exploitation, systemic memory leaks, and brittle database migrations. Days after our decision, [NetSPI disclosed a supply-chain compromise](https://www.netspi.com/blog/executive-blog/ai-ml-pentesting/litellm-supply-chain-compromise/) affecting LiteLLM (March 25, 2026), further validating this choice. This project uses Portkey OSS exclusively — LiteLLM is not a dependency at any layer.
+We evaluated LiteLLM and rejected it in [ADR-001](adr/001-portkey-oss-over-litellm.md). At evaluation time (March 2026), LiteLLM had 14 known CVEs including critical RCE and active SSRF exploitation, systemic memory leaks, and brittle database migrations. Days after our decision, [NetSPI disclosed a supply-chain compromise](https://www.netspi.com/blog/executive-blog/ai-ml-pentesting/litellm-supply-chain-compromise/) affecting LiteLLM (March 25, 2026), further validating this choice. The data plane has since moved to agentgateway ([ADR-017](adr/017-agentgateway-data-plane-spike.md)); LiteLLM is not a dependency at any layer.
 
 ## ADRs
 
@@ -209,11 +209,12 @@ Architectural Decision Records are in the `adr/` directory.
 | [009](adr/009-provider-routing-strategy.md) | Provider Routing Strategy | Accepted |
 | [010](adr/010-cost-attribution-pipeline.md) | Cost Attribution Pipeline via Lambda + CloudWatch Metrics | Accepted |
 | [011](adr/011-bedrock-guardrails-integration.md) | Bedrock Guardrails Integration for Content Safety Filtering | Accepted |
-| [012](adr/012-response-cache-strategy.md) | Response Cache Strategy with ElastiCache Redis | Accepted |
+| [012](adr/012-response-cache-strategy.md) | Response Cache Strategy with ElastiCache Redis | Superseded by 017 |
 | [013](adr/013-identity-center-saml-federation.md) | Identity Center SAML/OIDC Federation for User SSO | Accepted |
 | [014](adr/014-two-plane-architecture-split.md) | Two-Plane Architecture Split (ALB Inference + API Gateway Admin) | Accepted |
 | [015](adr/015-openai-responses-bedrock-mantle-proxy.md) | OpenAI Responses → Bedrock mantle proxy (openai provider + custom_host, no fork) | Accepted |
 | [016](adr/016-control-plane-api-foundation.md) | Control-Plane API Foundation (`gwcore` shared package) | Accepted |
+| [017](adr/017-agentgateway-data-plane-spike.md) | agentgateway as the data plane (replaces Portkey OSS) | Accepted |
 
 ## Scripts
 
