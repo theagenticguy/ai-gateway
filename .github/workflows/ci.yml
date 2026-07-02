@@ -53,16 +53,16 @@ jobs:
         run: uv sync --frozen
 
       - name: Ruff lint
-        run: uv run ruff check --output-format=github .
+        run: uv run --frozen ruff check --output-format=github .
 
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Pyright type check
-        run: uv run pyright src/
+        run: uv run --frozen pyright src/
 
       - name: Run tests with coverage
-        run: uv run pytest tests/ -v --tb=short
+        run: uv run --frozen pytest tests/ -v --tb=short
         if: hashFiles('tests/**/*.py') != ''
 
       - name: Upload coverage to Codecov
@@ -128,7 +128,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Bandit scan
-        run: uv run bandit -r src/ -f sarif -o bandit.sarif --exit-zero
+        run: uv run --frozen bandit -r src/ -f sarif -o bandit.sarif --exit-zero
 
       - name: Upload SARIF
         if: always()
@@ -181,7 +181,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Export locked dependencies
-        run: uv export --no-dev --no-hashes > requirements.txt
+        run: uv export --frozen --no-dev --no-hashes > requirements.txt
 
       - name: Audit Python dependencies
         run: uvx pip-audit -r requirements.txt --strict --desc
@@ -253,12 +253,12 @@ jobs:
         run: uv sync --frozen
 
       - name: License check
-        run: uv run --with pip-licenses==4.4.0 pip-licenses
+        run: uv run --frozen --with pip-licenses==4.4.0 pip-licenses
 
       - name: Generate reports
         run: |
-          uv run --with pip-licenses==4.4.0 pip-licenses --format=json --output-file=license-report.json
-          uv run --with pip-licenses==4.4.0 pip-licenses --format=markdown --output-file=license-report.md
+          uv run --frozen --with pip-licenses==4.4.0 pip-licenses --format=json --output-file=license-report.json
+          uv run --frozen --with pip-licenses==4.4.0 pip-licenses --format=markdown --output-file=license-report.md
 
       - name: Upload reports
         if: always()
