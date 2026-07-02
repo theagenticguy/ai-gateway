@@ -181,7 +181,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Export locked dependencies
-        run: uv export --no-dev --no-hashes > requirements.txt
+        run: uv export --frozen --no-dev --no-hashes > requirements.txt
 
       - name: Audit Python dependencies
         run: uvx pip-audit -r requirements.txt --strict --desc
