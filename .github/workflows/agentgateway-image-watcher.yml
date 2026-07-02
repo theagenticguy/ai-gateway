@@ -47,22 +47,59 @@ jobs:
           set -euo pipefail
           REPO="${UPSTREAM_REPO}"
 
-          # Anonymous pull token for the public GHCR repo.
-          TOKEN="$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO}:pull&service=ghcr.io" | jq -r .token)"
+          # GHCR's front-end intermittently returns transient 404s / 5xx / reset
+          # connections (observed 2026-07-01: `curl: (22) 404` on the manifest
+          # HEAD while the pin was verifiably current). Retry every registry call
+          # instead of reddening the scheduled run on a blip. curl's own
+          # --retry-all-errors covers transient 4xx (incl. 404); the outer loop
+          # adds exponential backoff across the whole invocation as a backstop.
+          curl_retry() {
+            local attempt=1 max=5 delay=3 out rc
+            while :; do
+              if out="$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+                             --connect-timeout 15 --max-time 60 "$@")"; then
+                printf '%s' "$out"
+                return 0
+              fi
+              rc=$?
+              if [ "$attempt" -ge "$max" ]; then
+                echo "::error::curl failed after ${max} attempts (exit ${rc})" >&2
+                return "$rc"
+              fi
+              echo "curl attempt ${attempt}/${max} failed (exit ${rc}); retrying in ${delay}s..." >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
 
-          # List tags, keep only semver (vX.Y.Z or X.Y.Z), drop .sig/.att and
-          # sha256- entries, sort by version, take the newest stable.
+          # Anonymous pull token for the public GHCR repo.
+          TOKEN="$(curl_retry "https://ghcr.io/token?scope=repository:${REPO}:pull&service=ghcr.io" | jq -r .token)"
+          if [ -z "${TOKEN}" ] || [ "${TOKEN}" = "null" ]; then
+            echo "::error::could not obtain anonymous pull token for ${REPO}"
+            exit 1
+          fi
+
+          # Fetch the tag list once and reuse it (both for the newest-stable pick
+          # and the v-prefix re-application) — one fewer network call, one fewer
+          # flake source than the previous double fetch.
+          TAGS="$(curl_retry -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${REPO}/tags/list?n=1000" | jq -r '.tags[]')"
+
+          # Keep only semver (vX.Y.Z or X.Y.Z), drop .sig/.att and sha256- entries,
+          # sort by version, take the newest stable.
           LATEST="$(
-            curl -fsSL -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${REPO}/tags/list?n=1000" \
-              | jq -r '.tags[]' \
+            printf '%s\n' "${TAGS}" \
               | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
               | sed 's/^v//' \
               | sort -t. -k1,1n -k2,2n -k3,3n \
               | tail -1
           )"
+          if [ -z "${LATEST}" ]; then
+            echo "::error::no semver tags found for ${REPO}"
+            exit 1
+          fi
           # Re-apply the upstream tag prefix: this repo's tags are vX.Y.Z at >=1.0.
-          if curl -fsSL -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${REPO}/tags/list?n=1000" \
-               | jq -r '.tags[]' | grep -qxF "v${LATEST}"; then
+          if printf '%s\n' "${TAGS}" | grep -qxF "v${LATEST}"; then
             REF="v${LATEST}"
           else
             REF="${LATEST}"
@@ -70,7 +107,7 @@ jobs:
 
           # Resolve the multi-arch index digest for that ref (Docker-Content-Digest).
           DIGEST="$(
-            curl -fsSL -I -H "Authorization: Bearer ${TOKEN}" \
+            curl_retry -I -H "Authorization: Bearer ${TOKEN}" \
               -H "Accept: application/vnd.oci.image.index.v1+json" \
               -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
               "https://ghcr.io/v2/${REPO}/manifests/${REF}" \
