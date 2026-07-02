@@ -24,6 +24,12 @@ dev = [
 ]
 
 [tool.uv]
+# Supply-chain cooldown (Semgrep uv-missing-dependency-cooldown): wait 7 days
+# before resolving newly published versions, so a compromised just-published
+# release is not pulled instantly. CI resolves with `uv sync --frozen` and runs
+# tools via `uv run --frozen`, so the committed lock is always honored; this
+# cooldown governs future re-resolution (e.g. `uv lock` / Dependabot bumps).
+exclude-newer = "7 days"
 constraint-dependencies = [
     "pygments>=2.20.0",  # CVE-2026-4539: ReDoS in AdlLexer
 ]
