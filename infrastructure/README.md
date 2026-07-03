@@ -55,6 +55,8 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | <a name="module_admin_api"></a> [admin\_api](#module\_admin\_api) | ./modules/admin_api | n/a |
 | <a name="module_appconfig"></a> [appconfig](#module\_appconfig) | ./modules/appconfig | n/a |
 | <a name="module_audit_log"></a> [audit\_log](#module\_audit\_log) | ./modules/audit_log | n/a |
+| <a name="module_audit_pipeline"></a> [audit\_pipeline](#module\_audit\_pipeline) | ./modules/audit_pipeline | n/a |
+| <a name="module_audit_query"></a> [audit\_query](#module\_audit\_query) | ./modules/audit_query | n/a |
 | <a name="module_auth"></a> [auth](#module\_auth) | ./modules/auth | n/a |
 | <a name="module_budgets"></a> [budgets](#module\_budgets) | ./modules/budgets | n/a |
 | <a name="module_chargeback"></a> [chargeback](#module\_chargeback) | ./modules/chargeback | n/a |
@@ -80,6 +82,7 @@ This root module composes 15 local sub-modules. The core data plane is always de
 |------|-------------|------|---------|:--------:|
 | <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment (dev or prod) | `string` | n/a | yes |
 | <a name="input_alarm_sns_topic_arns"></a> [alarm\_sns\_topic\_arns](#input\_alarm\_sns\_topic\_arns) | List of SNS topic ARNs for CloudWatch alarm notifications. If empty, a default topic is created. | `list(string)` | `[]` | no |
+| <a name="input_athena_results_expiry_days"></a> [athena\_results\_expiry\_days](#input\_athena\_results\_expiry\_days) | Lifecycle expiry (days) for objects in the Athena query-results bucket | `number` | `30` | no |
 | <a name="input_autoscaling_max_capacity"></a> [autoscaling\_max\_capacity](#input\_autoscaling\_max\_capacity) | Maximum number of ECS tasks for autoscaling | `number` | `6` | no |
 | <a name="input_autoscaling_min_capacity"></a> [autoscaling\_min\_capacity](#input\_autoscaling\_min\_capacity) | Minimum number of ECS tasks for autoscaling | `number` | `2` | no |
 | <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region to deploy into | `string` | `"us-east-1"` | no |
@@ -93,6 +96,8 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | <a name="input_enable_admin_api"></a> [enable\_admin\_api](#input\_enable\_admin\_api) | Enable the API Gateway admin plane (also enables team\_registration and routing modules) | `bool` | `false` | no |
 | <a name="input_enable_appconfig"></a> [enable\_appconfig](#input\_enable\_appconfig) | Enable AWS AppConfig for feature flag and dynamic configuration management | `bool` | `false` | no |
 | <a name="input_enable_audit_log"></a> [enable\_audit\_log](#input\_enable\_audit\_log) | Enable audit logging via Firehose to S3 | `bool` | `false` | no |
+| <a name="input_enable_audit_pipeline"></a> [enable\_audit\_pipeline](#input\_enable\_audit\_pipeline) | Enable the Firehose → Iceberg (S3 Tables) audit pipeline (ADR-016/017) | `bool` | `false` | no |
+| <a name="input_enable_audit_query"></a> [enable\_audit\_query](#input\_enable\_audit\_query) | Enable the Athena audit query surface (workgroup + named queries + results bucket) | `bool` | `false` | no |
 | <a name="input_enable_budgets"></a> [enable\_budgets](#input\_enable\_budgets) | Whether to deploy the budget and usage tracking DynamoDB tables | `bool` | `false` | no |
 | <a name="input_enable_chargeback"></a> [enable\_chargeback](#input\_enable\_chargeback) | Whether to deploy the monthly chargeback report pipeline (requires enable\_budgets) | `bool` | `false` | no |
 | <a name="input_enable_cost_attribution"></a> [enable\_cost\_attribution](#input\_enable\_cost\_attribution) | Whether to deploy the cost attribution Lambda pipeline | `bool` | `false` | no |
@@ -120,6 +125,7 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | <a name="input_p99_latency_threshold_ms"></a> [p99\_latency\_threshold\_ms](#input\_p99\_latency\_threshold\_ms) | P99 latency threshold in milliseconds that triggers the high latency alarm | `number` | `30000` | no |
 | <a name="input_project_name"></a> [project\_name](#input\_project\_name) | Project name used for resource naming | `string` | `"ai-gateway"` | no |
 | <a name="input_provider_down_minutes"></a> [provider\_down\_minutes](#input\_provider\_down\_minutes) | Number of consecutive 1-minute periods with zero requests before declaring a provider down | `number` | `10` | no |
+| <a name="input_single_nat_gateway"></a> [single\_nat\_gateway](#input\_single\_nat\_gateway) | Use a single shared NAT gateway (true = cheapest, dev default). Set false in prod for one NAT gateway per AZ (multi-AZ egress HA). | `bool` | `true` | no |
 | <a name="input_vpc_cidr"></a> [vpc\_cidr](#input\_vpc\_cidr) | CIDR block for the VPC | `string` | `"10.0.0.0/16"` | no |
 
 ## Outputs
