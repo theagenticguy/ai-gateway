@@ -103,6 +103,17 @@ resource "aws_iam_role_policy" "admin_api_lambda" {
   })
 }
 
+# ── Audit query policy attachment (least-priv Athena + S3 Tables read) ─────────
+# Attached only when the audit_query module is wired through root (non-empty
+# ARN). Grants the GET /audit route the Athena/s3tables/glue read + results
+# bucket rw scoped by modules/audit_query.
+
+resource "aws_iam_role_policy_attachment" "audit_query" {
+  count      = var.enable_budget_admin && var.audit_query_policy_arn != "" ? 1 : 0
+  role       = aws_iam_role.admin_api_lambda[0].name
+  policy_arn = var.audit_query_policy_arn
+}
+
 # ── CloudWatch log group ─────────────────────────────────────────────────────
 
 resource "aws_cloudwatch_log_group" "admin_api_lambda" {
@@ -136,6 +147,12 @@ resource "aws_lambda_function" "budget_admin_api" {
     variables = {
       BUDGETS_TABLE = var.budgets_table
       USAGE_TABLE   = var.usage_table
+      # Audit query surface (GET /audit). Empty unless the audit_query module is
+      # wired through root; the handler treats an empty workgroup as "not
+      # configured" and returns a 502 rather than attempting a query.
+      AUDIT_ATHENA_WORKGROUP = var.audit_athena_workgroup
+      AUDIT_ATHENA_CATALOG   = var.audit_athena_catalog
+      AUDIT_ATHENA_DATABASE  = var.audit_athena_database
     }
   }
 

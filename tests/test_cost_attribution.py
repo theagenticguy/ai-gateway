@@ -1086,6 +1086,157 @@ class TestPerTeamCacheMetrics:
         assert savings_by_team[0]["Unit"] == "None"
 
 
+# ── Per-team billing metrics (cost / tokens / requests by Team) ───────────────
+
+
+class TestPerTeamBillingMetrics:
+    """Per-team cost/token/request CloudWatch metrics in _publish_metrics.
+
+    Team lives only inside the ALB JWT (oidc_data), so it cannot be recovered by
+    a Logs Insights query. The dashboard's per-team cost/usage widgets read these
+    Team-dimensioned metrics. The existing [Provider, Model] datums must remain.
+    """
+
+    def _publish_and_collect(self, m: MetricResult) -> list[dict[str, Any]]:
+        from cost_attribution.handler import _publish_metrics
+
+        with patch("cost_attribution.handler.cloudwatch") as mock_cw:
+            _publish_metrics([m])
+            all_metric_data: list[dict[str, Any]] = []
+            for call in mock_cw.put_metric_data.call_args_list:
+                all_metric_data.extend(call[1]["MetricData"])
+        return all_metric_data
+
+    def test_estimated_cost_emitted_with_team_dimension(self) -> None:
+        m = MetricResult(
+            provider="bedrock",
+            model="anthropic.claude-opus-4-8",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            cost_usd=0.42,
+            team="platform",
+            user="u1",
+        )
+        data = self._publish_and_collect(m)
+
+        team_cost = [
+            md
+            for md in data
+            if md["MetricName"] == "EstimatedCostUsd" and md["Dimensions"] == [{"Name": "Team", "Value": "platform"}]
+        ]
+        assert len(team_cost) == 1
+        assert team_cost[0]["Value"] == 0.42
+        assert team_cost[0]["Unit"] == "None"
+
+    def test_tokens_used_emitted_with_team_dimension(self) -> None:
+        m = MetricResult(
+            provider="openai",
+            model="gpt-4",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            cost_usd=0.1,
+            team="infra",
+            user="u2",
+        )
+        data = self._publish_and_collect(m)
+
+        team_tokens = [
+            md
+            for md in data
+            if md["MetricName"] == "TokensUsed" and md["Dimensions"] == [{"Name": "Team", "Value": "infra"}]
+        ]
+        assert len(team_tokens) == 1
+        assert team_tokens[0]["Value"] == 150.0
+
+    def test_request_count_emitted_with_team_dimension(self) -> None:
+        m = MetricResult(
+            provider="openai",
+            model="gpt-4",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            cost_usd=0.01,
+            team="data-eng",
+            user="u3",
+        )
+        data = self._publish_and_collect(m)
+
+        team_reqs = [
+            md
+            for md in data
+            if md["MetricName"] == "RequestCount" and md["Dimensions"] == [{"Name": "Team", "Value": "data-eng"}]
+        ]
+        assert len(team_reqs) == 1
+        assert team_reqs[0]["Value"] == 1.0
+
+    def test_prompt_and_completion_tokens_emitted(self) -> None:
+        """PromptTokens/CompletionTokens (used by the token widgets) are emitted."""
+        m = MetricResult(
+            provider="bedrock",
+            model="anthropic.claude-sonnet-4-6",
+            prompt_tokens=120,
+            completion_tokens=30,
+            total_tokens=150,
+            cost_usd=0.05,
+            team="platform",
+            user="u1",
+        )
+        data = self._publish_and_collect(m)
+
+        prompt = [md for md in data if md["MetricName"] == "PromptTokens"]
+        completion = [md for md in data if md["MetricName"] == "CompletionTokens"]
+        assert len(prompt) == 1
+        assert prompt[0]["Value"] == 120.0
+        assert prompt[0]["Dimensions"] == [
+            {"Name": "Provider", "Value": "bedrock"},
+            {"Name": "Model", "Value": "anthropic.claude-sonnet-4-6"},
+        ]
+        assert len(completion) == 1
+        assert completion[0]["Value"] == 30.0
+
+    def test_provider_model_datums_still_emitted(self) -> None:
+        """Anti-goal guard: the existing [Provider, Model] datums must NOT break."""
+        m = MetricResult(
+            provider="openai",
+            model="gpt-4",
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30,
+            cost_usd=0.5,
+            team="team-a",
+            user="u1",
+        )
+        data = self._publish_and_collect(m)
+        pm_dims = [{"Name": "Provider", "Value": "openai"}, {"Name": "Model", "Value": "gpt-4"}]
+
+        for name, value in (("TokensUsed", 30.0), ("EstimatedCostUsd", 0.5), ("RequestCount", 1.0)):
+            pm = [md for md in data if md["MetricName"] == name and md["Dimensions"] == pm_dims]
+            assert len(pm) == 1, name
+            assert pm[0]["Value"] == value
+
+    def test_unknown_team_falls_back(self) -> None:
+        """A request with no resolvable team still emits Team=unknown datums."""
+        m = MetricResult(
+            provider="openai",
+            model="gpt-4",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            cost_usd=0.01,
+            team="unknown",
+            user="unknown",
+        )
+        data = self._publish_and_collect(m)
+        team_cost = [
+            md
+            for md in data
+            if md["MetricName"] == "EstimatedCostUsd" and md["Dimensions"] == [{"Name": "Team", "Value": "unknown"}]
+        ]
+        assert len(team_cost) == 1
+
+
 # ── gwcore observability (ADR-016) ───────────────────────────────────────────
 
 

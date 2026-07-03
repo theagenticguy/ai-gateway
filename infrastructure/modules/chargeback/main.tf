@@ -76,6 +76,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "reports" {
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
@@ -250,9 +253,48 @@ resource "aws_iam_role_policy" "sfn" {
         Effect   = "Allow"
         Action   = ["sns:Publish"]
         Resource = var.sns_topic_arn
+      },
+      {
+        # CloudWatch Logs delivery for the state machine's execution history
+        # (CKV_AWS_285). Log-delivery APIs require "*" resource per AWS docs.
+        Sid    = "StateMachineLogDelivery"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      },
+      {
+        # X-Ray tracing for the state machine (CKV_AWS_284).
+        Sid    = "XRayTracing"
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets"
+        ]
+        Resource = "*"
       }
     ]
   })
+}
+
+# CloudWatch log group for the state machine's execution history (CKV_AWS_285).
+resource "aws_cloudwatch_log_group" "sfn" {
+  #checkov:skip=CKV_AWS_158:KMS encryption planned for prod (matches the lambda log group posture)
+  #checkov:skip=CKV_AWS_338:365-day retention planned for prod (matches the lambda log group posture)
+  count             = var.enable_chargeback ? 1 : 0
+  name              = "/aws/vendedlogs/states/${local.resource_prefix}"
+  retention_in_days = 90
+  tags              = merge(var.tags, { Name = "${local.resource_prefix}-sfn-logs" })
 }
 
 # -----------------------------------------------------------------------------
@@ -309,6 +351,20 @@ resource "aws_sfn_state_machine" "chargeback" {
       }
     }
   })
+
+  # Execution history logging (CKV_AWS_285).
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn[0].arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+
+  # X-Ray tracing (CKV_AWS_284).
+  tracing_configuration {
+    enabled = true
+  }
+
+  depends_on = [aws_iam_role_policy.sfn, aws_cloudwatch_log_group.sfn]
 
   tags = merge(var.tags, { Name = local.resource_prefix })
 }

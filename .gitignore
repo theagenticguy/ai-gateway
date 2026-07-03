@@ -77,3 +77,4 @@ site/
 # verified commit test
 .coverage
 coverage.xml
+.erpaval/sessions/

@@ -19,6 +19,10 @@ This guide is for **infrastructure engineers and platform team members** who dep
 | [Feature Toggles](features.md) | Multi-client, fallback routing, cost attribution, guardrails, prompt caching, rate limiting, audit log, SSO |
 | [Admin API](admin-api.md) | Admin API endpoints for teams, budgets, pricing, routing, and usage |
 | [Upgrading](upgrading.md) | Bump the agentgateway data-plane image, upgrade Terraform providers, and enable new features |
+| [Incident Response](incident-response.md) | Severity levels, the alarms that fire, first-response steps, and the JWT-not-enforced degradation path |
+| [Rollback](rollback.md) | Reverting the gateway image, AppConfig auto-rollback, routing/pricing reverts, and Terraform reverts |
+| [On-Call Escalation](on-call.md) | Escalation tiers, what pages on which alarm, ownership, and comms |
+| [Disaster Recovery](disaster-recovery.md) | Single-region posture, RTO/RPO framing, durable state, multi-AZ resilience, and the region-loss gap |
 
 ## Architecture Overview
 

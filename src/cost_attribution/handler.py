@@ -200,6 +200,16 @@ def _publish_metrics(metrics: list[MetricResult]) -> None:
                 {"MetricName": "TokensUsed", "Dimensions": dims, "Value": float(m.total_tokens), "Unit": "Count"},
                 {"MetricName": "EstimatedCostUsd", "Dimensions": dims, "Value": m.cost_usd, "Unit": "None"},
                 {"MetricName": "RequestCount", "Dimensions": dims, "Value": 1.0, "Unit": "Count"},
+                # Input/output token split by [Provider, Model]. The dashboard's
+                # per-provider token line/pie widgets read these; cost is NOT a
+                # log field, so these must be emitted metrics, not log queries.
+                {"MetricName": "PromptTokens", "Dimensions": dims, "Value": float(m.prompt_tokens), "Unit": "Count"},
+                {
+                    "MetricName": "CompletionTokens",
+                    "Dimensions": dims,
+                    "Value": float(m.completion_tokens),
+                    "Unit": "Count",
+                },
                 {
                     "MetricName": "CachedReadTokens",
                     "Dimensions": dims,
@@ -218,6 +228,32 @@ def _publish_metrics(metrics: list[MetricResult]) -> None:
                     "Value": m.cache_savings_usd,
                     "Unit": "None",
                 },
+            ]
+        )
+
+        # Per-team billing metrics: emit EstimatedCostUsd / TokensUsed /
+        # RequestCount under a Team-ONLY dimension so the dashboard's per-team
+        # cost/usage widgets can query them directly. Team lives only inside the
+        # ALB JWT (oidc_data), so it cannot be recovered by a Logs Insights query
+        # — the Team dimension is the only path to "who spent what per team".
+        # We keep the [Provider, Model] datums above intact (existing widgets and
+        # tests depend on them) and ADD these; a request contributes to both.
+        team_only_dims = [{"Name": "Team", "Value": m.team or "unknown"}]
+        metric_data.extend(
+            [
+                {
+                    "MetricName": "EstimatedCostUsd",
+                    "Dimensions": team_only_dims,
+                    "Value": m.cost_usd,
+                    "Unit": "None",
+                },
+                {
+                    "MetricName": "TokensUsed",
+                    "Dimensions": team_only_dims,
+                    "Value": float(m.total_tokens),
+                    "Unit": "Count",
+                },
+                {"MetricName": "RequestCount", "Dimensions": team_only_dims, "Value": 1.0, "Unit": "Count"},
             ]
         )
 

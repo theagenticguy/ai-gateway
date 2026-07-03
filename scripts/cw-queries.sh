@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # CloudWatch Logs Insights queries for AI Gateway operational visibility
-# Targets: /ecs/ai-gateway/gateway log group (Portkey container logs)
+# Targets: /ecs/ai-gateway/gateway log group (agentgateway access log)
 # Log format: pino JSON (Fastify)
 #
 # Usage:
@@ -50,7 +50,7 @@ query_requests() {
   run_query "Requests per hour by provider" \
     "fields @timestamp, @message
 | filter ispresent(responseTime)
-| stats count(*) as requests by bin(1h), \`req.headers.x-portkey-provider\` as provider
+| stats count(*) as requests by bin(1h), provider
 | sort bin(1h) desc"
 }
 
@@ -61,7 +61,7 @@ query_errors() {
 | stats count(*) as total,
         sum(res.statusCode >= 400) as errors,
         (sum(res.statusCode >= 400) / count(*)) * 100 as error_pct
-  by \`req.headers.x-portkey-provider\` as provider
+  by provider
 | sort error_pct desc"
 }
 
@@ -73,7 +73,7 @@ query_latency() {
         pct(responseTime, 95) as p95,
         pct(responseTime, 99) as p99,
         avg(responseTime) as avg_ms
-  by \`req.headers.x-portkey-provider\` as provider
+  by provider
 | sort p99 desc"
 }
 
@@ -148,7 +148,7 @@ query_budget() {
 
 query_ttft() {
   run_query "TTFT percentiles by provider and model" \
-    "fields @timestamp, timeToFirstToken, \`req.headers.x-portkey-provider\` as provider, model
+    "fields @timestamp, timeToFirstToken, provider, model
 | filter ispresent(timeToFirstToken)
 | stats pct(timeToFirstToken, 50) as p50_ms,
         pct(timeToFirstToken, 95) as p95_ms,

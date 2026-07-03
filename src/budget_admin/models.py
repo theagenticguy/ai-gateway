@@ -105,3 +105,23 @@ class ListResponse(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
     count: int = 0
     last_key: dict[str, str] | None = None
+
+
+class AuditRecord(BaseModel):
+    """A single control-plane audit record projected from ``control_plane.audit_events``.
+
+    Columns mirror ``gwcore.audit.AuditEvent`` (lowercase, matching the S3 Tables
+    Iceberg schema). ``before``/``after`` are intentionally omitted — they are
+    heavy nested JSON not needed for the governed read.
+    """
+
+    action: str = ""
+    actor: str = ""
+    resource: str = ""
+    decision: str = ""
+    status: int | None = None
+    team: str = ""
+    source_ip: str = ""
+    correlation_id: str = ""
+    detail: str = ""
+    ts: str = ""

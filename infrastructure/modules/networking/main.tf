@@ -30,7 +30,7 @@ module "vpc" {
   private_subnets = [cidrsubnet(var.vpc_cidr, 8, 10), cidrsubnet(var.vpc_cidr, 8, 20)]
 
   enable_nat_gateway   = true
-  single_nat_gateway   = true
+  single_nat_gateway   = var.single_nat_gateway
   enable_dns_hostnames = true
   enable_dns_support   = true
 }

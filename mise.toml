@@ -18,6 +18,7 @@ python = "3.13"
 "aqua:hashicorp/terraform" = "1.14.8"
 "aqua:gruntwork-io/terragrunt" = "0.99.5"
 "aqua:terraform-docs/terraform-docs" = "0.21.0"
+tflint = "0.63.1"
 
 [env]
 _.python.venv = { path = ".venv", create = true }
