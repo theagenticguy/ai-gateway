@@ -77,6 +77,12 @@ variable "certificate_arn" {
   default     = ""
 }
 
+variable "single_nat_gateway" {
+  description = "Use a single shared NAT gateway (true = cheapest, dev default). Set false in prod for one NAT gateway per AZ (multi-AZ egress HA)."
+  type        = bool
+  default     = true
+}
+
 variable "enable_waf" {
   description = "Whether to enable WAF on the ALB"
   type        = bool

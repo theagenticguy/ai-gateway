@@ -38,14 +38,15 @@ module "observability" {
 module "networking" {
   source = "./modules/networking"
 
-  project_name    = var.project_name
-  environment     = var.environment
-  aws_region      = var.aws_region
-  vpc_cidr        = var.vpc_cidr
-  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
-  certificate_arn = var.certificate_arn
-  enable_waf      = var.enable_waf
-  enable_jwt_auth = var.enable_jwt_auth
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  vpc_cidr           = var.vpc_cidr
+  azs                = slice(data.aws_availability_zones.available.names, 0, 2)
+  single_nat_gateway = var.single_nat_gateway
+  certificate_arn    = var.certificate_arn
+  enable_waf         = var.enable_waf
+  enable_jwt_auth    = var.enable_jwt_auth
 
   waf_log_kms_key_arn = module.observability.logs_kms_key_arn
 }
@@ -225,10 +226,13 @@ module "cost_attribution" {
 module "appconfig" {
   source = "./modules/appconfig"
 
-  enable_appconfig   = var.enable_appconfig
-  project_name       = var.project_name
-  environment        = var.environment
-  rollback_alarm_arn = "" # TODO: wire a CloudWatch alarm for AppConfig deployment rollback
+  enable_appconfig = var.enable_appconfig
+  project_name     = var.project_name
+  environment      = var.environment
+  # Error-rate is the correct rollback trigger: a bad config deploy spikes
+  # 4xx/5xx faster and cleaner than latency. Only active when enable_appconfig
+  # is true (default false); harmless otherwise (count=0 resources).
+  rollback_alarm_arn = module.observability.alarm_arns["high_error_rate"]
   tags               = {}
 }
 
@@ -259,6 +263,15 @@ module "budgets" {
   project_name   = var.project_name
   environment    = var.environment
   enable_budgets = var.enable_budgets
+
+  # Audit query surface wiring: when both enable_audit_query and
+  # enable_audit_pipeline are on, hand the budget_admin Lambda the Athena
+  # workgroup + catalog + least-priv policy so GET /audit can run. Empty
+  # otherwise (the handler returns a clean 502 "not configured").
+  audit_athena_workgroup = length(module.audit_query) > 0 ? module.audit_query[0].workgroup_name : ""
+  audit_athena_catalog   = length(module.audit_query) > 0 ? module.audit_query[0].child_catalog : ""
+  audit_athena_database  = length(module.audit_query) > 0 ? module.audit_query[0].database : ""
+  audit_query_policy_arn = length(module.audit_query) > 0 ? module.audit_query[0].audit_query_policy_arn : ""
 }
 
 # -----------------------------------------------------------------------------
@@ -294,6 +307,56 @@ module "audit_log" {
   environment      = var.environment
   aws_region       = var.aws_region
   enable_audit_log = var.enable_audit_log
+}
+
+# -----------------------------------------------------------------------------
+# Audit Pipeline (ADR-016/017) — Firehose -> Apache Iceberg on S3 Tables
+# -----------------------------------------------------------------------------
+# Successor to the legacy audit_log Parquet+Glue module above. Gated behind
+# enable_audit_pipeline (default false) so it is inert until explicitly enabled.
+# The audit_events table's columns are defined by the WRITER (gwcore.audit
+# AuditEvent), not Terraform — Firehose evolves the Iceberg schema on first
+# write.
+#
+# DUAL-WRITER CAVEAT: cost_attribution still publishes a DIFFERENT legacy
+# 14-column usage record to AUDIT_FIREHOSE_STREAM (wired above to
+# module.audit_log). This module's stream is a SEPARATE Firehose that lands the
+# AuditEvent (control-plane) shape into control_plane.audit_events. Do NOT
+# repoint cost_attribution here; that is a separate migration.
+module "audit_pipeline" {
+  source = "./modules/audit_pipeline"
+  count  = var.enable_audit_pipeline ? 1 : 0
+
+  project_name          = var.project_name
+  environment           = var.environment
+  aws_region            = var.aws_region
+  account_id            = data.aws_caller_identity.current.account_id
+  enable_audit_pipeline = var.enable_audit_pipeline
+}
+
+# -----------------------------------------------------------------------------
+# Audit Query Surface (Athena over the S3 Tables Iceberg audit trail)
+# -----------------------------------------------------------------------------
+# Read path for control_plane.audit_events: an Athena workgroup (with a results
+# bucket), the canned named queries, and an IAM policy the budget_admin Lambda's
+# GET /audit route uses. Gated on enable_audit_query and requires the audit
+# pipeline's S3 Tables bucket, so it only stands up when both are enabled.
+module "audit_query" {
+  source = "./modules/audit_query"
+  count  = var.enable_audit_query && var.enable_audit_pipeline ? 1 : 0
+
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  account_id         = data.aws_caller_identity.current.account_id
+  enable_audit_query = var.enable_audit_query
+
+  # S3 Tables audit bucket from the pipeline module (empty string when disabled;
+  # the count guard above prevents that case).
+  audit_table_bucket_name = "${var.project_name}-${var.environment}-audit"
+  audit_table_bucket_arn  = module.audit_pipeline[0].table_bucket_arn
+
+  results_expiry_days = var.athena_results_expiry_days
 }
 
 # -----------------------------------------------------------------------------

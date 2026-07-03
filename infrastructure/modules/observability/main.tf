@@ -156,17 +156,26 @@ locals {
     }
   }
 
+  # Team is not a log field (it lives inside the ALB JWT `oidc_data`), so the
+  # old `count_distinct(req.headers.x-team-id)` log query returned nothing.
+  # Read the Team dimension of RequestCount instead: a SEARCH expression yields
+  # one series per team, so this widget lists per-team request volume (the
+  # "active teams" set, sized by how many series render).
   row1_active_teams = {
-    type   = "log"
+    type   = "metric"
     x      = 12
     y      = 0
     width  = 6
     height = local.h6
     properties = {
-      query  = "SOURCE '${local.gw_log}' | fields @timestamp | filter ispresent(provider) | stats count_distinct(`req.headers.x-team-id`) as active_teams by bin(1h) | sort bin(1h) desc | limit 1"
+      metrics = [
+        [{ expression = "SEARCH('{${local.ns},Team} MetricName=\"RequestCount\"', 'Sum', ${local.period})", label = "Requests by Team", id = "e1" }]
+      ]
+      period = local.period
       region = local.region
-      title  = "Active Teams"
-      view   = "singleValue"
+      title  = "Active Teams (Requests by Team)"
+      view   = "timeSeries"
+      stat   = "Sum"
     }
   }
 
@@ -207,17 +216,25 @@ locals {
     }
   }
 
+  # Cost is NOT a log field — `estimatedCostUsd` exists only as the
+  # EstimatedCostUsd metric, and team lives inside the JWT (not the log). So the
+  # "Top 10 Teams by Cost" panel queries the Team dimension of EstimatedCostUsd
+  # via SEARCH: one cost series per team, ranked/trimmed to the top 10.
   row2_cost_by_team_table = {
-    type   = "log"
+    type   = "metric"
     x      = 12
     y      = 6
     width  = local.w12
     height = local.h6
     properties = {
-      query  = "SOURCE '${local.gw_log}' | fields @timestamp, provider, model, estimatedCostUsd | filter ispresent(estimatedCostUsd) | stats sum(estimatedCostUsd) as total_cost, count(*) as requests by `req.headers.x-team-id` as team | sort total_cost desc | limit 10"
+      metrics = [
+        [{ expression = "SORT(SEARCH('{${local.ns},Team} MetricName=\"EstimatedCostUsd\"', 'Sum', ${local.period}), SUM, DESC, 10)", label = "Cost by Team (USD)", id = "e1" }]
+      ]
+      period = 3600
       region = local.region
-      title  = "Top 10 Teams by Cost"
-      view   = "table"
+      title  = "Top 10 Teams by Cost (USD)"
+      view   = "timeSeries"
+      stat   = "Sum"
     }
   }
 
@@ -232,32 +249,45 @@ locals {
     width  = local.w12
     height = local.h6
     properties = {
+      # PromptTokens / CompletionTokens are emitted by cost_attribution
+      # (_publish_metrics, [Provider, Model]). There is no `CachedTokens`
+      # metric — cached tokens are split into CachedReadTokens (prompt-cache
+      # reads) and CachedWriteTokens (cache creation), so reference both.
       metrics = flatten([
         for p in local.providers_list : [
           [local.ns, "PromptTokens", "Provider", p],
           [local.ns, "CompletionTokens", "Provider", p],
-          [local.ns, "CachedTokens", "Provider", p],
+          [local.ns, "CachedReadTokens", "Provider", p],
+          [local.ns, "CachedWriteTokens", "Provider", p],
         ]
       ])
       period = local.period
       stat   = "Sum"
       region = local.region
-      title  = "Token Usage: Input / Output / Cached by Provider"
+      title  = "Token Usage: Input / Output / Cached (Read+Write) by Provider"
       view   = "timeSeries"
     }
   }
 
+  # The access log is flat (no nested `usage.*`), so the old
+  # `usage.prompt_tokens`/`usage.completion_tokens` log query was dead. Use the
+  # emitted TokensUsed metric grouped by the Model dimension via SEARCH; a pie
+  # view renders total token share per model.
   row3_token_pie = {
-    type   = "log"
+    type   = "metric"
     x      = 12
     y      = 12
     width  = local.w12
     height = local.h6
     properties = {
-      query  = "SOURCE '${local.gw_log}' | fields @timestamp, model, usage.prompt_tokens, usage.completion_tokens | filter ispresent(usage.prompt_tokens) | stats sum(usage.prompt_tokens + usage.completion_tokens) as total_tokens by model | sort total_tokens desc | limit 10"
+      metrics = [
+        [{ expression = "SEARCH('{${local.ns},Provider,Model} MetricName=\"TokensUsed\"', 'Sum', ${local.period})", label = "Tokens by Model", id = "e1" }]
+      ]
+      period = local.period
       region = local.region
       title  = "Token Distribution by Model"
       view   = "pie"
+      stat   = "Sum"
     }
   }
 
@@ -279,27 +309,17 @@ locals {
     }
   }
 
-  row4_ttft = {
-    type   = "metric"
-    x      = 8
-    y      = 18
-    width  = local.w8
-    height = local.h6
-    properties = {
-      metrics = [
-        for p in local.providers_list : [local.ns, "TimeToFirstToken", "Provider", p]
-      ]
-      period = local.period
-      stat   = "p99"
-      region = local.region
-      title  = "Time to First Token P99 by Provider (ms)"
-      view   = "timeSeries"
-    }
-  }
+  # NOTE: the Time-to-First-Token widget was removed. `TimeToFirstToken` is
+  # emitted by NOTHING — it is neither a flat access-log field (the log carries
+  # only prompt/completion/total/cached tokens, model, provider, oidc_data) nor
+  # a metric published by cost_attribution._publish_metrics. Leaving a widget
+  # bound to a nonexistent metric renders a permanently empty panel, so the
+  # widget is dropped until a TTFT source exists (would require the gateway to
+  # emit a latency/TTFT field or a new published metric).
 
   row4_errors_by_provider = {
     type   = "log"
-    x      = 16
+    x      = 8
     y      = 18
     width  = local.w8
     height = local.h6
@@ -369,7 +389,6 @@ locals {
 
   performance_widgets = [
     local.row4_latency,
-    local.row4_ttft,
     local.row4_errors_by_provider,
   ]
 }

@@ -44,19 +44,24 @@ resource "aws_cloudwatch_query_definition" "latency_percentiles_detail" {
   EOQ
 }
 
-resource "aws_cloudwatch_query_definition" "cost_by_team" {
-  name            = "${var.project_name}/cost-by-team"
+# Cost and team are NOT in the access log: cost exists only as the
+# EstimatedCostUsd metric, and team lives inside the ALB JWT (`oidc_data`), which
+# Logs Insights cannot decode. So this cannot be a cost-by-team log query — for
+# per-team cost use the dashboard's Team-dimensioned EstimatedCostUsd widgets.
+# What the FLAT log CAN answer is token volume by provider/model, so this query
+# now reports that (flat `prompt_tokens`/`completion_tokens`).
+resource "aws_cloudwatch_query_definition" "tokens_by_provider_model" {
+  name            = "${var.project_name}/tokens-by-provider-model"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, `req.headers.x-team-id` as team, provider, model,
-           usage.prompt_tokens, usage.completion_tokens, estimatedCostUsd
-    | filter ispresent(estimatedCostUsd)
-    | stats sum(estimatedCostUsd) as total_cost,
-            sum(usage.prompt_tokens) as total_prompt,
-            sum(usage.completion_tokens) as total_completion,
+    fields @timestamp, provider, model, prompt_tokens, completion_tokens, total_tokens
+    | filter ispresent(total_tokens)
+    | stats sum(prompt_tokens) as total_prompt,
+            sum(completion_tokens) as total_completion,
+            sum(total_tokens) as total_tokens,
             count(*) as requests
-      by team
-    | sort total_cost desc
+      by provider, model
+    | sort total_tokens desc
     | limit 20
   EOQ
 }
@@ -77,29 +82,21 @@ resource "aws_cloudwatch_query_definition" "top_endpoints" {
   EOQ
 }
 
-resource "aws_cloudwatch_query_definition" "ttft_percentiles" {
-  name            = "${var.project_name}/ttft-percentiles"
-  log_group_names = [aws_cloudwatch_log_group.gateway.name]
-  query_string    = <<-EOQ
-    fields @timestamp, timeToFirstToken, provider, model
-    | filter ispresent(timeToFirstToken)
-    | stats pct(timeToFirstToken, 50) as p50_ms,
-            pct(timeToFirstToken, 95) as p95_ms,
-            pct(timeToFirstToken, 99) as p99_ms,
-            avg(timeToFirstToken) as avg_ms
-      by provider, model
-    | sort p99_ms desc
-  EOQ
-}
+# NOTE: the ttft-percentiles saved query was removed. `timeToFirstToken` is not
+# a field in the flat agentgateway access log, so the query matched nothing.
+# Re-add it only once the gateway actually emits a TTFT field.
 
-resource "aws_cloudwatch_query_definition" "top_expensive_requests" {
-  name            = "${var.project_name}/top-expensive-requests"
+# The flat log has neither per-request cost (`estimatedCostUsd`) nor team
+# (`x-team-id`), so "most expensive" cannot be ranked by cost from logs. Rank by
+# total_tokens instead (the flat proxy for request size) over the real flat
+# fields. For true per-request cost, join the audit Firehose/Iceberg table.
+resource "aws_cloudwatch_query_definition" "largest_requests_by_tokens" {
+  name            = "${var.project_name}/largest-requests-by-tokens"
   log_group_names = [aws_cloudwatch_log_group.gateway.name]
   query_string    = <<-EOQ
-    fields @timestamp, `req.headers.x-team-id` as team, provider, model,
-           usage.prompt_tokens, usage.completion_tokens, estimatedCostUsd
-    | filter ispresent(estimatedCostUsd)
-    | sort estimatedCostUsd desc
+    fields @timestamp, provider, model, prompt_tokens, completion_tokens, total_tokens
+    | filter ispresent(total_tokens)
+    | sort total_tokens desc
     | limit 50
   EOQ
 }

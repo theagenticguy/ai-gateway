@@ -24,6 +24,7 @@ import os
 import re
 from typing import Any
 
+from budget_admin.audit_query import run_audit_query
 from budget_admin.routes import (
     create_budget,
     delete_budget,
@@ -34,7 +35,7 @@ from budget_admin.routes import (
     list_budgets,
     update_budget,
 )
-from gwcore import audit, auth, errors, ok, responses
+from gwcore import audit, auth, errors, ok, page, responses
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
 
@@ -53,6 +54,7 @@ _RE_BUDGETS_LIST = re.compile(r"^/budgets/?$")
 _RE_BUDGETS_DETAIL = re.compile(r"^/budgets/(?P<budget_id>[^/]+)/?$")
 _RE_USAGE = re.compile(r"^/usage/(?P<scope>[^/]+)/(?P<scope_id>[^/]+)/?$")
 _RE_USAGE_HISTORY = re.compile(r"^/usage/(?P<scope>[^/]+)/(?P<scope_id>[^/]+)/history/?$")
+_RE_AUDIT = re.compile(r"^/audit/?$")
 
 
 # ── Request parsing ──────────────────────────────────────────────────────────
@@ -82,6 +84,9 @@ def _query_params(event: dict[str, Any]) -> dict[str, str]:
 
 def _dispatch(method: str, path: str, event: dict[str, Any], principal: auth.Principal) -> dict[str, Any]:
     """Match method+path and dispatch to the appropriate route handler."""
+    if method == "GET" and _RE_AUDIT.match(path):
+        return _get_audit(_query_params(event), principal)
+
     if method == "GET" and _RE_BUDGETS_LIST.match(path):
         return list_budgets(_query_params(event))
 
@@ -111,6 +116,46 @@ def _dispatch_budget_detail(
     if method == "DELETE":
         return delete_budget(budget_id, event, principal)
     raise errors.NotFoundError(f"Not found: {method} /budgets/{budget_id}")
+
+
+# ── Audit read (GET /audit) ────────────────────────────────────────────────────
+
+
+def _get_audit(params: dict[str, str], principal: auth.Principal) -> dict[str, Any]:
+    """Governed read of the control-plane audit trail for a team over a period.
+
+    Route: ``GET /audit?team=<t>&start=<iso>&end=<iso>&limit=<n>``. The Lambda
+    entry point has already required the admin scope, so admins may read any
+    team. The ADR-008 team-isolation guard is kept regardless: if the scope is
+    ever relaxed to INVOKE, a non-admin may read only their OWN team, and an
+    empty team claim must NOT bypass the check.
+
+    Reads are NOT mutations, so this route emits no audit event (only mutations
+    and authz denials are audited).
+    """
+    team = params.get("team", "")
+    if not team:
+        msg = "Missing required parameter: team"
+        raise errors.ValidationFailedError(msg)
+
+    # ADR-008 tenant isolation (verbatim in spirit from usage_api): a non-admin
+    # may read only their OWN team's audit trail; an empty/mismatched team claim
+    # is denied so it cannot grant a cross-team read via the ?team= param.
+    if not principal.is_admin and principal.team != team:
+        msg = "Cannot read the audit trail for another team"
+        raise errors.ForbiddenError(msg, details={"requested": team, "your_team": principal.team})
+
+    start = params.get("start", "")
+    end = params.get("end", "")
+    if not start or not end:
+        msg = "Missing required parameters: start and end (ISO-8601)"
+        raise errors.ValidationFailedError(msg)
+
+    # run_audit_query validates the ISO-8601 bounds (400 on bad input) and clamps
+    # the limit. The team value is bound as an Athena ExecutionParameter, never
+    # interpolated into the SQL text.
+    items = run_audit_query(team=team, start=start, end=end, limit=params.get("limit"))
+    return page(items)
 
 
 # ── Lambda entry point ───────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 [project]
 name = "ai-gateway"
 version = "0.1.0"
-description = "Lightweight LLM API Gateway — Portkey OSS on ECS Fargate"
+description = "Lightweight LLM API Gateway — agentgateway on ECS Fargate"
 requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.43.36",
@@ -24,11 +24,6 @@ dev = [
 ]
 
 [tool.uv]
-# Supply-chain cooldown (Semgrep uv-missing-dependency-cooldown): wait 7 days
-# before resolving newly published versions, so a compromised just-published
-# release is not pulled instantly. CI resolves with `uv sync --frozen` and runs
-# tools via `uv run --frozen`, so the committed lock is always honored; this
-# cooldown governs future re-resolution (e.g. `uv lock` / Dependabot bumps).
 exclude-newer = "7 days"
 constraint-dependencies = [
     "pygments>=2.20.0",  # CVE-2026-4539: ReDoS in AdlLexer
@@ -37,7 +32,7 @@ constraint-dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--cov=cost_attribution --cov=pre_token --cov=budget_enforcement --cov=content_scanner --cov=budget_admin --cov=chargeback_report --cov=routing_config --cov=team_registration --cov=rate_limiter --cov=usage_api --cov=pricing_admin --cov=gwcore --cov=admin_token --cov-branch --cov-report=term --cov-report=xml"
+addopts = "--cov=cost_attribution --cov=pre_token --cov=budget_enforcement --cov=budget_admin --cov=chargeback_report --cov=routing_config --cov=team_registration --cov=rate_limiter --cov=usage_api --cov=pricing_admin --cov=gwcore --cov=admin_token --cov-branch --cov-report=term --cov-report=xml"
 
 [tool.coverage.run]
 source = ["src"]

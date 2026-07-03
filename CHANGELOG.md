@@ -2,7 +2,7 @@
 
 ### Feat
 
-- wire content scanner into inference path via Portkey hooks + AppConfig (#54)
+- inline Bedrock guardrail replaces the content-scanner hook path (#54)
 - C-Series refinements (C.1–C.5) + ADR-014 (#52)
 - AI Gateway v2 — merge all feature branches (#48)
 - add git-cliff automated changelog generation

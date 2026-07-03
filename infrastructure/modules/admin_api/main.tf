@@ -333,6 +333,51 @@ resource "aws_lambda_permission" "pricing" {
   source_arn    = "${aws_api_gateway_rest_api.admin[0].execution_arn}/*"
 }
 
+# ---------------------------------------------------------------------------
+# /audit → budget_admin Lambda (GET only — the governed audit read surface)
+# ---------------------------------------------------------------------------
+# A single read endpoint (GET /audit?team=&start=&end=&limit=). No {proxy+}
+# child: there are no sub-paths. Routed to the same budget_admin Lambda that
+# owns /budgets (avoids standing up a new Lambda). ANY method matches the
+# established style + lets the handler own method rejection.
+
+resource "aws_api_gateway_resource" "audit" {
+  count       = var.enable_admin_api ? 1 : 0
+  rest_api_id = aws_api_gateway_rest_api.admin[0].id
+  parent_id   = aws_api_gateway_rest_api.admin[0].root_resource_id
+  path_part   = "audit"
+}
+
+#checkov:skip=CKV2_AWS_53:Request validation handled by Lambda handler param checks
+resource "aws_api_gateway_method" "audit_any" {
+  count                = var.enable_admin_api ? 1 : 0
+  rest_api_id          = aws_api_gateway_rest_api.admin[0].id
+  resource_id          = aws_api_gateway_resource.audit[0].id
+  http_method          = "ANY"
+  authorization        = "COGNITO_USER_POOLS"
+  authorizer_id        = aws_api_gateway_authorizer.cognito[0].id
+  authorization_scopes = [var.required_scope]
+}
+
+resource "aws_api_gateway_integration" "audit" {
+  count                   = var.enable_admin_api ? 1 : 0
+  rest_api_id             = aws_api_gateway_rest_api.admin[0].id
+  resource_id             = aws_api_gateway_resource.audit[0].id
+  http_method             = aws_api_gateway_method.audit_any[0].http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = var.budget_admin_invoke_arn
+}
+
+resource "aws_lambda_permission" "audit" {
+  count         = var.enable_admin_api ? 1 : 0
+  statement_id  = "AllowAPIGatewayInvoke-audit"
+  action        = "lambda:InvokeFunction"
+  function_name = var.budget_admin_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.admin[0].execution_arn}/*"
+}
+
 # -----------------------------------------------------------------------------
 # Root resource method (for paths like "/")
 # -----------------------------------------------------------------------------
@@ -426,6 +471,10 @@ resource "aws_api_gateway_deployment" "admin" {
       aws_api_gateway_method.pricing_proxy_any[0].id,
       aws_api_gateway_integration.pricing[0].id,
       aws_api_gateway_integration.pricing_proxy[0].id,
+      # /audit
+      aws_api_gateway_resource.audit[0].id,
+      aws_api_gateway_method.audit_any[0].id,
+      aws_api_gateway_integration.audit[0].id,
     ]))
   }
 
@@ -444,6 +493,7 @@ resource "aws_api_gateway_deployment" "admin" {
     aws_api_gateway_integration.routing_proxy,
     aws_api_gateway_integration.pricing,
     aws_api_gateway_integration.pricing_proxy,
+    aws_api_gateway_integration.audit,
   ]
 }
 

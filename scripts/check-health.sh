@@ -3,7 +3,7 @@
 # check-health.sh — Health check for the AI Gateway.
 #
 # Tests gateway connectivity, authentication, token validity,
-# and optionally each provider endpoint.
+# and optionally a live inference probe (agentgateway routes server-side).
 #
 # Usage:
 #   ./check-health.sh [--url <gateway-url>] [--token <jwt>] [--providers]
@@ -58,7 +58,7 @@ Usage: $(basename "$0") [OPTIONS]
 Options:
   --url <url>     Gateway base URL (or set GATEWAY_URL env var)
   --token <jwt>   JWT access token (or set TOKEN env var)
-  --providers     Test each provider endpoint
+  --providers     Run a live inference probe against the gateway
   -h, --help      Show this help
 
 Examples:
@@ -228,79 +228,48 @@ fi
 # Check 3: Provider checks (optional)
 # ---------------------------------------------------------------------------
 if [[ "$CHECK_PROVIDERS" == "true" ]]; then
-  printf "\n${BOLD}Provider Checks${NC}\n"
+  printf "\n${BOLD}Inference Probe${NC}\n"
   printf "${CYAN}%-40s${NC}\n" "$(printf '%.0s-' {1..40})"
 
   if [[ -z "$TOKEN" ]]; then
-    printf "  [${WARN}]  Skipping provider checks — no token provided\n"
+    printf "  [${WARN}]  Skipping inference probe — no token provided\n"
   else
-    providers=("anthropic" "openai" "google" "azure-openai" "bedrock")
+    # agentgateway routes server-side by path + model alias — there is no
+    # per-provider dimension and no provider-selection header. A single probe
+    # against /v1/chat/completions exercises the live provider failover chain.
+    printf "  %-30s " "inference (/v1/chat/completions) ..."
 
-    for provider in "${providers[@]}"; do
-      printf "  %-30s " "${provider} ..."
+    probe_body=$(mktemp)
+    probe_code=$(curl --silent --show-error --max-time 15 \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d '{"model":"gpt-4.1","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+      -o "$probe_body" \
+      -w "%{http_code}" \
+      "${GATEWAY_URL}/v1/chat/completions" 2>/dev/null) || probe_code="000"
 
-      # Send a minimal request to see if the provider is configured
-      # Use a tiny max_tokens to minimize cost
-      provider_body=$(mktemp)
+    if [[ "$probe_code" -ge 200 && "$probe_code" -lt 300 ]]; then
+      printf "[${PASS}]  HTTP %s\n" "$probe_code"
+    elif [[ "$probe_code" -eq 401 ]]; then
+      printf "[${FAIL}]  HTTP 401 — auth failed\n"
+      overall_status=1
+    elif [[ "$probe_code" -eq 422 || "$probe_code" -eq 400 ]]; then
+      # 422/400 often means the gateway is reachable but model/params wrong
+      printf "[${WARN}]  HTTP %s — gateway reachable but request error\n" "$probe_code"
+    elif [[ "$probe_code" -eq 502 ]]; then
+      printf "[${FAIL}]  HTTP 502 — upstream provider unreachable\n"
+      overall_status=1
+    elif [[ "$probe_code" -eq 503 ]]; then
+      printf "[${FAIL}]  HTTP 503 — gateway overloaded\n"
+      overall_status=1
+    elif [[ "$probe_code" == "000" ]]; then
+      printf "[${FAIL}]  Connection failed\n"
+      overall_status=1
+    else
+      printf "[${WARN}]  HTTP %s\n" "$probe_code"
+    fi
 
-      if [[ "$provider" == "anthropic" || "$provider" == "bedrock" ]]; then
-        # Anthropic Messages API format
-        if [[ "$provider" == "bedrock" ]]; then
-          model="anthropic.claude-sonnet-4-20250514-v1:0"
-        else
-          model="claude-sonnet-4-20250514"
-        fi
-        provider_code=$(curl --silent --show-error --max-time 15 \
-          -H "Authorization: Bearer ${TOKEN}" \
-          -H "Content-Type: application/json" \
-          -H "x-portkey-provider: ${provider}" \
-          -H "anthropic-version: 2023-06-01" \
-          -d "{\"model\":\"${model}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
-          -o "$provider_body" \
-          -w "%{http_code}" \
-          "${GATEWAY_URL}/v1/messages" 2>/dev/null) || provider_code="000"
-      else
-        # OpenAI Chat Completions format
-        if [[ "$provider" == "google" ]]; then
-          model="gemini-2.0-flash"
-        elif [[ "$provider" == "azure-openai" ]]; then
-          model="gpt-4.1"
-        else
-          model="gpt-4.1"
-        fi
-        provider_code=$(curl --silent --show-error --max-time 15 \
-          -H "Authorization: Bearer ${TOKEN}" \
-          -H "Content-Type: application/json" \
-          -H "x-portkey-provider: ${provider}" \
-          -d "{\"model\":\"${model}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
-          -o "$provider_body" \
-          -w "%{http_code}" \
-          "${GATEWAY_URL}/v1/chat/completions" 2>/dev/null) || provider_code="000"
-      fi
-
-      if [[ "$provider_code" -ge 200 && "$provider_code" -lt 300 ]]; then
-        printf "[${PASS}]  HTTP %s\n" "$provider_code"
-      elif [[ "$provider_code" -eq 401 ]]; then
-        printf "[${FAIL}]  HTTP 401 — auth failed\n"
-        overall_status=1
-      elif [[ "$provider_code" -eq 422 || "$provider_code" -eq 400 ]]; then
-        # 422/400 often means provider is reachable but model/params wrong
-        printf "[${WARN}]  HTTP %s — provider reachable but request error\n" "$provider_code"
-      elif [[ "$provider_code" -eq 502 ]]; then
-        printf "[${FAIL}]  HTTP 502 — provider unreachable\n"
-        overall_status=1
-      elif [[ "$provider_code" -eq 503 ]]; then
-        printf "[${FAIL}]  HTTP 503 — gateway overloaded\n"
-        overall_status=1
-      elif [[ "$provider_code" == "000" ]]; then
-        printf "[${FAIL}]  Connection failed\n"
-        overall_status=1
-      else
-        printf "[${WARN}]  HTTP %s\n" "$provider_code"
-      fi
-
-      rm -f "$provider_body"
-    done
+    rm -f "$probe_body"
   fi
 fi
 

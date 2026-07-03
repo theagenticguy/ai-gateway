@@ -305,9 +305,9 @@ case "$AGENT_CHOICE" in
     printf "\n${BOLD}Add these to your shell profile (~/.zshrc or ~/.bashrc):${NC}\n\n"
     cat <<ENVBLOCK
   # --- AI Gateway (Claude Code) ---
+  # No provider header: agentgateway routes server-side by path + model alias.
   export GATEWAY_URL="${GATEWAY_URL}"
   export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
-  export ANTHROPIC_CUSTOM_HEADERS="x-portkey-provider: anthropic"
   export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3000000
   export ENABLE_TOOL_SEARCH=true
 ENVBLOCK
@@ -331,9 +331,10 @@ ENVBLOCK
     printf "\n${BOLD}Add these to your shell profile (~/.zshrc or ~/.bashrc):${NC}\n\n"
     cat <<ENVBLOCK
   # --- AI Gateway (Claude Code via Bedrock) ---
+  # No provider header: the gateway's priority-group failover chain (Bedrock
+  # primary, Anthropic-direct fallback) selects the backend server-side.
   export GATEWAY_URL="${GATEWAY_URL}"
   export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
-  export ANTHROPIC_CUSTOM_HEADERS="x-portkey-provider: bedrock"
   export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3000000
   export ENABLE_TOOL_SEARCH=true
 ENVBLOCK
@@ -377,11 +378,8 @@ ENVBLOCK
         "type": "@ai-sdk/openai-compatible",
         "options": {
 JSONBLOCK
-    printf '          "baseURL": "%s/v1",\n' "${GATEWAY_URL}"
+    printf '          "baseURL": "%s/v1"\n' "${GATEWAY_URL}"
     cat <<'JSONBLOCK'
-          "headers": {
-            "x-portkey-provider": "openai"
-          }
         },
         "models": {
           "gpt-4.1": {
@@ -407,11 +405,11 @@ JSONBLOCK
     printf "\n${BOLD}Add these to your shell profile:${NC}\n\n"
     cat <<ENVBLOCK
   # --- AI Gateway (Goose) ---
+  # No provider header: agentgateway selects the upstream provider server-side.
   export GATEWAY_URL="${GATEWAY_URL}"
   export GOOSE_PROVIDER=openai
   export OPENAI_HOST="${GATEWAY_URL}"
   export OPENAI_API_KEY="\$(${TOKEN_SCRIPT})"
-  export OPENAI_EXTRA_HEADERS="x-portkey-provider: openai"
 ENVBLOCK
 
     if [[ "$AUTH_METHOD" == "1" ]]; then
@@ -429,24 +427,20 @@ ENVBLOCK
     info "Generating Continue.dev configuration..."
     printf "\n${BOLD}Edit ~/.continue/config.yaml:${NC}\n\n"
     cat <<YAMLBLOCK
+  # No requestOptions.headers: the gateway maps the requested model onto a
+  # backend via modelAliases and routes through its priority-group failover chain.
   models:
     - name: GPT-4.1 (Gateway)
       provider: openai
       model: gpt-4.1
       apiBase: "${GATEWAY_URL}/v1"
       apiKey: "<token-from-get-gateway-token.sh>"
-      requestOptions:
-        headers:
-          x-portkey-provider: openai
 
     - name: Claude Sonnet (Gateway)
       provider: openai
       model: claude-sonnet-4-20250514
       apiBase: "${GATEWAY_URL}/v1"
       apiKey: "<token-from-get-gateway-token.sh>"
-      requestOptions:
-        headers:
-          x-portkey-provider: anthropic
 YAMLBLOCK
 
     if [[ "$AUTH_METHOD" == "1" ]]; then
@@ -484,9 +478,10 @@ ENVBLOCK
     cat <<'PYBLOCK'
   from langchain_openai import ChatOpenAI
 
+  # No custom headers: the gateway resolves the model against modelAliases and
+  # its provider failover chain. Change `model` to target a different backend.
   llm = ChatOpenAI(
       model="gpt-4.1",
-      default_headers={"x-portkey-provider": "openai"},
   )
   response = llm.invoke("Hello from LangChain via the AI Gateway")
   print(response.content)
@@ -501,7 +496,10 @@ PYBLOCK
     printf "  Gateway URL:       %s\n" "${GATEWAY_URL}"
     printf "  OpenAI-compatible: %s/v1\n" "${GATEWAY_URL}"
     printf "  Auth header:       Authorization: Bearer <token>\n"
-    printf "  Provider header:   x-portkey-provider: <anthropic|openai|google|azure-openai|bedrock>\n"
+    printf "  Routing:           server-side — no provider header. Point your agent\n"
+    printf "                     at the gateway URL with a valid JWT; the gateway\n"
+    printf "                     picks the backend by model alias + request path\n"
+    printf "                     (/v1/chat/completions or /v1/messages).\n"
 
     printf "\n${BOLD}Get a token:${NC}\n\n"
     printf "  TOKEN=\$(%s)\n" "${TOKEN_SCRIPT}"
@@ -511,7 +509,6 @@ PYBLOCK
   curl ${GATEWAY_URL}/v1/chat/completions \\
     -H "Authorization: Bearer \$TOKEN" \\
     -H "Content-Type: application/json" \\
-    -H "x-portkey-provider: openai" \\
     -d '{
       "model": "gpt-4.1",
       "messages": [{"role": "user", "content": "Hello"}]
@@ -539,17 +536,14 @@ printf "${BOLD}Run a test inference call?${NC} [y/N]: "
 read -r run_test
 
 if [[ "${run_test,,}" == "y" || "${run_test,,}" == "yes" ]]; then
-  # Pick the right provider header based on agent choice
+  # Pick the API path based on agent choice. agentgateway routes server-side by
+  # path + model alias, so there is no provider header to send.
   case "$AGENT_CHOICE" in
-    1|2) provider_header="anthropic"; api_path="/v1/messages" ;;
-    *)   provider_header="openai";    api_path="/v1/chat/completions" ;;
+    1|2) api_path="/v1/messages" ;;
+    *)   api_path="/v1/chat/completions" ;;
   esac
 
-  if [[ "$AGENT_CHOICE" == "2" ]]; then
-    provider_header="bedrock"
-  fi
-
-  info "Sending test prompt to ${GATEWAY_URL}${api_path} (provider: ${provider_header})..."
+  info "Sending test prompt to ${GATEWAY_URL}${api_path} ..."
 
   test_body=$(mktemp)
   trap 'rm -f "$test_body"' EXIT
@@ -559,7 +553,6 @@ if [[ "${run_test,,}" == "y" || "${run_test,,}" == "yes" ]]; then
     http_code=$(curl --silent --show-error --max-time 30 \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
-      -H "x-portkey-provider: ${provider_header}" \
       -H "anthropic-version: 2023-06-01" \
       -d '{
         "model": "claude-sonnet-4-20250514",
@@ -577,7 +570,6 @@ if [[ "${run_test,,}" == "y" || "${run_test,,}" == "yes" ]]; then
     http_code=$(curl --silent --show-error --max-time 30 \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
-      -H "x-portkey-provider: ${provider_header}" \
       -d '{
         "model": "gpt-4.1",
         "max_tokens": 100,

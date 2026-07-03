@@ -7,17 +7,14 @@ updates:
   # ── Python (pip / pyproject.toml) ──────────────────────────
   - package-ecosystem: pip
     directory: /
-    # Supply-chain cooldown (Semgrep dependabot-missing-cooldown): wait 7 days
-    # before proposing a newly published version, so a compromised just-
-    # published release is not opened as a PR instantly.
-    cooldown:
-      default-days: 7
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     assignees:
       - theagenticguy
     reviewers:
@@ -36,17 +33,14 @@ updates:
   # ── Terraform (infrastructure/) ────────────────────────────
   - package-ecosystem: terraform
     directory: /infrastructure
-    # Supply-chain cooldown (Semgrep dependabot-missing-cooldown): wait 7 days
-    # before proposing a newly published version, so a compromised just-
-    # published release is not opened as a PR instantly.
-    cooldown:
-      default-days: 7
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     assignees:
       - theagenticguy
     reviewers:
@@ -65,17 +59,14 @@ updates:
   # ── GitHub Actions (.github/workflows/) ────────────────────
   - package-ecosystem: github-actions
     directory: /
-    # Supply-chain cooldown (Semgrep dependabot-missing-cooldown): wait 7 days
-    # before proposing a newly published version, so a compromised just-
-    # published release is not opened as a PR instantly.
-    cooldown:
-      default-days: 7
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     assignees:
       - theagenticguy
     reviewers:
@@ -94,17 +85,14 @@ updates:
   # ── npm / pnpm (docs/) ──────────────────────────────────────
   - package-ecosystem: npm
     directory: /docs
-    # Supply-chain cooldown (Semgrep dependabot-missing-cooldown): wait 7 days
-    # before proposing a newly published version, so a compromised just-
-    # published release is not opened as a PR instantly.
-    cooldown:
-      default-days: 7
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     assignees:
       - theagenticguy
     reviewers:
@@ -123,17 +111,14 @@ updates:
   # ── Docker (container images) ──────────────────────────────
   - package-ecosystem: docker
     directory: /
-    # Supply-chain cooldown (Semgrep dependabot-missing-cooldown): wait 7 days
-    # before proposing a newly published version, so a compromised just-
-    # published release is not opened as a PR instantly.
-    cooldown:
-      default-days: 7
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: America/New_York
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     assignees:
       - theagenticguy
     reviewers:

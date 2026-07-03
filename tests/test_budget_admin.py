@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from decimal import Decimal
-from typing import Any
-from unittest.mock import patch
+from typing import Any, ClassVar
+from unittest.mock import MagicMock, patch
 
+import pytest
 from botocore.exceptions import ClientError
 
 from budget_admin.handler import handler
@@ -47,6 +49,42 @@ def _admin_jwt() -> str:
 
 def _non_admin_jwt() -> str:
     return _make_jwt({"sub": "regular-user", "scope": "openid profile"})
+
+
+def _team_jwt(team: str) -> str:
+    """A non-admin JWT carrying a specific team claim (custom:team)."""
+    return _make_jwt({"sub": "team-user", "scope": "openid profile", "custom:team": team})
+
+
+def _athena_result_set(rows: list[dict[str, str]]) -> dict[str, Any]:
+    """Build an Athena GetQueryResults ResultSet: header row + data rows.
+
+    Column order matches the projection in audit_query._build_query.
+    """
+    columns = [
+        "action",
+        "actor",
+        "resource",
+        "decision",
+        "status",
+        "team",
+        "source_ip",
+        "correlation_id",
+        "detail",
+        "ts",
+    ]
+    header_row: dict[str, Any] = {"Data": [{"VarCharValue": c} for c in columns]}
+    data_rows: list[dict[str, Any]] = [{"Data": [{"VarCharValue": row.get(c, "")} for c in columns]} for row in rows]
+    return {"Rows": [header_row, *data_rows]}
+
+
+def _mock_athena_client(rows: list[dict[str, str]]) -> MagicMock:
+    """A MagicMock Athena client that returns a SUCCEEDED query with ``rows``."""
+    client = MagicMock()
+    client.start_query_execution.return_value = {"QueryExecutionId": "qid-test"}
+    client.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
+    client.get_query_results.return_value = {"ResultSet": _athena_result_set(rows)}
+    return client
 
 
 def _make_event(
@@ -478,6 +516,241 @@ class TestRouting:
     def test_post_to_budgets_detail_returns_404(self) -> None:
         result = handler(_make_event(method="POST", path="/budgets/abc-123"))
         assert result["statusCode"] == 404
+
+
+# ── Audit read (GET /audit) — Athena client mocked, NO live AWS ────────────────
+
+
+class TestAuditRead:
+    _ENV: ClassVar[dict[str, str]] = {
+        "AUDIT_ATHENA_WORKGROUP": "gateway-test-audit",
+        "AUDIT_ATHENA_CATALOG": "s3tablescatalog/b",
+        "AUDIT_ATHENA_DATABASE": "control_plane",
+    }
+
+    def _audit_event(self, team: str, authorization: str | None = None) -> dict[str, Any]:
+        return _make_event(
+            method="GET",
+            path="/audit",
+            authorization=authorization,
+            query_params={"team": team, "start": "2026-06-01T00:00:00Z", "end": "2026-06-30T23:59:59Z"},
+        )
+
+    @patch.dict("os.environ", _ENV, clear=False)
+    @patch("budget_admin.audit_query._client")
+    def test_admin_reads_any_team_happy_path(self, mock_client: Any) -> None:
+        # An admin reads a team they are not a member of; happy path → page() envelope.
+        mock_client.return_value = _mock_athena_client(
+            [
+                {
+                    "action": "team.update",
+                    "actor": "admin-user",
+                    "resource": "team/platform",
+                    "decision": "allow",
+                    "status": "200",
+                    "team": "platform",
+                    "source_ip": "10.0.0.1",
+                    "correlation_id": "rid-1",
+                    "detail": "",
+                    "ts": "2026-06-15T12:00:00+00:00",
+                }
+            ]
+        )
+        result = handler(self._audit_event("platform"))
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        # page() envelope: items / count / next_cursor
+        assert body["count"] == 1
+        assert body["next_cursor"] is None
+        assert body["items"][0]["action"] == "team.update"
+        assert body["items"][0]["decision"] == "allow"
+        assert body["items"][0]["status"] == 200  # coerced to int
+        # team was bound as an ExecutionParameter, never interpolated into SQL.
+        call = mock_client.return_value.start_query_execution.call_args
+        assert call.kwargs["ExecutionParameters"][0] == "platform"
+        assert call.kwargs["WorkGroup"] == "gateway-test-audit"
+
+    @patch.dict("os.environ", _ENV, clear=False)
+    @patch("budget_admin.audit_query._client")
+    def test_admin_empty_result(self, mock_client: Any) -> None:
+        mock_client.return_value = _mock_athena_client([])
+        result = handler(self._audit_event("platform"))
+        assert result["statusCode"] == 200
+        body = json.loads(result["body"])
+        assert body["count"] == 0
+        assert body["items"] == []
+
+    def test_non_admin_blocked_for_other_team_403(self) -> None:
+        # A non-admin is denied at the top-level ADMIN_SCOPE gate (the route is
+        # admin-only). The ADR-008 team-isolation guard below is defense-in-depth
+        # for a future scope relaxation; see test_isolation_guard_* for it.
+        result = handler(self._audit_event("platform", authorization=f"Bearer {_team_jwt('other-team')}"))
+        assert result["statusCode"] == 403
+        assert _err(result)["code"] == "forbidden"
+
+    def test_isolation_guard_blocks_cross_team_read(self) -> None:
+        # Directly exercise the ADR-008 guard in _get_audit: a non-admin reading
+        # another team is a ForbiddenError even if the top gate were relaxed.
+        from budget_admin.handler import _get_audit
+        from gwcore import auth, errors
+
+        principal = auth.Principal(sub="u", scopes=frozenset({auth.INVOKE_SCOPE}), team="my-team")
+        with pytest.raises(errors.ForbiddenError) as exc_info:
+            _get_audit(
+                {"team": "other-team", "start": "2026-06-01T00:00:00Z", "end": "2026-06-30T00:00:00Z"}, principal
+            )
+        assert exc_info.value.status == 403
+
+    def test_isolation_guard_empty_team_claim_cannot_bypass(self) -> None:
+        # An empty team claim must NOT bypass the guard (would grant cross-team).
+        from budget_admin.handler import _get_audit
+        from gwcore import auth, errors
+
+        principal = auth.Principal(sub="u", scopes=frozenset({auth.INVOKE_SCOPE}), team="")
+        with pytest.raises(errors.ForbiddenError) as exc_info:
+            _get_audit({"team": "platform", "start": "2026-06-01T00:00:00Z", "end": "2026-06-30T00:00:00Z"}, principal)
+        assert exc_info.value.status == 403
+
+    def test_missing_team_param_400(self) -> None:
+        event = _make_event(
+            method="GET",
+            path="/audit",
+            query_params={"start": "2026-06-01T00:00:00Z", "end": "2026-06-30T23:59:59Z"},
+        )
+        result = handler(event)
+        assert result["statusCode"] == 400
+        assert _err(result)["code"] == "validation_failed"
+
+    def test_missing_start_end_400(self) -> None:
+        result = handler(_make_event(method="GET", path="/audit", query_params={"team": "platform"}))
+        assert result["statusCode"] == 400
+        assert _err(result)["code"] == "validation_failed"
+
+    @patch.dict("os.environ", _ENV, clear=False)
+    def test_bad_iso_date_400(self) -> None:
+        event = _make_event(
+            method="GET",
+            path="/audit",
+            query_params={"team": "platform", "start": "not-a-date", "end": "2026-06-30T23:59:59Z"},
+        )
+        result = handler(event)
+        assert result["statusCode"] == 400
+        assert _err(result)["code"] == "validation_failed"
+
+    def test_admin_unconfigured_workgroup_502(self) -> None:
+        # An admin request with the audit surface not wired (no AUDIT_ATHENA_
+        # WORKGROUP) surfaces a clean 502 "not configured", not a crash.
+        saved = os.environ.pop("AUDIT_ATHENA_WORKGROUP", None)
+        try:
+            result = handler(self._audit_event("platform"))
+            assert result["statusCode"] == 502
+            assert _err(result)["code"] == "upstream_error"
+        finally:
+            if saved is not None:
+                os.environ["AUDIT_ATHENA_WORKGROUP"] = saved
+
+
+# ── Audit query unit tests (audit_query.py error/edge branches) ────────────────
+
+
+class TestAuditQueryUnit:
+    """Direct coverage of audit_query helpers: validation, polling, mapping."""
+
+    def test_validate_iso8601_rejects_garbage(self) -> None:
+        from budget_admin import audit_query
+        from gwcore import errors
+
+        with pytest.raises(errors.ValidationFailedError) as exc_info:
+            audit_query._validate_iso8601("not-a-date", "start")
+        assert exc_info.value.status == 400
+        assert exc_info.value.to_body()["error"]["details"]["start"] == "not-a-date"
+
+    def test_validate_iso8601_normalizes_trailing_z(self) -> None:
+        from budget_admin import audit_query
+
+        assert audit_query._validate_iso8601("2026-06-01T00:00:00Z", "start") == "2026-06-01T00:00:00+00:00"
+
+    def test_coerce_limit_fallbacks_and_clamp(self) -> None:
+        from budget_admin import audit_query
+
+        assert audit_query._coerce_limit(None) == audit_query._DEFAULT_LIMIT
+        assert audit_query._coerce_limit("") == audit_query._DEFAULT_LIMIT
+        assert audit_query._coerce_limit("not-int") == audit_query._DEFAULT_LIMIT  # ValueError branch
+        assert audit_query._coerce_limit(0) == audit_query._DEFAULT_LIMIT  # < 1 branch
+        assert audit_query._coerce_limit(10_000) == audit_query._MAX_LIMIT  # clamp
+        assert audit_query._coerce_limit(50) == 50
+
+    def test_run_audit_query_workgroup_unset_raises_upstream(self) -> None:
+        from budget_admin import audit_query
+        from gwcore import errors
+
+        saved = os.environ.pop("AUDIT_ATHENA_WORKGROUP", None)
+        try:
+            with (
+                patch("budget_admin.audit_query._client", MagicMock()),
+                pytest.raises(errors.UpstreamError) as exc_info,
+            ):
+                audit_query.run_audit_query(team="platform", start="2026-06-01T00:00:00Z", end="2026-06-30T00:00:00Z")
+            assert exc_info.value.status == 502
+        finally:
+            if saved is not None:
+                os.environ["AUDIT_ATHENA_WORKGROUP"] = saved
+
+    @patch.dict("os.environ", {"AUDIT_ATHENA_WORKGROUP": "wg"}, clear=False)
+    @patch("budget_admin.audit_query._client")
+    def test_await_completion_failed_state_raises(self, mock_client: Any) -> None:
+        from budget_admin import audit_query
+        from gwcore import errors
+
+        client = MagicMock()
+        client.start_query_execution.return_value = {"QueryExecutionId": "q1"}
+        client.get_query_execution.return_value = {
+            "QueryExecution": {"Status": {"State": "FAILED", "StateChangeReason": "syntax error"}}
+        }
+        mock_client.return_value = client
+        with pytest.raises(errors.UpstreamError) as exc_info:
+            audit_query.run_audit_query(team="t", start="2026-06-01T00:00:00Z", end="2026-06-30T00:00:00Z")
+        assert exc_info.value.to_body()["error"]["details"]["state"] == "FAILED"
+
+    @patch.dict("os.environ", {"AUDIT_ATHENA_WORKGROUP": "wg"}, clear=False)
+    @patch("budget_admin.audit_query._POLL_INTERVAL_SECONDS", 0)
+    @patch("budget_admin.audit_query._MAX_POLLS", 2)
+    @patch("budget_admin.audit_query._client")
+    def test_await_completion_times_out(self, mock_client: Any) -> None:
+        from budget_admin import audit_query
+        from gwcore import errors
+
+        client = MagicMock()
+        client.start_query_execution.return_value = {"QueryExecutionId": "q1"}
+        client.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "RUNNING"}}}
+        mock_client.return_value = client
+        with pytest.raises(errors.UpstreamError) as exc_info:
+            audit_query.run_audit_query(team="t", start="2026-06-01T00:00:00Z", end="2026-06-30T00:00:00Z")
+        assert "timed out" in exc_info.value.to_body()["error"]["message"].lower()
+
+    def test_rows_to_records_empty(self) -> None:
+        from budget_admin import audit_query
+
+        assert audit_query._rows_to_records({}) == []
+        assert audit_query._rows_to_records({"Rows": []}) == []
+
+    def test_normalize_record_bad_status_coerces_to_none(self) -> None:
+        from budget_admin import audit_query
+
+        rec = audit_query._normalize_record({"status": "not-an-int", "action": "x"})
+        assert rec["status"] is None  # int() ValueError branch → None
+        assert rec["action"] == "x"
+
+    def test_client_is_lazily_created_and_cached(self) -> None:
+        from budget_admin import audit_query
+
+        audit_query._athena_client = None
+        with patch("budget_admin.audit_query.boto3.client", return_value=MagicMock()) as mock_boto:
+            first = audit_query._client()
+            second = audit_query._client()
+        assert first is second
+        assert mock_boto.call_count == 1  # cached after first create
+        audit_query._athena_client = None  # reset module state for other tests
 
 
 # ── Model validation tests (unchanged) ────────────────────────────────────────
