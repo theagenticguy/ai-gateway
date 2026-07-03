@@ -24,6 +24,7 @@ dev = [
 ]
 
 [tool.uv]
+exclude-newer = "7 days"
 constraint-dependencies = [
     "pygments>=2.20.0",  # CVE-2026-4539: ReDoS in AdlLexer
 ]

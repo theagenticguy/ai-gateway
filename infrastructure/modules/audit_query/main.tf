@@ -219,14 +219,14 @@ resource "aws_iam_policy" "audit_query" {
           "glue:GetPartitions",
         ]
         # The S3 Tables federation reaches the tables through the default Glue
-        # catalog + the s3tablescatalog child; scope to the account's catalog and
-        # the control_plane database/tables.
+        # catalog + the s3tablescatalog child; scope to the account's catalog,
+        # the control_plane database, and the specific audit table (least-priv).
         Resource = [
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog/s3tablescatalog",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog/s3tablescatalog/${var.audit_table_bucket_name}",
           "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${var.namespace}",
-          "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${var.namespace}/*",
+          "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${var.namespace}/${var.audit_table}",
         ]
       },
       {
