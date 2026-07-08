@@ -114,11 +114,54 @@ jobs:
           sarif_file: osv-results.sarif
           category: osv-scanner-rescan
 
+      # Parse SARIF result counts rather than trusting the scanner step
+      # outcomes. Grype/OSV exit non-zero both on a real finding and on a tool
+      # crash; counting SARIF results distinguishes the two so a scanner error
+      # no longer opens a false-positive issue. A missing SARIF is surfaced as
+      # an infra warning, not a finding.
+      #
+      # Per-scanner logic (each preserves that scanner's configured threshold):
+      #   • Grype runs with severity-cutoff: high, so only HIGH+ should trip the
+      #     alert. Grype writes rejected/detail-less records (e.g. CVE-2026-6791,
+      #     security-severity 0.0) into the SARIF regardless, so we filter on
+      #     GitHub's security-severity (>= 7.0 == HIGH), the HIGH/CRITICAL tags,
+      #     or an error-level result — a naive result count would false-positive.
+      #   • OSV has no cutoff configured and alerts on any lockfile vulnerability
+      #     by design, so we count all of its results.
       - name: Check for findings
         id: check-findings
         if: always()
+        env:
+          GRYPE_SARIF: ${{ steps.grype.outputs.sarif }}
         run: |
-          if [[ "${{ steps.grype.outcome }}" == "failure" || "${{ steps.osv.outcome }}" == "failure" ]]; then
+          count=0
+          # Grype — HIGH+ only (matches severity-cutoff: high)
+          if [[ -n "$GRYPE_SARIF" && -f "$GRYPE_SARIF" ]]; then
+            g=$(jq '[ .runs[]?
+              | ( [ .tool.driver.rules[]? | {key:.id, value:.} ] | from_entries ) as $rmap
+              | .results[]?
+              | .ruleId as $rid
+              | ($rmap[$rid].properties["security-severity"] // "0") as $ssev
+              | ($rmap[$rid].properties.tags // []) as $tags
+              | select( (($ssev | tonumber? // 0) >= 7.0)
+                        or ($tags | index("HIGH")) or ($tags | index("CRITICAL"))
+                        or (.level == "error") )
+            ] | length' "$GRYPE_SARIF")
+            echo "Grype HIGH+ results: ${g}"
+            count=$((count + g))
+          else
+            echo "::warning::Grype SARIF missing (scanner error, not a vulnerability finding)"
+          fi
+          # OSV — any lockfile vulnerability (no cutoff configured)
+          if [[ -f osv-results.sarif ]]; then
+            o=$(jq '[.runs[]?.results[]?] | length' osv-results.sarif)
+            echo "OSV results: ${o}"
+            count=$((count + o))
+          else
+            echo "::warning::OSV SARIF missing (scanner error, not a vulnerability finding)"
+          fi
+          echo "Total SBOM finding count: ${count}"
+          if [[ "${count}" -gt 0 ]]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -157,6 +200,7 @@ jobs:
       - name: Trivy rescan
         id: trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        continue-on-error: true   # a scanner crash must not be read as a finding; check-findings parses the SARIF result count instead
         with:
           image-ref: ai-gateway:rescan
           format: sarif
@@ -164,6 +208,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
@@ -173,11 +218,38 @@ jobs:
           sarif_file: trivy-rescan-results.sarif
           category: trivy-rescan
 
+      # Count HIGH/CRITICAL results in the SARIF rather than trusting
+      # steps.trivy.outcome. Trivy exits non-zero both when it finds a
+      # HIGH/CRITICAL *and* when it crashes on a rejected/detail-less CVE record
+      # (e.g. CVE-2026-6791 in the Wolfi feed). The old logic conflated the two
+      # and opened a false-positive issue on every crash. Trivy also writes the
+      # crashing UNKNOWN record into the SARIF despite `severity: CRITICAL,HIGH`,
+      # so a naive result count is not enough — we filter on GitHub's
+      # security-severity (>= 7.0 == HIGH), the HIGH/CRITICAL SARIF tags, or an
+      # error-level result.
       - name: Check for findings
         id: check-findings
         if: always()
         run: |
-          if [[ "${{ steps.trivy.outcome }}" == "failure" ]]; then
+          if [[ ! -f trivy-rescan-results.sarif ]]; then
+            # No SARIF written at all — surface it as an infra warning, not a
+            # vulnerability finding, so a genuinely broken scan is not silently green.
+            echo "::warning::Trivy produced no SARIF output (scanner error, not a vulnerability finding)"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          count=$(jq '[ .runs[]?
+            | ( [ .tool.driver.rules[]? | {key:.id, value:.} ] | from_entries ) as $rmap
+            | .results[]?
+            | .ruleId as $rid
+            | ($rmap[$rid].properties["security-severity"] // "0") as $ssev
+            | ($rmap[$rid].properties.tags // []) as $tags
+            | select( (($ssev | tonumber? // 0) >= 7.0)
+                      or ($tags | index("HIGH")) or ($tags | index("CRITICAL"))
+                      or (.level == "error") )
+          ] | length' trivy-rescan-results.sarif)
+          echo "Trivy HIGH+ SARIF result count: ${count}"
+          if [[ "${count}" -gt 0 ]]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"

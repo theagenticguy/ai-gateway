@@ -1,0 +1,14 @@
+# Trivy vulnerability ignore list
+# ────────────────────────────────────────────────────────────────
+# CVE-2026-6791 — glibc / glibc-locale-posix / ld-linux (Wolfi base).
+# This is a rejected / detail-less advisory record: Trivy's DB has the
+# ID present in the Wolfi feed but no vulnerability details, so newer
+# Trivy versions abort the scan with
+#   WARN "Unable to get vulnerability details (CVE may be rejected)"
+# and exit non-zero on the ERROR path — not because a HIGH/CRITICAL was
+# found. Ground-truth scan of the pinned agentgateway digest reports
+# Total: 0 (HIGH: 0, CRITICAL: 0). Suppressing the rejected record so
+# Trivy exits cleanly. The upstream Wolfi package fix is 2.43-r10; this
+# entry can be removed once the base image ships that or the CVE record
+# is withdrawn from the DB.
+CVE-2026-6791
