@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Lightweight LLM API Gateway — agentgateway on ECS Fargate"
 requires-python = ">=3.13"
 dependencies = [
-    "boto3>=1.43.36",
+    "boto3>=1.43.40",
     "email-validator>=2.3.0",
     "pydantic>=2.13.4",
     "pyjwt[crypto]>=2.13.0",
