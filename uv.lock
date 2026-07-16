@@ -35,7 +35,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.43.36" },
+    { name = "boto3", specifier = ">=1.43.40" },
     { name = "email-validator", specifier = ">=2.3.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13.0" },
@@ -45,9 +45,9 @@ requires-dist = [
 dev = [
     { name = "atheris", specifier = ">=3.1.0" },
     { name = "bandit", extras = ["sarif"], specifier = ">=1.9.4" },
-    { name = "boto3-stubs", specifier = ">=1.43.36" },
+    { name = "boto3-stubs", specifier = ">=1.43.40" },
     { name = "commitizen", specifier = ">=4.16.4" },
-    { name = "hypothesis", specifier = ">=6.155.7" },
+    { name = "hypothesis", specifier = ">=6.156.1" },
     { name = "pyright", specifier = ">=1.1.411" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
