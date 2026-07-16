@@ -87,10 +87,10 @@ def _make_usage_item(
     total_cost_usd: str = "1.50",
     request_count: int = 5,
 ) -> dict[str, Any]:
-    """Build a DynamoDB usage item."""
+    """Build a DynamoDB usage item (real gateway-usage schema, issue #261)."""
     return {
-        "pk": f"USAGE#TEAM#{team}",
-        "sk": f"PERIOD#{period}",
+        "scope_id": f"team#{team}",
+        "period_date": period,
         "total_tokens": total_tokens,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -111,10 +111,10 @@ def _make_model_item(
     total_cost_usd: str = "0.75",
     request_count: int = 3,
 ) -> dict[str, Any]:
-    """Build a DynamoDB model-level usage item."""
+    """Build a DynamoDB model-level usage item (real gateway-usage schema)."""
     return {
-        "pk": f"USAGE#TEAM#{team}#MODEL#{model}",
-        "sk": f"PERIOD#{period}",
+        "scope_id": f"team#{team}#model#{model}",
+        "period_date": period,
         "total_tokens": total_tokens,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -127,12 +127,24 @@ def _make_budget_item(
     team: str,
     monthly_budget_usd: str = "100.00",
 ) -> dict[str, Any]:
-    """Build a DynamoDB budget config item."""
+    """Build a DynamoDB budget config item (real gateway-budgets schema, #261).
+
+    budget_admin writes the cap as ``budget_usd`` and looks a budget up by team
+    via the ``scope-index`` GSI (scope == "CONFIG", scope_id == team), so the
+    handler now queries rather than get_item. See ``_budget_query_result``.
+    """
     return {
-        "pk": f"BUDGET#{team}",
-        "sk": "CONFIG",
-        "monthly_budget_usd": Decimal(monthly_budget_usd),
+        "budget_id": f"b-{team}",
+        "scope": "CONFIG",
+        "scope_type": "team",
+        "scope_id": team,
+        "budget_usd": Decimal(monthly_budget_usd),
     }
+
+
+def _budget_query_result(team: str, monthly_budget_usd: str = "100.00") -> dict[str, Any]:
+    """Wrap a budget config item as a scope-index query response."""
+    return {"Items": [_make_budget_item(team, monthly_budget_usd)]}
 
 
 def _parse_body(result: dict[str, Any]) -> dict[str, Any]:
@@ -305,7 +317,7 @@ class TestItemToUsagePeriod:
         assert period.request_count == 5
 
     def test_missing_fields_default_to_zero(self) -> None:
-        item = {"pk": "USAGE#TEAM#t", "sk": "PERIOD#2026-03"}
+        item = {"scope_id": "team#t", "period_date": "2026-03"}
         period = _item_to_usage_period(item, "2026-03")
         assert period.total_tokens == 0
         assert period.total_cost_usd == Decimal(0)
@@ -321,15 +333,15 @@ class TestItemToModelUsage:
         assert mu.total_cost_usd == Decimal("0.75")
 
     def test_returns_none_for_missing_model_marker(self) -> None:
-        item = {"pk": "USAGE#TEAM#test-team", "sk": "PERIOD#2026-03"}
+        item = {"scope_id": "team#test-team", "period_date": "2026-03"}
         assert _item_to_model_usage(item) is None
 
     def test_returns_none_for_empty_model_name(self) -> None:
-        item = {"pk": "USAGE#TEAM#test-team#MODEL#", "sk": "PERIOD#2026-03"}
+        item = {"scope_id": "team#test-team#model#", "period_date": "2026-03"}
         assert _item_to_model_usage(item) is None
 
-    def test_returns_none_for_no_pk(self) -> None:
-        item = {"sk": "PERIOD#2026-03"}
+    def test_returns_none_for_no_scope_id(self) -> None:
+        item = {"period_date": "2026-03"}
         assert _item_to_model_usage(item) is None
 
 
@@ -497,11 +509,8 @@ class TestHandlerHistory:
         def get_item_side_effect(**kwargs: Any) -> dict[str, Any]:
             nonlocal call_count
             call_count += 1
-            key = kwargs.get("Key", {})
-            pk = key.get("pk", "")
-            if pk.startswith("BUDGET#"):
-                return {}
-            # Return data for the current period query and for history
+            # Usage rows are keyed by scope_id/period_date (issue #261); budget
+            # lookups go through the scope-index query, not get_item.
             return {"Item": _make_usage_item("test-team", period, total_tokens=1000 * call_count)}
 
         def table_router(name: str) -> MagicMock:
@@ -511,7 +520,7 @@ class TestHandlerHistory:
 
         mock_ddb.Table.side_effect = table_router
         mock_usage_table.get_item.side_effect = get_item_side_effect
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         event = _make_event(team="test-team", history="3")
         result = handler(event)
@@ -544,10 +553,6 @@ class TestHandlerHistory:
 
         def get_item_side_effect(**kwargs: Any) -> dict[str, Any]:
             nonlocal history_call
-            key = kwargs.get("Key", {})
-            pk = key.get("pk", "")
-            if pk.startswith("BUDGET#"):
-                return {}
             history_call += 1
             # Return data for 1st and 3rd calls, empty for 2nd
             if history_call == 2:
@@ -561,7 +566,7 @@ class TestHandlerHistory:
 
         mock_ddb.Table.side_effect = table_router
         mock_usage_table.get_item.side_effect = get_item_side_effect
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         event = _make_event(team="test-team", history="3")
         result = handler(event)
@@ -595,7 +600,7 @@ class TestHandlerModels:
             "Item": _make_usage_item("test-team", period, total_cost_usd="15.00"),
         }
         mock_usage_table.scan.return_value = {"Items": model_items}
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -629,7 +634,7 @@ class TestHandlerModels:
             "Item": _make_usage_item("test-team", period, total_cost_usd="12.50"),
         }
         mock_usage_table.scan.return_value = {"Items": model_items}
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -678,10 +683,10 @@ class TestHandlerModels:
             "Item": _make_usage_item("test-team", period, total_cost_usd="15.00"),
         }
         mock_usage_table.scan.side_effect = [
-            {"Items": page1_items, "LastEvaluatedKey": {"pk": "cursor"}},
+            {"Items": page1_items, "LastEvaluatedKey": {"scope_id": "cursor"}},
             {"Items": page2_items},
         ]
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -714,9 +719,7 @@ class TestHandlerBudgetUtilization:
         mock_usage_table.get_item.return_value = {
             "Item": _make_usage_item("test-team", period, total_cost_usd="75.00"),
         }
-        mock_budgets_table.get_item.return_value = {
-            "Item": _make_budget_item("test-team", "100.00"),
-        }
+        mock_budgets_table.query.return_value = _budget_query_result("test-team", "100.00")
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -742,7 +745,7 @@ class TestHandlerBudgetUtilization:
         mock_budgets_table = MagicMock()
 
         mock_usage_table.get_item.return_value = {"Item": _make_usage_item("test-team", period)}
-        mock_budgets_table.get_item.return_value = {}  # No budget config
+        mock_budgets_table.query.return_value = {"Items": []}  # No budget config
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -770,9 +773,7 @@ class TestHandlerBudgetUtilization:
         mock_usage_table.get_item.return_value = {
             "Item": _make_usage_item("test-team", period, total_cost_usd="50.00"),
         }
-        mock_budgets_table.get_item.return_value = {
-            "Item": _make_budget_item("test-team", "0"),
-        }
+        mock_budgets_table.query.return_value = _budget_query_result("test-team", "0")
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -796,9 +797,7 @@ class TestHandlerBudgetUtilization:
         mock_budgets_table = MagicMock()
 
         mock_usage_table.get_item.return_value = {}  # No usage item
-        mock_budgets_table.get_item.return_value = {
-            "Item": _make_budget_item("test-team", "100.00"),
-        }
+        mock_budgets_table.query.return_value = _budget_query_result("test-team", "100.00")
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -848,7 +847,7 @@ class TestHandlerDDBErrors:
         mock_usage_table.get_item.return_value = {
             "Item": _make_usage_item("test-team", period, total_cost_usd="50.00"),
         }
-        mock_budgets_table.get_item.side_effect = _ddb_error()
+        mock_budgets_table.query.side_effect = _ddb_error()
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -894,7 +893,7 @@ class TestHandlerDDBErrors:
 
         mock_ddb.Table.side_effect = table_router
         mock_usage_table.get_item.side_effect = get_item_side_effect
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         event = _make_event(team="test-team", history="3")
         result = handler(event)
@@ -913,7 +912,7 @@ class TestHandlerDDBErrors:
             "Item": _make_usage_item("test-team", period),
         }
         mock_usage_table.scan.side_effect = _ddb_error()
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -960,9 +959,7 @@ class TestHandlerCombined:
 
         mock_usage_table.get_item.return_value = {"Item": usage_item}
         mock_usage_table.scan.return_value = {"Items": model_items}
-        mock_budgets_table.get_item.return_value = {
-            "Item": _make_budget_item("test-team", "200.00"),
-        }
+        mock_budgets_table.query.return_value = _budget_query_result("test-team", "200.00")
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():
@@ -1001,7 +998,7 @@ class TestHandlerCombined:
         mock_usage_table.scan.return_value = {
             "Items": [_make_model_item("test-team", "gpt-4", period)],
         }
-        mock_budgets_table.get_item.return_value = {}
+        mock_budgets_table.query.return_value = {"Items": []}
 
         def table_router(name: str) -> MagicMock:
             if "budget" in name.lower():

@@ -188,7 +188,7 @@ class TestTierConfig:
         assert tc.tokens_per_day == -1
 
     def test_default_tier_defaults_loaded(self) -> None:
-        """Built-in defaults should include sandbox, standard, premium, unlimited."""
+        """Built-in defaults should include sandbox, standard, high, unlimited."""
         assert "sandbox" in TIER_DEFAULTS or "standard" in TIER_DEFAULTS
         for tier_cfg in TIER_DEFAULTS.values():
             assert isinstance(tier_cfg, TierConfig)
@@ -216,20 +216,14 @@ class TestTierConfig:
             result = _load_tier_defaults()
         assert len(result) > 0
 
-    def test_load_tier_defaults_legacy_env_vars(self) -> None:
-        """Legacy per-tier env vars should be used when TIER_DEFAULTS is absent."""
-        env = {
-            "TIER_DEFAULT_FREE": "5",
-            "TIER_DEFAULT_STANDARD": "500",
-            "TIER_DEFAULT_PREMIUM": "5000",
-            "TIER_DEFAULT_ENTERPRISE": "50000",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            # Remove TIER_DEFAULTS if present
+    def test_load_tier_defaults_builtin_when_env_absent(self) -> None:
+        """With no TIER_DEFAULTS env var, the built-in gwcore defaults are used."""
+        with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("TIER_DEFAULTS", None)
             result = _load_tier_defaults()
-        assert result["free"].monthly_usd == Decimal(5)
-        assert result["standard"].monthly_usd == Decimal(500)
+        assert result["standard"].monthly_usd == Decimal(100)
+        assert result["high"].monthly_usd == Decimal(1000)
+        assert set(result) == {"sandbox", "standard", "high", "unlimited"}
 
     def test_tier_default_fallback_for_unknown_tier(self) -> None:
         """Unknown tier should fall back to standard."""

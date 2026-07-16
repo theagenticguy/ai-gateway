@@ -44,9 +44,13 @@ def _get_table():
 def _increment_rpm_counter(team: str) -> int:
     """Atomically increment the RPM counter for the current minute bucket.
 
-    Key schema:
-        PK = RATE#RPM#{team}
-        SK = MINUTE#{epoch_minute}
+    Key schema (real ``gateway-usage`` table, issue #261 — hash=``scope_id``,
+    range=``period_date``, see infrastructure/modules/budgets/main.tf):
+        scope_id    = ratelimit#rpm#{team}
+        period_date = minute#{epoch_minute}
+
+    The distinct ``ratelimit#`` scope_id prefix keeps these counters from
+    colliding with the monthly spend rows (``team#…`` / ``user#…``).
 
     TTL: expires_at = start-of-current-minute epoch + 120 seconds (two full
     minutes), giving DynamoDB time to clean up after the window closes.
@@ -61,8 +65,8 @@ def _increment_rpm_counter(team: str) -> int:
     table = _get_table()
     resp = table.update_item(
         Key={
-            "pk": f"RATE#RPM#{team}",
-            "sk": f"MINUTE#{minute_bucket}",
+            "scope_id": f"ratelimit#rpm#{team}",
+            "period_date": f"minute#{minute_bucket}",
         },
         UpdateExpression="SET #cnt = if_not_exists(#cnt, :zero) + :inc, #ttl = :ttl",
         ExpressionAttributeNames={
@@ -82,9 +86,10 @@ def _increment_rpm_counter(team: str) -> int:
 def _increment_daily_token_counter(team: str, tokens: int) -> int:
     """Atomically add tokens to the daily counter for a team.
 
-    Key schema:
-        PK = RATE#TOKENS#{team}
-        SK = DAY#{YYYY-MM-DD}
+    Key schema (real ``gateway-usage`` table, issue #261 — hash=``scope_id``,
+    range=``period_date``):
+        scope_id    = ratelimit#tokens#{team}
+        period_date = day#{YYYY-MM-DD}
 
     TTL: expires_at = end-of-day epoch + 3600 seconds (one hour grace).
 
@@ -100,8 +105,8 @@ def _increment_daily_token_counter(team: str, tokens: int) -> int:
     table = _get_table()
     resp = table.update_item(
         Key={
-            "pk": f"RATE#TOKENS#{team}",
-            "sk": f"DAY#{day_str}",
+            "scope_id": f"ratelimit#tokens#{team}",
+            "period_date": f"day#{day_str}",
         },
         UpdateExpression="SET #cnt = if_not_exists(#cnt, :zero) + :inc, #ttl = :ttl",
         ExpressionAttributeNames={
@@ -141,13 +146,13 @@ def check_rate_limit(
     """Check RPM and daily token limits for a team.
 
     RPM check: DynamoDB sliding window counter
-    - Key: PK=RATE#RPM#{team}, SK=MINUTE#{minute_bucket}
+    - Key: scope_id=ratelimit#rpm#{team}, period_date=minute#{minute_bucket}
     - Atomic ADD 1 on each call
     - TTL: expires_at = current minute epoch + 120 seconds
     - Compare count against rpm_limit
 
     Daily token check:
-    - Key: PK=RATE#TOKENS#{team}, SK=DAY#{YYYY-MM-DD}
+    - Key: scope_id=ratelimit#tokens#{team}, period_date=day#{YYYY-MM-DD}
     - Atomic ADD estimated_tokens on each call
     - TTL: expires_at = end of day + 3600 seconds
     - Compare against tokens_per_day_limit (-1 = unlimited)

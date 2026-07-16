@@ -48,6 +48,7 @@ from budget_enforcement.models import (
 from gwcore import agentgateway, audit
 from gwcore.logging import bind, correlation_id, get_logger
 from gwcore.telemetry import Timer, emit_metric
+from gwcore.tiers import TIER_DEFAULTS as GWCORE_TIER_DEFAULTS
 from rate_limiter.handler import check_rate_limit
 
 logger = get_logger("budget_enforcement")
@@ -55,15 +56,16 @@ logger = get_logger("budget_enforcement")
 BUDGETS_TABLE = os.environ.get("BUDGETS_TABLE", "gateway-budgets")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "gateway-usage")
 
-# ── Tier defaults ────────────────────────────────────────────────────────────
-# E.4: Load tier defaults from TIER_DEFAULTS env var (JSON) or fall back to
-# legacy per-tier env vars for backward compatibility.
+# The budget's configured USD amount IS the hard cap (100%); admin has no
+# separate hard-limit percentage. Warn thresholds are the alert points below it.
+_HARD_LIMIT_PCT = 100
 
-_DEFAULT_TIER_DEFAULTS: dict[str, dict[str, Any]] = {
-    "sandbox": {"rpm": 20, "tokens_per_day": 100000, "monthly_usd": 25},
-    "standard": {"rpm": 100, "tokens_per_day": 500000, "monthly_usd": 100},
-    "premium": {"rpm": 500, "tokens_per_day": 5000000, "monthly_usd": 1000},
-    "unlimited": {"rpm": 2000, "tokens_per_day": -1, "monthly_usd": 10000},
+# ── Tier defaults ────────────────────────────────────────────────────────────
+# Tier defaults come from gwcore.tiers (the single source of truth, issue #260)
+# and can be overridden per-deployment via the TIER_DEFAULTS env var (JSON).
+
+_DEFAULT_TIER_DEFAULTS: dict[str, TierConfig] = {
+    t.value: TierConfig.model_validate(d) for t, d in GWCORE_TIER_DEFAULTS.items()
 }
 
 
@@ -78,29 +80,7 @@ def _load_tier_defaults() -> dict[str, TierConfig]:
         except (json.JSONDecodeError, ValidationError):
             logger.warning("Failed to parse TIER_DEFAULTS env var, using built-in defaults", exc_info=True)
 
-    # Legacy fallback: per-tier env vars (monthly_usd only)
-    legacy_free = os.environ.get("TIER_DEFAULT_FREE")
-    if legacy_free is not None:
-        return {
-            "free": TierConfig(rpm=20, tokens_per_day=100000, monthly_usd=Decimal(legacy_free)),
-            "standard": TierConfig(
-                rpm=100,
-                tokens_per_day=500000,
-                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_STANDARD", "1000")),
-            ),
-            "premium": TierConfig(
-                rpm=500,
-                tokens_per_day=5000000,
-                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_PREMIUM", "10000")),
-            ),
-            "enterprise": TierConfig(
-                rpm=2000,
-                tokens_per_day=-1,
-                monthly_usd=Decimal(os.environ.get("TIER_DEFAULT_ENTERPRISE", "100000")),
-            ),
-        }
-
-    return {k: TierConfig.model_validate(v) for k, v in _DEFAULT_TIER_DEFAULTS.items()}
+    return dict(_DEFAULT_TIER_DEFAULTS)
 
 
 TIER_DEFAULTS: dict[str, TierConfig] = _load_tier_defaults()
@@ -111,18 +91,93 @@ dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "
 # ── DynamoDB helpers ─────────────────────────────────────────────────────────
 
 
+def _budget_warn_pct(alert_thresholds: Any) -> float:
+    """Derive a warn threshold from budget_admin's ``alert_thresholds`` list.
+
+    Admin stores a list of percent ints (e.g. ``[50, 80, 100]``). We treat the
+    highest threshold that is strictly below 100 as the warn point (80 here);
+    100 is the hard cap, not a warning. Falls back to 80 when nothing qualifies.
+    """
+    if isinstance(alert_thresholds, (list, tuple)):
+        below_cap = [int(t) for t in alert_thresholds if _is_int_like(t) and int(t) < _HARD_LIMIT_PCT]
+        if below_cap:
+            return float(max(below_cap))
+    return 80.0
+
+
+def _is_int_like(value: Any) -> bool:
+    try:
+        int(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _adapt_admin_budget(item: dict[str, Any]) -> dict[str, Any]:
+    """Translate a budget_admin-written item into the field vocabulary this
+    enforcement handler consumes.
+
+    budget_admin (src/budget_admin/routes.py::create_budget) and this handler
+    grew independent field names against the same ``gateway-budgets`` table
+    (issue #261). Rather than reshape the table or the admin write path (whose
+    keys are immutable / already correct), we adapt on read:
+
+    - ``monthly_budget_usd`` <- ``budget_usd`` (the admin-configured cap)
+    - ``warn_threshold_pct``  <- derived from ``alert_thresholds`` (highest < 100)
+    - ``hard_limit_pct``      <- 100 (admin has no separate hard limit; the
+      configured ``budget_usd`` IS the hard cap)
+    - ``rpm`` / ``tokens_per_day`` are intentionally NOT synthesized: they are
+      absent on the admin item, so the consumer falls back to tier_config.
+    - ``model_limits`` is passed through unchanged; ``_parse_model_limits``
+      accepts both the admin list form and the legacy dict form.
+    """
+    adapted = dict(item)
+    if "budget_usd" in item and "monthly_budget_usd" not in item:
+        adapted["monthly_budget_usd"] = item["budget_usd"]
+    adapted.setdefault("warn_threshold_pct", _budget_warn_pct(item.get("alert_thresholds")))
+    adapted.setdefault("hard_limit_pct", _HARD_LIMIT_PCT)
+    return adapted
+
+
 def _get_budget_record(team: str) -> dict[str, Any] | None:
-    """Fetch the budget configuration for a team from DynamoDB."""
+    """Fetch the team-scoped budget configuration from DynamoDB (issue #261).
+
+    Budgets are written by budget_admin keyed by ``budget_id`` (uuid) + ``scope``
+    ("CONFIG"), with the entity id in ``scope_id`` and the entity kind in
+    ``scope_type``. Enforcement looks a budget up by *team*, so we query the
+    ``scope-index`` GSI (HASH=``scope``, RANGE=``scope_id``): every config item
+    shares the partition value "CONFIG", and the range key is ``scope_id``, so
+    ``scope == "CONFIG" AND scope_id == team`` returns the budgets for that
+    entity id. We filter for ``scope_type == "team"`` to select the team budget
+    (ignoring any user/project budget that happens to share the id) and return
+    the first match, adapted to this handler's field vocabulary.
+    """
+    from boto3.dynamodb.conditions import Attr, Key  # noqa: PLC0415
+
     table = dynamodb.Table(BUDGETS_TABLE)
-    resp = table.get_item(Key={"pk": f"BUDGET#{team}", "sk": "CONFIG"})
-    return resp.get("Item")
+    resp = table.query(
+        IndexName="scope-index",
+        KeyConditionExpression=Key("scope").eq("CONFIG") & Key("scope_id").eq(team),
+        FilterExpression=Attr("scope_type").eq("team"),
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    return _adapt_admin_budget(items[0])
 
 
 def _get_current_usage(team: str) -> Decimal:
-    """Fetch the current-period spend for a team from DynamoDB."""
+    """Fetch the current-period spend for a team from DynamoDB.
+
+    Usage rows are keyed by the real Terraform schema (issue #261): the physical
+    ``gateway-usage`` table is hash=``scope_id``, range=``period_date`` (see
+    infrastructure/modules/budgets/main.tf). Team usage is written by
+    cost_attribution under ``scope_id = f"team#{team}"`` with a monthly
+    ``period_date`` of ``YYYY-MM`` — the same convention budget_admin reads.
+    """
     table = dynamodb.Table(USAGE_TABLE)
     period = datetime.now(tz=UTC).strftime("%Y-%m")
-    resp = table.get_item(Key={"pk": f"USAGE#TEAM#{team}", "sk": f"PERIOD#{period}"})
+    resp = table.get_item(Key={"scope_id": f"team#{team}", "period_date": period})
     item = resp.get("Item")
     if not item:
         return Decimal("0.00")
@@ -133,10 +188,15 @@ def _get_current_usage(team: str) -> Decimal:
 
 
 def _get_model_usage(team: str, model: str) -> Decimal:
-    """Fetch the current-period spend for a specific model within a team."""
+    """Fetch the current-period spend for a specific model within a team.
+
+    Per-model usage is written by cost_attribution under the conforming key
+    ``scope_id = f"team#{team}#model#{model}"``, ``period_date = YYYY-MM``
+    (issue #261, real ``gateway-usage`` schema).
+    """
     table = dynamodb.Table(USAGE_TABLE)
     period = datetime.now(tz=UTC).strftime("%Y-%m")
-    resp = table.get_item(Key={"pk": f"USAGE#TEAM#{team}#MODEL#{model}", "sk": f"PERIOD#{period}"})
+    resp = table.get_item(Key={"scope_id": f"team#{team}#model#{model}", "period_date": period})
     item = resp.get("Item")
     if not item:
         return Decimal("0.00")
@@ -159,17 +219,32 @@ def _seconds_until_period_reset() -> int:
 
 
 def _parse_model_limits(budget_item: dict[str, Any]) -> dict[str, ModelLimit]:
-    """Parse model_limits from a DynamoDB budget record."""
+    """Parse model_limits from a DynamoDB budget record.
+
+    Accepts BOTH shapes (issue #261), defensively:
+    - Legacy enforcement dict form: ``{model_name: {"monthly_usd": ..., ...}}``
+    - budget_admin list form: ``[{"model": name, "max_cost_usd": ...}, ...]``
+      where ``max_cost_usd`` maps onto ``ModelLimit.monthly_usd``.
+    """
     raw = budget_item.get("model_limits")
-    if not raw or not isinstance(raw, dict):
-        return {}
     result: dict[str, ModelLimit] = {}
-    for model_name, limit_data in raw.items():
-        try:
-            if isinstance(limit_data, dict):
+    if isinstance(raw, dict):
+        for model_name, limit_data in raw.items():
+            if not isinstance(limit_data, dict):
+                continue
+            try:
                 result[model_name] = ModelLimit.model_validate(limit_data)
-        except ValidationError:
-            logger.warning("Invalid model_limit for model=%s, skipping", model_name)
+            except ValidationError:
+                logger.warning("Invalid model_limit for model=%s, skipping", model_name)
+    elif isinstance(raw, list):
+        for entry in raw:
+            if not isinstance(entry, dict) or "model" not in entry:
+                continue
+            model_name = entry["model"]
+            try:
+                result[model_name] = ModelLimit.model_validate({"monthly_usd": entry.get("max_cost_usd", 0)})
+            except ValidationError:
+                logger.warning("Invalid model_limit for model=%s, skipping", model_name)
     return result
 
 

@@ -6,14 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, EmailStr, Field
 
-
-class Tier(StrEnum):
-    """Supported billing tiers."""
-
-    FREE = "free"
-    STANDARD = "standard"
-    PREMIUM = "premium"
-    ENTERPRISE = "enterprise"
+from gwcore.tiers import TIER_DEFAULTS, Tier
 
 
 class TeamStatus(StrEnum):
@@ -24,13 +17,10 @@ class TeamStatus(StrEnum):
 
 
 # ── Tier budget defaults (monthly USD) ───────────────────────────────────────
+# Backwards-compatible alias derived from the canonical gwcore table, keyed by
+# tier string value so ``TIER_BUDGET_DEFAULTS.get(tier_str)`` lookups still work.
 
-TIER_BUDGET_DEFAULTS: dict[str, int] = {
-    Tier.FREE: 10,
-    Tier.STANDARD: 1000,
-    Tier.PREMIUM: 10000,
-    Tier.ENTERPRISE: 100000,
-}
+TIER_BUDGET_DEFAULTS: dict[str, int] = {t.value: d["monthly_usd"] for t, d in TIER_DEFAULTS.items()}
 
 
 # ── Request models ───────────────────────────────────────────────────────────
