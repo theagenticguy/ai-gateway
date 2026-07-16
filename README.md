@@ -23,9 +23,9 @@ The infrastructure follows a single-region, two-AZ deployment on AWS:
 - **CloudWatch** -- Log groups for gateway and OTel collector, saved Logs Insights queries, and an operational dashboard (requests, errors, latency, top endpoints by provider).
 - **Secrets Manager** -- Stores provider API keys (OpenAI, Anthropic, Google, Azure) injected into ECS tasks at runtime.
 
-The deployment is split into two planes ([ADR-014](adr/014-two-plane-architecture-split.md)): the **data plane** above carries inference traffic on the ALB, while a **control plane** of Lambda services behind an API Gateway REST API (with a Cognito authorizer) handles teams, budgets, routing, pricing, usage, and content-scanner configuration. All control-plane services share one Python package, `src/gwcore/`, that provides a single authentication path, a consistent response/error/pagination contract, in-process + ETag caching, an append-only audit trail (Kinesis Firehose → Apache Iceberg on S3 Tables), and uniform EMF metrics + structured logging. See [ADR-016](adr/016-control-plane-api-foundation.md).
+The deployment is split into two planes ([ADR-014](adr/014-two-plane-architecture-split.md)): the **data plane** above carries inference traffic on the ALB, while a **control plane** of Lambda services behind an API Gateway REST API (with a Cognito authorizer) handles teams, budgets, routing, pricing, and usage. All eleven control-plane services share one Python package, `src/gwcore/`, that provides a single authentication path, a consistent response/error/pagination contract, in-process + ETag caching, an append-only audit trail (Kinesis Firehose → Apache Iceberg on S3 Tables), and uniform EMF metrics + structured logging. See [ADR-016](adr/016-control-plane-api-foundation.md).
 
-A detailed Mermaid architecture diagram is available in the `docs/` directory.
+Detailed architecture diagrams live in the [developer guide](docs/src/content/docs/developer-guide/architecture.md); a deep-dive engineering reference (module map, data flows, contracts, impact analysis) lives under [`engineering-docs/`](engineering-docs/README.md).
 
 ## Prerequisites
 

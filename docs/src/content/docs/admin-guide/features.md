@@ -241,16 +241,23 @@ Per-team rate limiting with two dimensions: requests per minute (RPM) and daily 
 
 Each request atomically increments the counter. When a limit is exceeded, the gateway returns a `429`-equivalent response with a `retry_after_seconds` hint.
 
-**Tier defaults:**
+**Tier defaults** (built-in, from `src/budget_enforcement/handler.py`; overridable via the `TIER_DEFAULTS` env var):
 
-| Tier | RPM | Daily Tokens |
-|---|---|---|
-| sandbox | 20 | 100,000 |
-| standard | 100 | 1,000,000 |
-| premium | 500 | 10,000,000 |
-| enterprise | -1 (unlimited) | -1 (unlimited) |
+| Tier | RPM | Daily Tokens | Monthly USD |
+|---|---|---|---|
+| sandbox | 20 | 100,000 | 25 |
+| standard | 100 | 500,000 | 100 |
+| premium | 500 | 5,000,000 | 1,000 |
+| unlimited | 2,000 | -1 (unlimited) | 10,000 |
 
 If DynamoDB is unreachable, the request is *allowed* and a warning is logged. Rate limiting never blocks requests due to infrastructure failures.
+
+:::caution[Two known tier/budget inconsistencies]
+These are documented gaps, not bugs to work around silently — track them before relying on tier defaults or admin-created budgets:
+
+1. **Tier names diverge between services.** `budget_enforcement` uses `sandbox / standard / premium / unlimited` (above), while `team_registration` seeds new-team budgets from a different set — `FREE=$10 / STANDARD=$1000 / PREMIUM=$10000 / ENTERPRISE=$100000` (`src/team_registration/models.py`). Only `standard` and `premium` overlap by name, and their dollar amounts differ. A team seeded as `FREE` or `ENTERPRISE` has no matching enforcement tier.
+2. **Admin-created budgets can be invisible to enforcement.** `budget_admin` writes budgets under a different DynamoDB key schema than `budget_enforcement` reads. Verify enforcement actually sees a budget after creating it via the admin API. See the contract map in `engineering-docs/insights/contract-map.md`.
+:::
 
 ### Usage Self-Service API
 
