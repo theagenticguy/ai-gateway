@@ -26,7 +26,7 @@ This guide is for **infrastructure engineers and platform team members** who dep
 
 ## Architecture Overview
 
-The AI Gateway runs [agentgateway](https://github.com/agentgateway/agentgateway) — a Rust LLM/MCP proxy on a distroless base, pinned by image digest ([ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)) — on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 17 modules.
+The AI Gateway runs [agentgateway](https://github.com/agentgateway/agentgateway) — a Rust LLM/MCP proxy on a distroless base, pinned by image digest ([ADR-017](/ai-gateway/adrs/017-agentgateway-data-plane-spike/)) — on ECS Fargate behind an Application Load Balancer with Cognito M2M authentication and WAFv2 protection. All infrastructure is defined as Terraform with 18 modules.
 
 ```mermaid
 flowchart TB

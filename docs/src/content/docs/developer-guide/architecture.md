@@ -138,7 +138,7 @@ The gateway reads a YAML config delivered inline via `-c`, rendered from `comput
 
 The control plane handles low-volume, correctness-sensitive configuration and management operations. All admin endpoints sit behind a single API Gateway REST API with a shared Cognito authorizer, gated by the `enable_admin_api` feature flag.
 
-**Shared foundation (`gwcore`).** Every control-plane Lambda imports the shared `src/gwcore/` package instead of re-implementing primitives. `gwcore` provides one authentication path (two verification modes -- `trusted_edge` reads claims behind the Cognito authorizer, `verify` does full RS256 against cached JWKS -- both yielding one `Principal`), a unified `require(...)` authorization gate, a consistent response/error envelope with opaque-cursor pagination, in-process TTL + ETag caching, an append-only audit trail, and uniform EMF metrics + structured logging. All twelve services run on it. See [ADR-016](/ai-gateway/adrs/016-control-plane-api-foundation/).
+**Shared foundation (`gwcore`).** Every control-plane Lambda imports the shared `src/gwcore/` package instead of re-implementing primitives. `gwcore` provides one authentication path (two verification modes -- `trusted_edge` reads claims behind the Cognito authorizer, `verify` does full RS256 against cached JWKS -- both yielding one `Principal`), a unified `require(...)` authorization gate, a consistent response/error envelope with opaque-cursor pagination, in-process TTL + ETag caching, an append-only audit trail, and uniform EMF metrics + structured logging. All eleven services import it (`gwcore` is the shared library, not a service). See [ADR-016](/ai-gateway/adrs/016-control-plane-api-foundation/).
 
 **Admin API routes:**
 
@@ -188,7 +188,7 @@ For the full decision record, see [ADR-014](/ai-gateway/adrs/014-two-plane-archi
 
 ## Terraform Module Dependency Graph
 
-The infrastructure is organized into 4 modules with explicit data dependencies. The root module (`infrastructure/main.tf`) wires them together in order.
+The four foundational modules carry explicit data dependencies; the root module (`infrastructure/main.tf`) wires them together in order. The graph below shows that ordering (the full module inventory follows in the next section).
 
 ```mermaid
 flowchart TD
@@ -234,7 +234,7 @@ flowchart TD
 
 ### Module Responsibilities
 
-The infrastructure is organized into 17 modules. The table below groups them by plane.
+The infrastructure is organized into 18 modules. The table below groups them by plane.
 
 **Foundation modules** (shared by both planes):
 
@@ -266,6 +266,7 @@ The infrastructure is organized into 17 modules. The table below groups them by 
 | **chargeback** | Step Functions state machine, Lambda for monthly cost report generation | -- |
 | **audit_log** | Kinesis Firehose (Parquet), S3 bucket (Hive-partitioned), Glue catalog | `s3_bucket_name`, `firehose_stream_name` |
 | **audit_pipeline** | Kinesis Firehose → Apache Iceberg on S3 Tables — the `gwcore.audit` sink (ACID commits, Athena/Spark, no Glue crawler). Successor to `audit_log` (ADR-016) | `firehose_stream_name`, `firehose_stream_arn`, `table_bucket_arn` |
+| **audit_query** | Athena workgroup + named queries backing `budget_admin`'s `GET /audit` read path over the Iceberg audit table | `workgroup_name`, `athena_output_bucket` |
 | **inspector** | Amazon Inspector enhanced scanning for ECR repositories | -- |
 
 ### Why This Order
