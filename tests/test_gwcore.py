@@ -197,7 +197,7 @@ def test_build_principal_from_authorizer_claims() -> None:
             "authorizer": {
                 "claims": _claims(
                     "https://gateway.internal/invoke",
-                    **{"custom:team": "ml-platform", "custom:tenant_tier": "premium"},
+                    **{"custom:team": "ml-platform", "custom:tenant_tier": "high"},
                 )
             }
         }
@@ -205,7 +205,7 @@ def test_build_principal_from_authorizer_claims() -> None:
     p = auth.build_principal(event)
     assert p.sub == "user-1"
     assert p.team == "ml-platform"
-    assert p.tenant_tier == "premium"
+    assert p.tenant_tier == "high"
     assert "https://gateway.internal/invoke" in p.scopes
 
 
@@ -239,11 +239,11 @@ def test_admin_alias_legacy_and_canonical() -> None:
 
 
 def test_authorize_scope_and_tier() -> None:
-    p = auth._principal_from_claims(_claims("scope-x", **{"custom:tenant_tier": "premium"}))
+    p = auth._principal_from_claims(_claims("scope-x", **{"custom:tenant_tier": "high"}))
     assert auth.authorize(p, scopes=["scope-x"])
     assert not auth.authorize(p, scopes=["scope-y"])
-    assert auth.authorize(p, tiers=["premium", "enterprise"])
-    assert not auth.authorize(p, tiers=["free"])
+    assert auth.authorize(p, tiers=["high", "unlimited"])
+    assert not auth.authorize(p, tiers=["sandbox"])
 
 
 def test_authorize_require_all_scopes() -> None:

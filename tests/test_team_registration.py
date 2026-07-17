@@ -273,8 +273,8 @@ class TestRegisterTeam:
 
     @patch("team_registration.routes.dynamodb")
     @patch("team_registration.routes.cognito")
-    def test_free_tier_budget(self, mock_cognito: MagicMock, mock_dynamodb: MagicMock) -> None:
-        """Free tier registration should seed a $10 budget."""
+    def test_sandbox_tier_budget(self, mock_cognito: MagicMock, mock_dynamodb: MagicMock) -> None:
+        """Sandbox tier registration should seed a $25 budget."""
         mock_cognito.create_user_pool_client.return_value = _make_cognito_response()
         mock_table = MagicMock()
         mock_table.query.return_value = {"Items": []}
@@ -284,20 +284,25 @@ class TestRegisterTeam:
             "POST",
             "/teams",
             body={
-                "team_name": "free-team",
-                "contact_email": "free@example.com",
-                "tier": "free",
+                "team_name": "sandbox-team",
+                "contact_email": "sandbox@example.com",
+                "tier": "sandbox",
             },
         )
         result = handler(event)
 
         assert result["statusCode"] == 201
 
-        # Check the budget put_item call — second put_item is the budget record
+        # Check the budget put_item call — second put_item is the budget record.
+        # Seeded on the real gateway-budgets schema (issue #261): the cap lives in
+        # ``budget_usd`` with the entity in scope_type/scope_id and scope="CONFIG".
         calls = mock_table.put_item.call_args_list
         assert len(calls) == 2
         budget_item = calls[1].kwargs["Item"]
-        assert budget_item["monthly_budget_usd"] == Decimal(10)
+        assert budget_item["budget_usd"] == Decimal(25)
+        assert budget_item["scope"] == "CONFIG"
+        assert budget_item["scope_type"] == "team"
+        assert budget_item["scope_id"] == "sandbox-team"
 
 
 # ── List teams tests ─────────────────────────────────────────────────────────
@@ -553,10 +558,10 @@ class TestModels:
             RegisterTeamRequest(team_name="", contact_email="a@b.com")
 
     def test_tier_budget_defaults(self) -> None:
-        assert TIER_BUDGET_DEFAULTS[Tier.FREE] == 10
-        assert TIER_BUDGET_DEFAULTS[Tier.STANDARD] == 1000
-        assert TIER_BUDGET_DEFAULTS[Tier.PREMIUM] == 10000
-        assert TIER_BUDGET_DEFAULTS[Tier.ENTERPRISE] == 100000
+        assert TIER_BUDGET_DEFAULTS[Tier.SANDBOX] == 25
+        assert TIER_BUDGET_DEFAULTS[Tier.STANDARD] == 100
+        assert TIER_BUDGET_DEFAULTS[Tier.HIGH] == 1000
+        assert TIER_BUDGET_DEFAULTS[Tier.UNLIMITED] == 10000
 
     def test_credentials_response(self) -> None:
         resp = CredentialsResponse(

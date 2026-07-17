@@ -32,3 +32,20 @@ skip-check:
   - CKV2_AWS_31  # WAF logging configured via aws_wafv2_web_acl_logging_configuration
   - CKV2_AWS_40  # scoped jsonencode policies — checkov misreads count-indexed ARNs as full IAM
   - CKV2_AWS_56  # no AWS-managed IAMFullAccess attached; policies are inline + scoped
+  # Terraform module sourcing — all first-party modules are local ./modules/*
+  # paths (commit-hash pinning is inapplicable); the only remote sources are
+  # terraform-aws-modules (vpc/alb/ecs) pinned to exact registry versions.
+  - CKV_TF_1     # local module sources + registry modules pinned to exact versions
+  # Lambda hardening — accepted risks for this serverless control-plane
+  # architecture. The 4 aws_lambda_function_url resources (routing_config,
+  # budget_enforcement, budget_admin_api, team_registration) all set
+  # authorization_type=AWS_IAM, never NONE. Reserved concurrency, DLQ, VPC
+  # placement, and code-signing are accepted-not-configured for these
+  # synchronously-invoked control-plane functions; only the async-invoked
+  # audit pipeline would materially benefit from a DLQ (pre_token already has
+  # one via aws_sqs_queue.lambda_dlq) — tracked for a follow-up, not this waiver.
+  - CKV2_AWS_50  # all function URLs use authorization_type=AWS_IAM (not NONE)
+  - CKV_AWS_115  # reserved concurrency accepted-default (only pre_token caps it at 10)
+  - CKV_AWS_116  # DLQ accepted for sync control-plane; async audit pipeline is the follow-up
+  - CKV_AWS_117  # Lambdas call AWS APIs + Bedrock over the AWS network; no VPC (avoids NAT)
+  - CKV_AWS_272  # code-signing not configured; deploy artifacts are built in-pipeline

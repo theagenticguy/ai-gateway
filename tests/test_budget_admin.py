@@ -232,7 +232,7 @@ class TestGetBudget:
                 "scope_id": "platform",
                 "budget_usd": Decimal(5000),
                 "period": "monthly",
-                "tier": "premium",
+                "tier": "high",
                 "alert_thresholds": [50, 80, 100],
                 "created_at": "2026-01-01T00:00:00",
                 "updated_at": "2026-03-01T00:00:00",
@@ -294,7 +294,7 @@ class TestCreateBudget:
             "scope_id": "platform-eng",
             "budget_usd": "5000.00",
             "period": "monthly",
-            "tier": "premium",
+            "tier": "high",
             "alert_thresholds": [50, 80, 100],
         }
         result = handler(_make_event(method="POST", path="/budgets", body=body))
@@ -363,7 +363,7 @@ class TestUpdateBudget:
     @patch("budget_admin.routes._budgets_table")
     def test_update_multiple_fields(self, mock_table: Any, _audit: Any) -> None:
         mock_table.return_value.update_item.return_value = {"Attributes": {}}
-        body = {"budget_usd": "3000", "tier": "enterprise", "alert_thresholds": [60, 90, 100]}
+        body = {"budget_usd": "3000", "tier": "unlimited", "alert_thresholds": [60, 90, 100]}
         result = handler(_make_event(method="PUT", path="/budgets/abc-123", body=body))
         assert result["statusCode"] == 200
 
@@ -772,7 +772,7 @@ class TestModels:
             budget_usd=Decimal(50000),
             token_limit=1_000_000,
             period="quarterly",
-            tier="enterprise",
+            tier="unlimited",
             model_limits=[{"model": "claude-sonnet-4-20250514", "max_cost_usd": Decimal(10000)}],
             alert_thresholds=[25, 50, 75, 100],
         )

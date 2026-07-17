@@ -42,24 +42,25 @@ s3 = boto3.client("s3", region_name=AWS_REGION)
 def _query_team_usage(month: str) -> list[dict[str, Any]]:
     """Query all team usage records for a given month from the usage table.
 
-    Scans for items where pk starts with USAGE#TEAM# and sk matches the
-    target period. Uses the period-index GSI for efficient lookups.
+    Reads the real ``gateway-usage`` schema (issue #261): hash=``scope_id``,
+    range=``period_date``. Team monthly rows are written by cost_attribution as
+    ``scope_id = "team#<team>"``, ``period_date = "YYYY-MM"``. We scan for
+    ``scope_id begins_with "team#"`` and ``period_date == month``, then EXCLUDE
+    per-model rows (``scope_id = "team#<team>#model#<model>"``) so per-team
+    chargeback totals do not double-count model-level usage.
     """
     table = dynamodb.Table(USAGE_TABLE)
-    period_sk = f"PERIOD#{month}"
+
+    filter_expr = Key("scope_id").begins_with("team#") & Key("period_date").eq(month)
 
     items: list[dict[str, Any]] = []
     try:
-        # Scan for team usage records matching the period
-        # Using scan with filter since we need all teams for a given period
-        response = table.scan(
-            FilterExpression=Key("sk").eq(period_sk) & Key("pk").begins_with("USAGE#TEAM#"),
-        )
+        response = table.scan(FilterExpression=filter_expr)
         items.extend(response.get("Items", []))
 
         while "LastEvaluatedKey" in response:
             response = table.scan(
-                FilterExpression=Key("sk").eq(period_sk) & Key("pk").begins_with("USAGE#TEAM#"),
+                FilterExpression=filter_expr,
                 ExclusiveStartKey=response["LastEvaluatedKey"],
             )
             items.extend(response.get("Items", []))
@@ -67,38 +68,46 @@ def _query_team_usage(month: str) -> list[dict[str, Any]]:
         logger.exception("Failed to query usage table for month %s", month)
         raise
 
-    logger.info("Found %d team usage records for %s", len(items), month)
-    return items
+    # Exclude per-model rows so per-team totals are not double-counted.
+    team_items = [item for item in items if "#model#" not in str(item.get("scope_id", ""))]
+
+    logger.info("Found %d team usage records for %s", len(team_items), month)
+    return team_items
 
 
 def _query_budget_limits() -> dict[str, Decimal]:
     """Query budget limits for all teams.
 
     Returns a mapping of team name to monthly budget limit in USD.
+
+    Budgets are written by budget_admin on the real ``gateway-budgets`` schema
+    (issue #261): config rows carry ``scope == "CONFIG"``, the entity kind in
+    ``scope_type`` and the entity id in ``scope_id``, with the cap in
+    ``budget_usd``. We scan for team-scoped config rows and index them by team.
     """
+    from boto3.dynamodb.conditions import Attr  # noqa: PLC0415
+
     table = dynamodb.Table(BUDGETS_TABLE)
     limits: dict[str, Decimal] = {}
+    filter_expr = Key("scope").eq("CONFIG") & Attr("scope_type").eq("team")
 
-    try:
-        response = table.scan(
-            FilterExpression=Key("scope").eq("team"),
-        )
-        for item in response.get("Items", []):
-            team = item.get("scope_id", item.get("team", ""))
-            budget = item.get("monthly_budget_usd", item.get("monthly_usd"))
+    def _absorb(items: list[dict[str, Any]]) -> None:
+        for item in items:
+            team = item.get("scope_id", "")
+            budget = item.get("budget_usd", item.get("monthly_budget_usd"))
             if team and budget is not None:
                 limits[team] = Decimal(str(budget))
 
+    try:
+        response = table.scan(FilterExpression=filter_expr)
+        _absorb(response.get("Items", []))
+
         while "LastEvaluatedKey" in response:
             response = table.scan(
-                FilterExpression=Key("scope").eq("team"),
+                FilterExpression=filter_expr,
                 ExclusiveStartKey=response["LastEvaluatedKey"],
             )
-            for item in response.get("Items", []):
-                team = item.get("scope_id", item.get("team", ""))
-                budget = item.get("monthly_budget_usd", item.get("monthly_usd"))
-                if team and budget is not None:
-                    limits[team] = Decimal(str(budget))
+            _absorb(response.get("Items", []))
     except Exception:
         logger.warning("Failed to query budget limits — proceeding without budget data", exc_info=True)
 
@@ -132,9 +141,9 @@ def _build_team_summaries(
     summaries: list[TeamUsageSummary] = []
 
     for item in usage_items:
-        pk: str = item.get("pk", "")
-        team = pk.removeprefix("USAGE#TEAM#")
-        if not team:
+        scope_id: str = item.get("scope_id", "")
+        team = scope_id.removeprefix("team#")
+        if not team or "#model#" in scope_id:
             continue
 
         total_cost = Decimal(str(item.get("total_cost_usd", 0)))

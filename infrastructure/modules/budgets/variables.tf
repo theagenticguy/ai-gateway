@@ -50,26 +50,6 @@ variable "usage_table" {
   default     = "gateway-usage"
 }
 
-variable "tier_default_free" {
-  type    = string
-  default = "10"
-}
-
-variable "tier_default_standard" {
-  type    = string
-  default = "1000"
-}
-
-variable "tier_default_premium" {
-  type    = string
-  default = "10000"
-}
-
-variable "tier_default_enterprise" {
-  type    = string
-  default = "100000"
-}
-
 variable "tier_defaults" {
   description = "Tier defaults as a map of tier name to config (E.4)"
   type = map(object({
@@ -80,7 +60,7 @@ variable "tier_defaults" {
   default = {
     sandbox   = { rpm = 20, tokens_per_day = 100000, monthly_usd = 25 }
     standard  = { rpm = 100, tokens_per_day = 500000, monthly_usd = 100 }
-    premium   = { rpm = 500, tokens_per_day = 5000000, monthly_usd = 1000 }
+    high      = { rpm = 500, tokens_per_day = 5000000, monthly_usd = 1000 }
     unlimited = { rpm = 2000, tokens_per_day = -1, monthly_usd = 10000 }
   }
 }

@@ -145,18 +145,28 @@ def register_team(event: dict[str, Any], principal: auth.Principal) -> dict[str,
         }
     )
 
+    # Seed the onboarding budget on the real ``gateway-budgets`` schema
+    # (issue #261): keyed by budget_id(uuid)/scope, entity id in scope_id,
+    # entity kind in scope_type. Conforms to budget_admin.create_budget so the
+    # seeded budget is visible to enforcement (via the scope-index GSI) and to
+    # budget_admin. Uses ``budget_usd`` (the field enforcement's adapter reads),
+    # NOT ``monthly_budget_usd``.
     budget = TIER_BUDGET_DEFAULTS.get(request.tier.value, 1000)
+    budget_id = str(uuid.uuid4())
     dynamodb.Table(BUDGETS_TABLE).put_item(
         Item={
-            "pk": f"BUDGET#{request.team_name}",
-            "sk": "CONFIG",
+            "budget_id": budget_id,
+            "scope": "CONFIG",
+            "scope_type": "team",
+            "scope_id": request.team_name,
+            "budget_usd": Decimal(str(budget)),
+            "period": "monthly",
+            "tier": request.tier.value,
+            "alert_thresholds": [50, 80, 100],
             "team_id": team_id,
             "team_name": request.team_name,
-            "monthly_budget_usd": Decimal(str(budget)),
-            "warn_threshold_pct": 80,
-            "hard_limit_pct": 100,
-            "tier": request.tier.value,
             "created_at": now,
+            "updated_at": now,
         }
     )
 
@@ -244,23 +254,35 @@ def get_team(team_id: str) -> dict[str, Any]:
 
 
 def _get_usage_summary(team_name: str, tier: str) -> UsageSummary:
-    """Build a usage summary from the budgets and usage tables."""
+    """Build a usage summary from the budgets and usage tables.
+
+    Reads the real Terraform schemas (issue #261): the team budget is looked up
+    on the ``gateway-budgets`` ``scope-index`` GSI (``scope`` == "CONFIG",
+    ``scope_id`` == team, ``scope_type`` == "team") since the base table is
+    keyed by budget_id(uuid); usage is read from ``gateway-usage`` by
+    ``scope_id`` (``team#<team>``) / ``period_date`` (``YYYY-MM``).
+    """
+    from boto3.dynamodb.conditions import Attr, Key  # noqa: PLC0415
+
     period = _current_period()
     budget = float(TIER_BUDGET_DEFAULTS.get(tier, 1000))
 
     try:
-        budget_resp = dynamodb.Table(BUDGETS_TABLE).get_item(Key={"pk": f"BUDGET#{team_name}", "sk": "CONFIG"})
-        budget_item = budget_resp.get("Item")
-        if budget_item:
-            budget = float(Decimal(str(budget_item.get("monthly_budget_usd", budget))))
+        budget_resp = dynamodb.Table(BUDGETS_TABLE).query(
+            IndexName="scope-index",
+            KeyConditionExpression=Key("scope").eq("CONFIG") & Key("scope_id").eq(team_name),
+            FilterExpression=Attr("scope_type").eq("team"),
+        )
+        budget_items = budget_resp.get("Items", [])
+        if budget_items:
+            budget_item = budget_items[0]
+            budget = float(Decimal(str(budget_item.get("budget_usd", budget_item.get("monthly_budget_usd", budget)))))
     except (ClientError, InvalidOperation):
         logger.debug("Could not fetch budget for team=%s, using tier default", team_name)
 
     total_cost = 0.0
     try:
-        usage_resp = dynamodb.Table(USAGE_TABLE).get_item(
-            Key={"pk": f"USAGE#TEAM#{team_name}", "sk": f"PERIOD#{period}"}
-        )
+        usage_resp = dynamodb.Table(USAGE_TABLE).get_item(Key={"scope_id": f"team#{team_name}", "period_date": period})
         usage_item = usage_resp.get("Item")
         if usage_item:
             total_cost = float(Decimal(str(usage_item.get("total_cost_usd", "0"))))

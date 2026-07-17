@@ -37,35 +37,52 @@ dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "
 
 
 def _get_team_usage(team: str, period: str) -> dict[str, Any] | None:
-    """Fetch usage for a team in a single period from DynamoDB."""
+    """Fetch usage for a team in a single period from DynamoDB.
+
+    Reads the real ``gateway-usage`` schema (issue #261): hash=``scope_id``
+    (``team#<team>``), range=``period_date`` (``YYYY-MM``).
+    """
     table = dynamodb.Table(USAGE_TABLE)
-    resp = table.get_item(Key={"pk": f"USAGE#TEAM#{team}", "sk": f"PERIOD#{period}"})
+    resp = table.get_item(Key={"scope_id": f"team#{team}", "period_date": period})
     return resp.get("Item")
 
 
 def _get_budget_config(team: str) -> dict[str, Any] | None:
-    """Fetch the budget configuration for a team from DynamoDB."""
+    """Fetch the team-scoped budget configuration from DynamoDB (issue #261).
+
+    The physical ``gateway-budgets`` table is keyed by ``budget_id`` (uuid) +
+    ``scope``, so a lookup by team goes through the ``scope-index`` GSI
+    (HASH=``scope`` == "CONFIG", RANGE=``scope_id`` == team), filtered to
+    ``scope_type == "team"`` — the same path budget_enforcement uses.
+    """
+    from boto3.dynamodb.conditions import Attr  # noqa: PLC0415
+
     table = dynamodb.Table(BUDGETS_TABLE)
-    resp = table.get_item(Key={"pk": f"BUDGET#{team}", "sk": "CONFIG"})
-    return resp.get("Item")
+    resp = table.query(
+        IndexName="scope-index",
+        KeyConditionExpression=Key("scope").eq("CONFIG") & Key("scope_id").eq(team),
+        FilterExpression=Attr("scope_type").eq("team"),
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
 
 
 def _get_model_usage_for_team(team: str, period: str) -> list[dict[str, Any]]:
     """Scan for all model-level usage rows for a team in a given period.
 
-    DDB pattern: PK begins_with ``USAGE#TEAM#{team}#MODEL#``, SK = ``PERIOD#{period}``
+    DDB pattern (real ``gateway-usage`` schema, issue #261): ``scope_id``
+    begins_with ``team#{team}#model#``, ``period_date`` == ``{period}``.
     """
     table = dynamodb.Table(USAGE_TABLE)
     items: list[dict[str, Any]] = []
 
-    response = table.scan(
-        FilterExpression=Key("pk").begins_with(f"USAGE#TEAM#{team}#MODEL#") & Key("sk").eq(f"PERIOD#{period}"),
-    )
+    filter_expr = Key("scope_id").begins_with(f"team#{team}#model#") & Key("period_date").eq(period)
+    response = table.scan(FilterExpression=filter_expr)
     items.extend(response.get("Items", []))
 
     while "LastEvaluatedKey" in response:
         response = table.scan(
-            FilterExpression=Key("pk").begins_with(f"USAGE#TEAM#{team}#MODEL#") & Key("sk").eq(f"PERIOD#{period}"),
+            FilterExpression=filter_expr,
             ExclusiveStartKey=response["LastEvaluatedKey"],
         )
         items.extend(response.get("Items", []))
@@ -114,14 +131,15 @@ def _item_to_usage_period(item: dict[str, Any], period: str) -> UsagePeriod:
 def _item_to_model_usage(item: dict[str, Any]) -> ModelUsage | None:
     """Convert a DynamoDB model-level usage item to a ``ModelUsage`` model.
 
-    Extracts the model name from the PK: ``USAGE#TEAM#{team}#MODEL#{model}``.
+    Extracts the model name from the scope_id: ``team#{team}#model#{model}``
+    (issue #261, real ``gateway-usage`` schema).
     """
-    pk = item.get("pk", "")
-    marker = "#MODEL#"
-    idx = pk.find(marker)
+    scope_id = item.get("scope_id", "")
+    marker = "#model#"
+    idx = scope_id.find(marker)
     if idx == -1:
         return None
-    model_name = pk[idx + len(marker) :]
+    model_name = scope_id[idx + len(marker) :]
     if not model_name:
         return None
 
@@ -162,7 +180,11 @@ def _handle_usage(team: str, history: int, models: bool) -> dict[str, Any]:
     try:
         budget_item = _get_budget_config(team)
         if budget_item:
-            monthly_budget_usd = _safe_decimal(budget_item.get("monthly_budget_usd", "0"))
+            # budget_admin writes the cap as ``budget_usd`` (issue #261); fall
+            # back to the legacy ``monthly_budget_usd`` name for older records.
+            monthly_budget_usd = _safe_decimal(
+                budget_item.get("budget_usd", budget_item.get("monthly_budget_usd", "0"))
+            )
             if monthly_budget_usd > 0 and current_period:
                 budget_utilization_pct = round(float(current_period.total_cost_usd / monthly_budget_usd * 100), 1)
     except ClientError:

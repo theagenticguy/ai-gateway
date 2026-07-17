@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
+
+from gwcore.tiers import Tier as TenantTier
 
 
 class UsageMetrics(BaseModel):
@@ -157,15 +158,6 @@ class HandlerResponse(BaseModel):
 # ── DynamoDB record models ───────────────────────────────────────────────────
 
 
-class TenantTier(StrEnum):
-    """Supported tenant tiers for budget defaults."""
-
-    FREE = "free"
-    STANDARD = "standard"
-    PREMIUM = "premium"
-    ENTERPRISE = "enterprise"
-
-
 class ModelLimit(BaseModel):
     """Per-model spending limit within a team budget (E.5)."""
 
@@ -176,13 +168,18 @@ class ModelLimit(BaseModel):
 
 
 class BudgetRecord(BaseModel):
-    """A budget configuration stored in DynamoDB.
+    """A budget configuration stored in the ``gateway-budgets`` table.
 
-    PK: ``BUDGET#<team>``  SK: ``CONFIG``
+    Keyed by the real Terraform schema (issue #261): hash=``budget_id`` (uuid),
+    range=``scope`` (always ``"CONFIG"`` for config rows). The entity kind is in
+    ``scope_type`` and the entity id in ``scope_id``; a lookup by team goes
+    through the ``scope-index`` GSI (HASH=``scope``, RANGE=``scope_id``).
     """
 
-    pk: str = Field(description="Partition key, e.g. BUDGET#my-team")
-    sk: str = Field(default="CONFIG", description="Sort key")
+    budget_id: str = Field(description="Partition key, a uuid")
+    scope: str = Field(default="CONFIG", description="Sort key; 'CONFIG' for budget config rows")
+    scope_type: str = Field(default="team", description="Entity kind: team | user | project")
+    scope_id: str = Field(description="Entity id, e.g. the team name")
     team: str
     cost_center: str = Field(default="")
     tenant_tier: TenantTier = Field(default=TenantTier.STANDARD)
@@ -215,13 +212,16 @@ class BudgetRecord(BaseModel):
 
 
 class UsageRecord(BaseModel):
-    """Accumulated usage for a given entity+period stored in DynamoDB.
+    """Accumulated usage for a given entity+period in the ``gateway-usage`` table.
 
-    PK: ``USAGE#<entity_type>#<entity_id>``  SK: ``PERIOD#<YYYY-MM>``
+    Keyed by the real Terraform schema (issue #261): hash=``scope_id``,
+    range=``period_date``. Team monthly rows use ``scope_id = "team#<team>"``,
+    ``period_date = "YYYY-MM"``; per-model rows use
+    ``scope_id = "team#<team>#model#<model>"``.
     """
 
-    pk: str = Field(description="Partition key, e.g. USAGE#TEAM#my-team")
-    sk: str = Field(description="Sort key, e.g. PERIOD#2026-03")
+    scope_id: str = Field(description="Partition key, e.g. team#my-team")
+    period_date: str = Field(description="Sort key, e.g. 2026-03")
     total_tokens: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)

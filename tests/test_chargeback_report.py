@@ -36,8 +36,8 @@ from chargeback_report.report_template import (
 
 
 TEAM_ALPHA_USAGE = {
-    "pk": "USAGE#TEAM#alpha",
-    "sk": "PERIOD#2026-03",
+    "scope_id": "team#alpha",
+    "period_date": "2026-03",
     "total_tokens": 500000,
     "input_tokens": 300000,
     "output_tokens": 200000,
@@ -49,8 +49,8 @@ TEAM_ALPHA_USAGE = {
 }
 
 TEAM_BETA_USAGE = {
-    "pk": "USAGE#TEAM#beta",
-    "sk": "PERIOD#2026-03",
+    "scope_id": "team#beta",
+    "period_date": "2026-03",
     "total_tokens": 1200000,
     "input_tokens": 800000,
     "output_tokens": 400000,
@@ -62,8 +62,8 @@ TEAM_BETA_USAGE = {
 }
 
 TEAM_GAMMA_USAGE = {
-    "pk": "USAGE#TEAM#gamma",
-    "sk": "PERIOD#2026-03",
+    "scope_id": "team#gamma",
+    "period_date": "2026-03",
     "total_tokens": 50000,
     "input_tokens": 30000,
     "output_tokens": 20000,
@@ -235,8 +235,8 @@ class TestBuildTeamSummaries:
         summaries = _build_team_summaries([], BUDGET_LIMITS)
         assert summaries == []
 
-    def test_malformed_pk_skipped(self) -> None:
-        items = [{"pk": "USAGE#TEAM#", "sk": "PERIOD#2026-03", "total_cost_usd": Decimal(10)}]
+    def test_malformed_scope_id_skipped(self) -> None:
+        items = [{"scope_id": "team#", "period_date": "2026-03", "total_cost_usd": Decimal(10)}]
         summaries = _build_team_summaries(items, {})
         assert len(summaries) == 0
 
@@ -382,9 +382,9 @@ class TestHandler:
             {"Items": ALL_USAGE_ITEMS},  # usage query for current month
             {
                 "Items": [  # budgets query
-                    {"scope": "team", "scope_id": "alpha", "monthly_budget_usd": Decimal(200)},
-                    {"scope": "team", "scope_id": "beta", "monthly_budget_usd": Decimal(500)},
-                    {"scope": "team", "scope_id": "gamma", "monthly_budget_usd": Decimal(50)},
+                    {"scope": "CONFIG", "scope_type": "team", "scope_id": "alpha", "budget_usd": Decimal(200)},
+                    {"scope": "CONFIG", "scope_type": "team", "scope_id": "beta", "budget_usd": Decimal(500)},
+                    {"scope": "CONFIG", "scope_type": "team", "scope_id": "gamma", "budget_usd": Decimal(50)},
                 ]
             },
             {"Items": ALL_USAGE_ITEMS},  # usage query for previous month

@@ -13,6 +13,7 @@ For getting-started, admin, and reference guides, see the published Starlight si
 ## Reference
 
 - [Public API](reference/public-api.md) — the importable `gwcore` surface plus the control-plane HTTP routes.
+- [CLI reference](reference/cli.md) — the `admin-cli` operator tool: command tree, Cognito M2M auth, and the admin route each verb calls.
 
 ## Behavior
 
@@ -35,9 +36,9 @@ For getting-started, admin, and reference guides, see the published Starlight si
 
 ## What this tree deliberately omits
 
-Five candidate documents were skipped because their subject does not exist here or the signal would mislead:
+Four candidate documents were skipped because their subject does not exist here or the signal would mislead:
 
-- **CLI reference** and **RPC/tools reference** — the repo is server-only (Lambda handlers + an agentgateway data plane); there is no CLI with subcommands and no RPC/MCP tool server.
+- **RPC/tools reference** — the runtime is server-only (Lambda handlers + an agentgateway data plane); there is no RPC/MCP tool server to document. (A CLI reference was originally skipped for the same reason, but a standalone operator CLI does exist under `clients/admin_cli/`, so it is now documented at [reference/cli.md](reference/cli.md).)
 - **Ownership**, **risk hotspots**, and **dead-code** analysis — git history is effectively single-author plus bots, and the services are Lambda entry points that nothing imports, so naive authorship, churn, and unreferenced-export signals produce false conclusions rather than useful ones.
 
 ## Notable findings surfaced during generation

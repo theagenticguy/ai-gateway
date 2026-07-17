@@ -628,12 +628,20 @@ class TestCheckAndPublishAlerts:
 
         mock_ddb.Table.side_effect = table_router
 
-        mock_budgets_table.get_item.return_value = {
-            "Item": {
-                "monthly_budget_usd": Decimal(1000),
-                "alert_thresholds": [50, 80, 100],
-                "alerts_sent": [],
-            }
+        # Budget lookup goes through the scope-index GSI query (issue #261);
+        # the item carries budget_usd + budget_id (needed for write-back).
+        mock_budgets_table.query.return_value = {
+            "Items": [
+                {
+                    "budget_id": "b-1",
+                    "scope": "CONFIG",
+                    "scope_type": "team",
+                    "scope_id": "team-a",
+                    "budget_usd": Decimal(1000),
+                    "alert_thresholds": [50, 80, 100],
+                    "alerts_sent": [],
+                }
+            ]
         }
         mock_usage_table.get_item.return_value = {
             "Item": {"total_cost_usd": Decimal(550)}  # 55% -> crosses 50
@@ -662,12 +670,18 @@ class TestCheckAndPublishAlerts:
 
         mock_ddb.Table.side_effect = table_router
 
-        mock_budgets_table.get_item.return_value = {
-            "Item": {
-                "monthly_budget_usd": Decimal(1000),
-                "alert_thresholds": [50, 80, 100],
-                "alerts_sent": [50],  # Already sent
-            }
+        mock_budgets_table.query.return_value = {
+            "Items": [
+                {
+                    "budget_id": "b-1",
+                    "scope": "CONFIG",
+                    "scope_type": "team",
+                    "scope_id": "team-a",
+                    "budget_usd": Decimal(1000),
+                    "alert_thresholds": [50, 80, 100],
+                    "alerts_sent": [50],  # Already sent
+                }
+            ]
         }
         mock_usage_table.get_item.return_value = {
             "Item": {"total_cost_usd": Decimal(550)}  # 55%
@@ -693,12 +707,18 @@ class TestCheckAndPublishAlerts:
 
         mock_ddb.Table.side_effect = table_router
 
-        mock_budgets_table.get_item.return_value = {
-            "Item": {
-                "monthly_budget_usd": Decimal(1000),
-                "alert_thresholds": [50, 80, 100],
-                "alerts_sent": [],
-            }
+        mock_budgets_table.query.return_value = {
+            "Items": [
+                {
+                    "budget_id": "b-1",
+                    "scope": "CONFIG",
+                    "scope_type": "team",
+                    "scope_id": "team-a",
+                    "budget_usd": Decimal(1000),
+                    "alert_thresholds": [50, 80, 100],
+                    "alerts_sent": [],
+                }
+            ]
         }
         mock_usage_table.get_item.return_value = {
             "Item": {"total_cost_usd": Decimal(850)}  # 85% -> crosses 50 and 80
@@ -724,7 +744,7 @@ class TestCheckAndPublishAlerts:
 
         mock_ddb.Table.side_effect = table_router
 
-        mock_budgets_table.get_item.return_value = {}  # No Item
+        mock_budgets_table.query.return_value = {"Items": []}  # No budget row
 
         result = check_and_publish_alerts([_metric(cost_usd=10.0)])
 
@@ -746,20 +766,28 @@ class TestCheckAndPublishAlerts:
 
         mock_ddb.Table.side_effect = table_router
 
-        mock_budgets_table.get_item.return_value = {
-            "Item": {
-                "monthly_budget_usd": Decimal(1000),
-                "alert_thresholds": [50, 80, 100],
-                "alerts_sent": [],
-            }
+        mock_budgets_table.query.return_value = {
+            "Items": [
+                {
+                    "budget_id": "b-1",
+                    "scope": "CONFIG",
+                    "scope_type": "team",
+                    "scope_id": "team-a",
+                    "budget_usd": Decimal(1000),
+                    "alert_thresholds": [50, 80, 100],
+                    "alerts_sent": [],
+                }
+            ]
         }
         mock_usage_table.get_item.return_value = {"Item": {"total_cost_usd": Decimal(550)}}
 
         check_and_publish_alerts([_metric(cost_usd=10.0)])
 
-        # Verify update_item was called to persist alerts_sent
+        # Verify update_item was called to persist alerts_sent, keyed by the real
+        # primary key carried on the queried item (issue #261): budget_id + scope.
         mock_budgets_table.update_item.assert_called_once()
         update_call = mock_budgets_table.update_item.call_args
+        assert update_call[1]["Key"] == {"budget_id": "b-1", "scope": "CONFIG"}
         assert update_call[1]["ExpressionAttributeValues"][":as"] == [50]
 
     @patch("cost_attribution.handler.dynamodb")

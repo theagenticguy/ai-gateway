@@ -288,11 +288,14 @@ def _publish_metrics(metrics: list[MetricResult]) -> None:
 def _accumulate_usage(metrics: list[MetricResult]) -> None:
     """Write usage increments to DynamoDB (best-effort).
 
-    Writes both team-level (``USAGE#TEAM#<team>``) and user-level
-    (``USAGE#USER#<user>``) rows using atomic ``ADD`` operations so
-    concurrent Lambda invocations never lose counts.
+    Rows are keyed by the real Terraform ``gateway-usage`` schema (issue #261):
+    hash=``scope_id``, range=``period_date`` (see
+    infrastructure/modules/budgets/main.tf), matching what budget_admin and
+    budget_enforcement read. Writes both team-level (``scope_id="team#<team>"``)
+    and user-level (``scope_id="user#<user>"``) rows using atomic ``ADD``
+    operations so concurrent Lambda invocations never lose counts.
 
-    Also writes per-model usage rows (``USAGE#TEAM#<team>#MODEL#<model>``)
+    Also writes per-model usage rows (``scope_id="team#<team>#model#<model>"``)
     to support E.5 model-level budget checks.
     """
     if not metrics:
@@ -341,7 +344,7 @@ def _accumulate_usage(metrics: list[MetricResult]) -> None:
         model_agg[model_key]["total_cost_usd"] = float(model_agg[model_key]["total_cost_usd"]) + m.cost_usd
         model_agg[model_key]["request_count"] += 1
 
-    def _update(pk: str, sk: str, vals: dict[str, int | float]) -> None:
+    def _update(scope_id: str, period_date: str, vals: dict[str, int | float]) -> None:
         expr_parts = []
         attr_vals: dict[str, Any] = {}
         field_map = {
@@ -359,27 +362,27 @@ def _accumulate_usage(metrics: list[MetricResult]) -> None:
                 attr_vals[placeholder] = Decimal(str(round(val, 10))) if field_name == "total_cost_usd" else val
 
         table.update_item(
-            Key={"pk": pk, "sk": sk},
+            Key={"scope_id": scope_id, "period_date": period_date},
             UpdateExpression="ADD " + ", ".join(expr_parts),
             ExpressionAttributeValues=attr_vals,
         )
 
     for team, vals in team_agg.items():
         try:
-            _update(f"USAGE#TEAM#{team}", f"PERIOD#{period}", vals)
+            _update(f"team#{team}", period, vals)
         except Exception:
             logger.warning("Failed to write team usage for %s", team, exc_info=True)
 
     for user, vals in user_agg.items():
         try:
-            _update(f"USAGE#USER#{user}", f"PERIOD#{period}", vals)
+            _update(f"user#{user}", period, vals)
         except Exception:
             logger.warning("Failed to write user usage for %s", user, exc_info=True)
 
     # E.5: Write model-level usage
     for (team, model), vals in model_agg.items():
         try:
-            _update(f"USAGE#TEAM#{team}#MODEL#{model}", f"PERIOD#{period}", vals)
+            _update(f"team#{team}#model#{model}", period, vals)
         except Exception:
             logger.warning("Failed to write model usage for team=%s model=%s", team, model, exc_info=True)
 
@@ -388,10 +391,27 @@ def _accumulate_usage(metrics: list[MetricResult]) -> None:
 
 
 def _get_budget_record(team: str) -> dict[str, Any] | None:
-    """Fetch the budget configuration for a team from DynamoDB."""
+    """Fetch the team-scoped budget configuration from DynamoDB (issue #261).
+
+    Budgets are written by budget_admin keyed by ``budget_id`` (uuid) + ``scope``
+    ("CONFIG"), with the entity id in ``scope_id`` and the entity kind in
+    ``scope_type``. The physical table cannot be read by team via ``get_item``
+    (its hash key is the uuid), so we query the ``scope-index`` GSI
+    (HASH=``scope``, RANGE=``scope_id``) exactly as budget_enforcement does:
+    ``scope == "CONFIG" AND scope_id == team``, filtered to ``scope_type ==
+    "team"``. The returned item carries ``budget_id`` (needed to write
+    ``alerts_sent`` back) and ``budget_usd`` (the admin-configured cap).
+    """
+    from boto3.dynamodb.conditions import Attr, Key  # noqa: PLC0415
+
     table = dynamodb.Table(BUDGETS_TABLE)
-    resp = table.get_item(Key={"pk": f"BUDGET#{team}", "sk": "CONFIG"})
-    return resp.get("Item")
+    resp = table.query(
+        IndexName="scope-index",
+        KeyConditionExpression=Key("scope").eq("CONFIG") & Key("scope_id").eq(team),
+        FilterExpression=Attr("scope_type").eq("team"),
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
 
 
 def _find_top_model(metrics: list[MetricResult], team: str) -> str:
@@ -406,10 +426,14 @@ def _find_top_model(metrics: list[MetricResult], team: str) -> str:
 
 
 def _get_team_spend(team: str, period: str) -> Decimal | None:
-    """Fetch the current-period spend for a team. Returns None on failure."""
+    """Fetch the current-period spend for a team. Returns None on failure.
+
+    Reads the real ``gateway-usage`` schema (issue #261): hash=``scope_id``
+    (``team#<team>``), range=``period_date`` (``YYYY-MM``).
+    """
     usage_table = dynamodb.Table(USAGE_TABLE)
     try:
-        resp = usage_table.get_item(Key={"pk": f"USAGE#TEAM#{team}", "sk": f"PERIOD#{period}"})
+        resp = usage_table.get_item(Key={"scope_id": f"team#{team}", "period_date": period})
         item = resp.get("Item")
         return Decimal(str(item.get("total_cost_usd", "0"))) if item else Decimal(0)
     except (ClientError, Exception):
@@ -420,10 +444,12 @@ def _get_team_spend(team: str, period: str) -> Decimal | None:
 def _extract_alert_context(budget_item: dict[str, Any]) -> tuple[Decimal, list[int], list[int]] | None:
     """Extract budget amount, thresholds, and already-sent alerts from a budget record.
 
-    Returns None if the record is invalid or has no usable budget.
+    Returns None if the record is invalid or has no usable budget. budget_admin
+    stores the cap as ``budget_usd`` (issue #261); we fall back to the legacy
+    ``monthly_budget_usd`` name for any older records.
     """
     try:
-        monthly_budget = Decimal(str(budget_item.get("monthly_budget_usd", "0")))
+        monthly_budget = Decimal(str(budget_item.get("budget_usd", budget_item.get("monthly_budget_usd", "0"))))
     except (InvalidOperation, TypeError, ValueError):
         return None
     if monthly_budget <= 0:
@@ -473,17 +499,23 @@ def _process_team_alerts(
         except (ClientError, Exception):
             logger.warning("Failed to publish alert for team=%s threshold=%d", team, threshold, exc_info=True)
 
-    # Update alerts_sent in DynamoDB
+    # Update alerts_sent in DynamoDB. The budgets table is keyed by
+    # budget_id(uuid)/scope, so we must write back by the real primary key
+    # carried on the queried item (issue #261), not a phantom pk/sk.
     all_sent = sorted(set(alerts_sent + new_alerts))
-    try:
-        budgets_table = dynamodb.Table(BUDGETS_TABLE)
-        budgets_table.update_item(
-            Key={"pk": f"BUDGET#{team}", "sk": "CONFIG"},
-            UpdateExpression="SET alerts_sent = :as",
-            ExpressionAttributeValues={":as": all_sent},
-        )
-    except (ClientError, Exception):
-        logger.warning("Failed to update alerts_sent for team=%s", team, exc_info=True)
+    budget_id = budget_item.get("budget_id")
+    if budget_id:
+        try:
+            budgets_table = dynamodb.Table(BUDGETS_TABLE)
+            budgets_table.update_item(
+                Key={"budget_id": budget_id, "scope": "CONFIG"},
+                UpdateExpression="SET alerts_sent = :as",
+                ExpressionAttributeValues={":as": all_sent},
+            )
+        except (ClientError, Exception):
+            logger.warning("Failed to update alerts_sent for team=%s", team, exc_info=True)
+    else:
+        logger.warning("Budget record for team=%s missing budget_id; cannot persist alerts_sent", team)
 
     return alerts_published
 

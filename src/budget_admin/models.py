@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from gwcore.tiers import Tier as TenantTier
+
 
 class BudgetScope(StrEnum):
     """Supported budget scopes."""
@@ -23,15 +25,6 @@ class BudgetPeriod(StrEnum):
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
     ANNUAL = "annual"
-
-
-class TenantTier(StrEnum):
-    """Supported tenant tiers."""
-
-    FREE = "free"
-    STANDARD = "standard"
-    PREMIUM = "premium"
-    ENTERPRISE = "enterprise"
 
 
 class ModelLimit(BaseModel):

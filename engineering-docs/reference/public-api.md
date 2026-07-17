@@ -1,6 +1,6 @@
 # ai-gateway · Public API
 
-The importable public surface of `ai-gateway` is the shared `gwcore` package — the authentication, error, response, audit, cache, telemetry, logging, and agentgateway-contract helpers that every control-plane and data-plane Lambda imports. The 30 symbols below are the `gwcore` exports ranked by inbound-reference count from the eleven service packages under `src/` (tie-broken alphabetically). The repository ships no CLI (no `argparse`, `console_scripts`, or `__main__` entry point), so the HTTP surface of the Lambda services is enumerated in the final `## HTTP` section.
+The importable public surface of `ai-gateway` is the shared `gwcore` package — the authentication, error, response, audit, cache, telemetry, logging, and agentgateway-contract helpers that every control-plane and data-plane Lambda imports. The 30 symbols below are the `gwcore` exports ranked by inbound-reference count from the eleven service packages under `src/` (tie-broken alphabetically). This doc covers that importable `gwcore` surface plus the Lambda services' HTTP surface (enumerated in the final `## HTTP` section). The repository also ships a standalone operator CLI, `admin-cli`, under `clients/admin_cli/` (a separate `uv` project that does not import `gwcore`); it is documented in [reference/cli](cli.md).
 
 ### emit_metric
 
