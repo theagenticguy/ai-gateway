@@ -12,7 +12,7 @@ The privacy boundary is **at rest, before promotion** — never in the request p
 
 ## Context
 
-Organizations running coding assistants at scale want a transcript data lake (eval harvesting, failure classification, SFT corpora) but hesitate to build one, because developers incidentally discuss sensitive material with the assistant. The hard case is not entity PII: transcripts touching **employee performance management and unregretted attrition (URA/PIP)** are a representative example, and no regex or PII classifier catches them — it is a data-classification problem. Emails, ARNs, and account IDs are the easy, commodity part; "should this conversation exist in a lake at all" is the feature.
+Organizations running coding assistants at scale want a transcript data lake (eval harvesting, failure classification, SFT corpora) but hesitate to build one, because developers incidentally discuss sensitive material with the assistant. The hard case is not entity PII: **HR, performance management, and other sensitive or classified transcripts** are the representative example, and no regex or PII classifier catches them — it is a data-classification problem. Emails, ARNs, and account IDs are the easy, commodity part; "should this conversation exist in a lake at all" is the feature.
 
 The repo already has the substrate: the inline Bedrock guardrail runs detect/log-only in the data plane (ADR-011/017), cost_attribution parses the agentgateway access log, and the `audit_log` module ships Firehose → S3 Parquet with a Glue catalog. What is missing is body capture, the classification gate, the ATIF assembler, and the governed lake itself.
 
@@ -52,14 +52,14 @@ A tenant-owned policy object (AppConfig, like guardrail config) maps categories 
 
 | Category (default set)                          | Default action |
 |-------------------------------------------------|----------------|
-| HR: performance mgmt, URA/PIP, comp, disciplinary | **drop**       |
+| HR: performance management, comp, employee relations | **drop**       |
 | Legal: privilege, litigation hold                 | **drop**       |
 | Corp-dev: M&A, pre-announcement reorgs            | **drop**       |
 | Security: incident details, vuln reports          | **restrict** (security-team-only partition) |
 | Regulated markings: CUI, export-controlled, customer-confidential | **restrict** |
 | Entity PII / secrets (any category)               | **redact**     |
 
-Three actions, because deletion is not always right: a security-incident transcript may be exactly what the security team wants to mine, in a Lake Formation partition only they can read. **Drop** keeps a metadata stub only (team, timestamps, token counts, category label — never the justification span). The default taxonomy stays small and opinionated (the six rows above, URA/PIP named explicitly); tenants extend it, but shipping a large blank taxonomy invites a six-month governance committee.
+Three actions, because deletion is not always right: a security-incident transcript may be exactly what the security team wants to mine, in a Lake Formation partition only they can read. **Drop** keeps a metadata stub only (team, timestamps, token counts, category label — never the justification span). The default taxonomy stays small and opinionated (the six rows above); tenants extend it, but shipping a large blank taxonomy invites a six-month governance committee.
 
 ## Shadow mode first — because "found incidentally" means the base rate is unknown
 
@@ -72,7 +72,7 @@ Sensitive transcripts are found incidentally, which means nobody knows what frac
 ## Deliberate positions (the ones that will be challenged)
 
 - **No in-path redaction.** Coding traffic is dense with PII-lookalikes (emails in git logs, names in blame output, account IDs in ARNs); mangling a response in flight breaks the product on a false positive. In-path stays detect/tag-only (ADR-011); enforcement is at promotion.
-- **No human review queue for borderline HR content.** A reviewer reading a maybe-PIP transcript is precisely the harm this feature exists to prevent. Over-drop instead: a lost eval trajectory costs ~nothing at this volume; one URA conversation surfacing in an analyst's Athena query costs the program.
+- **No human review queue for borderline HR content.** A reviewer reading a possibly-sensitive HR transcript is precisely the harm this feature exists to prevent. Over-drop instead: a lost eval trajectory costs ~nothing at this volume; one sensitive HR conversation surfacing in an analyst's Athena query costs the program.
 - **Tune the judge for recall, accept over-dropping.** The trust-killer is a miss in the lake, not a false drop.
 - **Dropped-item manifests carry the category label only, never the quoted span.** The evidence is buried with the transcript; the manifest must not become the leak.
 - **No Amazon Comprehend.** Unavailable in the target environment. Entity detection = ApplyGuardrail (managed baseline, already integrated) + Presidio (self-hosted, in-VPC, tenant custom recognizers for employee IDs / internal usernames / ticket formats). Both write to the same manifest with detector provenance so their disagreement is measurable. Honest trade: vanilla Presidio has weaker natural-language name recall than a managed NER; in coding transcripts most PII is structured, where patterns + custom recognizers do well, and the drop-not-redact judge protects the conversations that matter. If name recall becomes a real gap, Presidio swaps in a GLiNER-class NER backend, still self-hosted.
@@ -82,8 +82,8 @@ Sensitive transcripts are found incidentally, which means nobody knows what frac
 
 - **In-path redaction at the gateway** — rejected: latency + false-positive product breakage; the gateway's job is fidelity.
 - **Comprehend PII (managed NER)** — unavailable in the target environment; would anyway have covered only the commodity detector class.
-- **PII-only scope (no topic classification)** — rejected: fails the motivating case outright. URA/PIP content contains no detectable entities.
-- **Redact-everything instead of drop** — rejected for topic-sensitive content: the topic itself is the sensitive datum; no entity masking makes a URA conversation storable.
+- **PII-only scope (no topic classification)** — rejected: fails the motivating case outright. Sensitive HR or classified content contains no detectable entities.
+- **Redact-everything instead of drop** — rejected for topic-sensitive content: the topic itself is the sensitive datum; no entity masking makes a sensitive HR conversation storable.
 - **Plain S3 + Glue Parquet (reuse audit_log pattern as-is)** — workable, but S3 Tables gives managed compaction/snapshots, and Iceberg snapshots are what make retroactive reclassification cheap. The audit_log module stays as-is; the lake is a sibling, not a retrofit.
 
 ## Consequences
