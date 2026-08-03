@@ -126,8 +126,12 @@ jobs:
       #     security-severity 0.0) into the SARIF regardless, so we filter on
       #     GitHub's security-severity (>= 7.0 == HIGH), the HIGH/CRITICAL tags,
       #     or an error-level result — a naive result count would false-positive.
-      #   • OSV has no cutoff configured and alerts on any lockfile vulnerability
-      #     by design, so we count all of its results.
+      #   • OSV-Scanner has no severity flag of its own, so we apply the same
+      #     HIGH+ SARIF filter to its results (issue #274: a 5.3 and a 2.1
+      #     lockfile advisory opened an issue titled "HIGH+"). Its SARIF rules
+      #     carry the same security-severity property Grype's do. Sub-HIGH
+      #     advisories still reach the Security tab via the SARIF upload and
+      #     Dependabot alerts — this gate only controls the auto-filed issue.
       - name: Check for findings
         id: check-findings
         if: always()
@@ -152,10 +156,19 @@ jobs:
           else
             echo "::warning::Grype SARIF missing (scanner error, not a vulnerability finding)"
           fi
-          # OSV — any lockfile vulnerability (no cutoff configured)
+          # OSV — HIGH+ only (same filter as Grype; aligns with the issue title)
           if [[ -f osv-results.sarif ]]; then
-            o=$(jq '[.runs[]?.results[]?] | length' osv-results.sarif)
-            echo "OSV results: ${o}"
+            o=$(jq '[ .runs[]?
+              | ( [ .tool.driver.rules[]? | {key:.id, value:.} ] | from_entries ) as $rmap
+              | .results[]?
+              | .ruleId as $rid
+              | ($rmap[$rid].properties["security-severity"] // "0") as $ssev
+              | ($rmap[$rid].properties.tags // []) as $tags
+              | select( (($ssev | tonumber? // 0) >= 7.0)
+                        or ($tags | index("HIGH")) or ($tags | index("CRITICAL"))
+                        or (.level == "error") )
+            ] | length' osv-results.sarif)
+            echo "OSV HIGH+ results: ${o}"
             count=$((count + o))
           else
             echo "::warning::OSV SARIF missing (scanner error, not a vulnerability finding)"
