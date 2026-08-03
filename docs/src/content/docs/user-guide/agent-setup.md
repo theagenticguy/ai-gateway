@@ -224,7 +224,9 @@ import subprocess
 # Fetch a fresh token
 token = subprocess.run(
     ["./scripts/get-gateway-token.sh"],
-    capture_output=True, text=True, check=True,
+    capture_output=True,
+    text=True,
+    check=True,
 ).stdout
 
 llm = ChatOpenAI(

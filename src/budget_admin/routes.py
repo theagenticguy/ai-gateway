@@ -42,7 +42,7 @@ def _client_error_code(e: ClientError) -> str:
 
 def _upstream(e: ClientError, action: str) -> errors.UpstreamError:
     """Map a DynamoDB ClientError to a typed UpstreamError."""
-    logger.exception("DynamoDB error during %s", action)
+    logger.error("DynamoDB error during %s", action, exc_info=e)
     return errors.UpstreamError("DynamoDB error", details={"code": _client_error_code(e)})
 
 

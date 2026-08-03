@@ -355,9 +355,18 @@ class LogRecord(BaseModel):
     provider: str = Field(default="")
     req: RequestInfo = Field(default_factory=RequestInfo)
     oidc_data: str = Field(default="", description="ALB JWT when the access log emits it flat")
+
+
 # flat token keys accepted — src/cost_attribution/models.py:97
-("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens",
- "output_tokens", "cached_input_tokens", "cache_creation_input_tokens")
+(
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "cache_creation_input_tokens",
+)
 ```
 
 **Assumptions consumers make:**

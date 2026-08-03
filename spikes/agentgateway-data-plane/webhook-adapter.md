@@ -29,28 +29,33 @@ A thin translator (Lambda Function URL or a small Fastify/FastAPI service) sits 
 ```python
 # POST /budget/request  (agentgateway -> adapter -> budget_enforcement)
 def budget_request(agw_req, headers):
-    jwt = headers["x-amzn-oidc-data"]            # agentgateway forwarded it
+    jwt = headers["x-amzn-oidc-data"]  # agentgateway forwarded it
     messages = agw_req["body"]["messages"]
-    model = infer_model(headers, messages)       # from x-model header or alias
+    model = infer_model(headers, messages)  # from x-model header or alias
     est_tokens = rough_token_estimate(messages)
 
     # Call the UNCHANGED budget_enforcement Lambda in its native shape
-    lambda_resp = invoke_budget_enforcement({
-        "jwt_token": jwt,
-        "model": model,
-        "estimated_tokens": est_tokens,
-    })
-    body = json.loads(lambda_resp["body"])        # {verdict, data, error}
+    lambda_resp = invoke_budget_enforcement(
+        {
+            "jwt_token": jwt,
+            "model": model,
+            "estimated_tokens": est_tokens,
+        }
+    )
+    body = json.loads(lambda_resp["body"])  # {verdict, data, error}
 
     if body["verdict"]:
         return {"action": {"pass": {}}}
     retry = body.get("data", {}).get("retry_after_seconds")
-    return {"action": {"reject": {
-        "status_code": 429,
-        "body": json.dumps({"error": body.get("error", "budget exceeded"),
-                            "retry_after_seconds": retry}),
-        "reason": body.get("error", "budget exceeded"),
-    }}}
+    return {
+        "action": {
+            "reject": {
+                "status_code": 429,
+                "body": json.dumps({"error": body.get("error", "budget exceeded"), "retry_after_seconds": retry}),
+                "reason": body.get("error", "budget exceeded"),
+            }
+        }
+    }
 ```
 
 ```python
@@ -60,26 +65,32 @@ def scan_request(agw_req, headers):
     content = "\n".join(m["content"] for m in messages if isinstance(m["content"], str))
     team = team_from_jwt(headers["x-amzn-oidc-data"])
 
-    lambda_resp = invoke_content_scanner({
-        "content": content,
-        "team_id": team,
-        "model": headers.get("x-model", "unknown"),
-        "request_id": headers.get("x-request-id", "adapter"),
-    })
-    body = json.loads(lambda_resp["body"])         # {verdict, data, error}
+    lambda_resp = invoke_content_scanner(
+        {
+            "content": content,
+            "team_id": team,
+            "model": headers.get("x-model", "unknown"),
+            "request_id": headers.get("x-request-id", "adapter"),
+        }
+    )
+    body = json.loads(lambda_resp["body"])  # {verdict, data, error}
 
-    if body["verdict"]:                            # allow (incl. detect-only)
+    if body["verdict"]:  # allow (incl. detect-only)
         return {"action": {"pass": {}}}
     # content_scanner blocked. If it redacted, return mask; else reject.
     transformed = body.get("data", {}).get("transformedData")
     if transformed:
         masked = transformed["request"]["json"]["messages"]
         return {"action": {"mask": {"body": {"messages": masked}}}}
-    return {"action": {"reject": {
-        "status_code": 400,
-        "body": json.dumps({"error": "content policy violation"}),
-        "reason": "content_scanner blocked",
-    }}}
+    return {
+        "action": {
+            "reject": {
+                "status_code": 400,
+                "body": json.dumps({"error": "content policy violation"}),
+                "reason": "content_scanner blocked",
+            }
+        }
+    }
 ```
 
 ## Side-by-side examples
