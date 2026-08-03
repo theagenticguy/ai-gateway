@@ -12,7 +12,7 @@ The privacy boundary is **at rest, before promotion** — never in the request p
 
 ## Context
 
-Enterprises running coding assistants at 10k+ developer scale want a transcript data lake (eval harvesting, failure classification, SFT corpora) but will not build one, because developers incidentally discuss sensitive material with the assistant. The motivating example from a real customer conversation is not entity PII at all: transcripts touching **employee performance management and unregretted attrition (URA/PIP)** were discovered incidentally in assistant logs. No regex or PII classifier catches that — it is a data-classification problem. Emails, ARNs, and account IDs are the easy, commodity part; "should this conversation exist in a lake at all" is the feature.
+Organizations running coding assistants at scale want a transcript data lake (eval harvesting, failure classification, SFT corpora) but hesitate to build one, because developers incidentally discuss sensitive material with the assistant. The hard case is not entity PII: transcripts touching **employee performance management and unregretted attrition (URA/PIP)** are a representative example, and no regex or PII classifier catches them — it is a data-classification problem. Emails, ARNs, and account IDs are the easy, commodity part; "should this conversation exist in a lake at all" is the feature.
 
 The repo already has the substrate: the inline Bedrock guardrail runs detect/log-only in the data plane (ADR-011/017), cost_attribution parses the agentgateway access log, and the `audit_log` module ships Firehose → S3 Parquet with a Glue catalog. What is missing is body capture, the classification gate, the ATIF assembler, and the governed lake itself.
 
@@ -63,9 +63,9 @@ Three actions, because deletion is not always right: a security-incident transcr
 
 ## Shadow mode first — because "found incidentally" means the base rate is unknown
 
-The motivating customer discovered URA transcripts by tripping over them; nobody knows what fraction of traffic is sensitive, so any threshold picked up front is a guess. Rollout is therefore:
+Sensitive transcripts are found incidentally, which means nobody knows what fraction of traffic is sensitive, so any classifier threshold picked up front is a guess. Rollout is therefore:
 
-1. **Shadow (weeks 1–2+):** classify everything in quarantine, write labels + confidences to the manifest, promote nothing sensitive. Output: a measurement report — "N% of traffic touches HR topics, here is the confidence distribution, here is the proposed drop line." That report converts "we're hesitant" into a quantified, governed decision, and is itself the customer-facing artifact.
+1. **Shadow (weeks 1–2+):** classify everything in quarantine, write labels + confidences to the manifest, promote nothing sensitive. Output: a measurement report — "N% of traffic touches HR topics, here is the confidence distribution, here is the proposed drop line." That report converts hesitation into a quantified, governed decision, and is itself the first deliverable an operator sees.
 2. **Gated promotion:** enable promote/drop/restrict at the tuned thresholds.
 3. **Continuous:** classifier version + taxonomy version stamped on every manifest row; a discovered miss becomes a taxonomy update + retroactive reclassification job over existing partitions (cheap under Iceberg: snapshot, reclassify, expire the old snapshot).
 
@@ -88,16 +88,16 @@ The motivating customer discovered URA transcripts by tripping over them; nobody
 
 ## Consequences
 
-**Positive:** the customer's blocker inverts — a governed lake with a provable gate (manifest = audit trail: prove redaction ran without re-exposing what it removed); eval harvesting lands on a standard format (ATIF → Harbor/Athena/Spark directly); the control-plane moat argument (ADR-017) extends — attribution, budgets, and now governed transcripts are exactly what a bare data plane lacks.
+**Positive:** the adoption blocker inverts — a governed lake with a provable gate (manifest = audit trail: prove redaction ran without re-exposing what it removed); eval harvesting lands on a standard format (ATIF → Harbor/Athena/Spark directly); the control-plane moat argument (ADR-017) extends — attribution, budgets, and now governed transcripts are exactly what a bare data plane lacks.
 
-**Negative / risks:** Stage-2 judge cost at 10k-dev scale (mitigated by the Stage-1 screen and lake opt-in per team, but must be modeled in shadow mode); topic-classifier recall is unproven until shadow data exists (the design accepts over-dropping for exactly this reason); code-aware PII ambiguity (an email in `git blame` output the developer asked about is content, not incidental PII — tenant policy must pick a side, default redact); body capture increases data-plane log volume materially (quarantine lifecycle + compression bound it).
+**Negative / risks:** Stage-2 judge cost at high developer counts (mitigated by the Stage-1 screen and lake opt-in per team, but must be modeled in shadow mode); topic-classifier recall is unproven until shadow data exists (the design accepts over-dropping for exactly this reason); code-aware PII ambiguity (an email in `git blame` output the developer asked about is content, not incidental PII — tenant policy must pick a side, default redact); body capture increases data-plane log volume materially (quarantine lifecycle + compression bound it).
 
 ## Implementation seams (module shape)
 
 1. `infrastructure/modules/transcript_lake/` — quarantine bucket (KMS, lifecycle, deny-human-read), S3 Tables namespace + three tables, Lake Formation grants, Step Functions pipeline, assembler Lambda. Gated by `enable_transcript_lake` (default `false`), like `enable_guardrails`/`enable_audit_log`.
 2. agentgateway body capture → existing Firehose path (new stream), keyed to join with the access log cost_attribution already parses.
 3. `src/transcript_gate/` — Stage-1 screen, Stage-2 judge client, Presidio runner, gitleaks runner, ATIF assembler (atif~=1.7.0), manifest writer. Classification policy as an AppConfig document per team.
-4. Shadow-mode report generator (Athena over the manifest) — the first deliverable a customer sees.
+4. Shadow-mode report generator (Athena over the manifest) — the first deliverable an operator sees.
 
 ## Sources
 
