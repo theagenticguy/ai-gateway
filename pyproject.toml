@@ -28,7 +28,13 @@ dev = [
 exclude-newer = "7 days"
 constraint-dependencies = [
     "pygments>=2.20.0",  # CVE-2026-4539: ReDoS in AdlLexer
+    "cryptography>=50.0.0",  # CVE-2026-69247: PKCS#7 Bleichenbacher oracle
 ]
+
+# cryptography 50.0.0 fixes CVE-2026-69247 but was published inside the
+# 7-day exclude-newer soak window, so the security fix is exempted from it.
+[tool.uv.exclude-newer-package]
+cryptography = "2026-08-04"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
