@@ -8,7 +8,7 @@ Context worth stating up front: this is a clean, disciplined Python 3.13 codebas
 
 | Rank | Debt item | Category | Cost to fix | Citation |
 |---|---|---|---|---|
-| 1 | Six checkov IaC checks suppressed in CI (`CKV_TF_1, CKV2_AWS_50, CKV_AWS_115, CKV_AWS_116, CKV_AWS_117, CKV_AWS_272`) that are absent from `.checkov.yml` and carry no in-repo justification, unlike the 22 documented shared skips | `deprecated pattern` | M | `.github/workflows/ci.yml:341` |
+| 1 | ~~Six checkov IaC checks suppressed in CI absent from `.checkov.yml`~~ **Resolved (issue #262, PR #264):** all 28 skips now live in `.checkov.yml` with per-code rationale and CI consumes `config_file: .checkov.yml` | `deprecated pattern` | M | `.checkov.yml:1` |
 | 2 | Unverified JWT base64-decode logic hand-copied three times, only one typed against specific exceptions | `duplicated logic` | M | `src/gwcore/auth.py:89`, `src/cost_attribution/handler.py:63`, `src/budget_enforcement/jwt_utils.py:26` |
 | 3 | Silent error-swallow: identity resolution returns `("unknown","unknown")` on any exception with no log line, unlike its logging siblings — masks JWT-shape regressions in cost attribution | `error handling` | S | `src/cost_attribution/handler.py:119` |
 | 4 | Three lambdas (`usage_api`, `pricing_admin`, `rate_limiter`) ship full handlers + tests but have no `aws_lambda_function` Terraform resource — code exists, deployment does not (issue #55) | `marker` | L | `src/usage_api/__init__.py:1`, `src/pricing_admin/__init__.py:1`, `src/rate_limiter/__init__.py:1` |
@@ -20,7 +20,7 @@ Context worth stating up front: this is a clean, disciplined Python 3.13 codebas
 | 10 | Two observability widgets/queries deleted-in-place with explanatory NOTEs because `TimeToFirstToken` is emitted by nothing — dashboards permanently miss TTFT until the data plane emits the field | `dead code adjacent` | M | `infrastructure/modules/observability/main.tf:312`, `infrastructure/modules/observability/saved_queries.tf:85` |
 | 11 | `pyproject.toml` `exclude-newer = "7 days"` freshness cap silently holds back any dependency newer than the window; invisible pin that ages unless consciously bumped | `version pin` | S | `pyproject.toml:27` |
 | 12 | `pygments>=2.20.0` constraint carried for CVE-2026-4539 (ReDoS in AdlLexer) — a manual security floor to drop once the transitive dep resolves it natively | `version pin` | S | `pyproject.toml:29` |
-| 13 | Three transitive-CVE pnpm `overrides` (`lodash-es`, `esbuild`, `dompurify`) in the docs site — hand-forced minimums that must be revisited on each `astro` bump | `version pin` | S | `docs/package.json:31` |
+| 13 | Four transitive-CVE pnpm `overrides` (`lodash-es`, `esbuild`, `dompurify`, `nanoid`) in the docs site — hand-forced minimums that must be revisited on each `astro` bump | `version pin` | S | `docs/package.json:31` |
 | 14 | Open TODO carried into the migration reference: header forwarding (`x-amzn-oidc-data`) behavior is "becoming configurable" upstream and unconfirmed against the pinned agentgateway version | `marker` | S | `spikes/agentgateway-data-plane/webhook-adapter.md:127` |
 
 ## Explicit markers
@@ -68,15 +68,14 @@ Shows up in:
 
 Cost: M
 
-### Suppressed IaC findings without in-repo justification
+### Suppressed IaC findings without in-repo justification (resolved)
 
-The repo keeps two skip lists. `.checkov.yml` documents 22 skips, each with a one-line rationale (WAF attached via a separate association resource, audit-log versioning intentionally off, etc.). The CI step passes a longer `skip_check` string that adds six checks not present in `.checkov.yml` and with no comment anywhere: `CKV_TF_1` (Terraform no-provider-version-drift), `CKV2_AWS_50`, `CKV_AWS_115/116/117` (Lambda concurrency limit, DLQ, VPC), and `CKV_AWS_272` (Lambda code-signing). Because CI runs `soft_fail: false`, these are hard-suppressed on every scan; a reviewer reading only `.checkov.yml` would not know they are off. The divergence between the two lists is itself the debt.
+At generation time the repo kept two skip lists: `.checkov.yml` documented 22 skips with rationale, while the CI step passed a longer inline `skip_check` string adding six undocumented checks (`CKV_TF_1`, `CKV2_AWS_50`, `CKV_AWS_115/116/117`, `CKV_AWS_272`). This was resolved by issue #262 (PR #264): all 28 skips now live in `.checkov.yml`, each with a per-code rationale, and CI uses `config_file: .checkov.yml` so CI and local `mise run security:iac` share one source of truth.
 
 Shows up in:
-- `.github/workflows/ci.yml:341`
 - `.checkov.yml:1`
 
-Cost: M
+Cost: resolved
 
 ### Shipped-but-undeployed lambdas
 
@@ -91,7 +90,7 @@ Cost: L
 
 ### Duplicated ADR tree and stale post-migration statuses
 
-The seventeen ADRs exist twice — the authoring copies under `adr/` and Starlight-rendered copies under `docs/src/content/docs/adrs/` — with identical filenames and content, kept in sync by hand (`diff` of the two file lists is empty). Separately, the ADR-017 migration reversed the Portkey engine decision, yet ADR-001 ("Portkey OSS as LLM Gateway Proxy") and ADR-006 ("Portkey dual-format API") remain **Accepted**, while only ADR-012 was re-statused to *Superseded by ADR-017*. ADR-017 itself states "The engine choice in ADR-001 aged," so the status field on the two Portkey engine ADRs now contradicts the accepted successor. *judgment-call*: worth flagging because ADRs are the primary architecture-of-record and a reader trusting the Status line would conclude Portkey is still the chosen engine.
+The seventeen ADRs exist twice — the authoring copies under `adr/` and Starlight-rendered copies under `docs/src/content/docs/adrs/` — with identical filenames and content, kept in sync by hand (the docs tree adds only an `index.md`). Separately, the ADR-017 migration reversed the Portkey engine decision, yet ADR-001 ("Portkey OSS as LLM Gateway Proxy") and ADR-006 ("Portkey dual-format API") remain **Accepted**, while only ADR-012 was re-statused to *Superseded by ADR-017*. ADR-017 itself states "The engine choice in ADR-001 aged," so the status field on the two Portkey engine ADRs now contradicts the accepted successor. *judgment-call*: worth flagging because ADRs are the primary architecture-of-record and a reader trusting the Status line would conclude Portkey is still the chosen engine.
 
 Shows up in:
 - `adr/001-portkey-oss-over-litellm.md:3`

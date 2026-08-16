@@ -107,7 +107,8 @@ The release workflow (`release.yml`) builds, signs, and publishes the container 
 
 ## Security
 
-- Run `mise run security` before submitting PRs that touch application code
+- Run `mise run security` before submitting PRs that touch application code. The umbrella task runs SAST, secrets, IaC, Dockerfile, filesystem, and dependency scans plus the supply-chain gates: `security:osv` (recursive OSV scan of every lockfile in the tree, including `clients/admin_cli/uv.lock`), `security:sbom` and `security:sbom-rescan` (Syft writes CycloneDX + SPDX SBOMs into the gitignored `sbom/`; Grype rescans them using `.grype.yaml`), `security:licenses` (enforcing dependency-license allowlist in `scripts/check-licenses.py`), `security:headers` (SPDX license headers on every tracked `.py`/`.sh`/`.tf` file via `scripts/check-license-headers.py`), and `security:actionlint` (workflow lint)
+- Dependency licenses are an enforced gate. A new dependency must carry a license on the allowlist in `scripts/check-licenses.py`; strong and network copyleft (GPL, AGPL, LGPL, SSPL, and related families) is denied by family. The `licenses` pre-push hook and the CI `licenses` job both fail on a violation
 - Never commit secrets, API keys, or credentials — use AWS Secrets Manager
 - Report vulnerabilities via [GitHub Security Advisories](https://github.com/theagenticguy/ai-gateway/security/advisories), not public issues (see [SECURITY.md](.github/SECURITY.md))
 
@@ -115,7 +116,8 @@ The release workflow (`release.yml`) builds, signs, and publishes the container 
 
 - Python: enforced by [ruff](https://docs.astral.sh/ruff/) (linting + formatting) and [pyright](https://github.com/microsoft/pyright) (type checking)
 - Terraform: enforced by `terraform fmt`
-- Git hooks via [lefthook](https://github.com/evilmartians/lefthook) run checks automatically on commit
+- Every tracked `.py`, `.sh`, and `.tf` file carries an `SPDX-License-Identifier: Apache-2.0` line near the top; `scripts/check-license-headers.py` enforces this at pre-commit and in CI
+- Git hooks via [lefthook](https://github.com/evilmartians/lefthook) run checks automatically. Pre-commit runs lint, format, typecheck, secrets, hadolint, terraform fmt/validate/docs, license headers, and actionlint on workflow files; pre-push runs tests, semgrep, checkov, trivy, and the license policy check
 
 ## License
 

@@ -5,7 +5,7 @@ This file answers one question: *when module A passes something to module B, wha
 `ai-gateway` is a Python 3.13 LLM-gateway control plane: one shared library (`gwcore`) and 11 AWS Lambda service packages under `src/`. The services almost never import one another (only two direct Python cross-service imports exist), so most inter-module contracts here are **latent** — modules couple through three boundaries rather than through function calls:
 
 1. **gwcore → services** — the shared response, error, auth, and audit shapes every handler builds on (`from gwcore import ...`).
-2. **service → AWS** — DynamoDB item shapes (`pk`/`sk` conventions), the agentgateway rendered-config shape, Firehose/Iceberg records.
+2. **service → AWS** — DynamoDB item shapes (the `scope_id`/`period_date` and `budget_id`/`scope` key schemas), the agentgateway rendered-config shape, Firehose/Iceberg records.
 3. **service ↔ service via shared storage** — one service writes a DynamoDB item shape that another reads (usage records, budget records), with no compiler enforcing the shape match.
 
 For this codebase a **contract** is therefore: a shape — a dataclass, Pydantic model, response envelope, DynamoDB item, or event payload — declared or owned by one module and depended on by at least one other module or external boundary (API Gateway, DynamoDB, Firehose/Iceberg, Cognito, agentgateway, SNS). Where the producer and consumer couple through untyped storage or an external wire, the Shape is quoted from the owning model and the assumptions are cited at the consumer's read/parse site. Contracts are ordered by consumer count.
@@ -141,27 +141,28 @@ return [
 
 **Drift risk:** Three separate decoders means a claim rename (or a Cognito switch to un-prefixed keys) must be applied in all three plus `gwcore.auth`, or `team` silently becomes `"unknown"` and cost attribution/budget enforcement mis-bucket; consolidate on `gwcore.auth._principal_from_claims` or a shared constant for the claim keys.
 
-## DynamoDB usage record (`USAGE#…` / `PERIOD#…`)
+## DynamoDB usage record (`scope_id` / `period_date`)
 
-**Producer:** `src/cost_attribution/handler.py:344` (`_update` writes atomic `ADD` increments); keys `USAGE#TEAM#<team>`, `USAGE#USER#<user>`, `USAGE#TEAM#<team>#MODEL#<model>` all with `sk=PERIOD#<YYYY-MM>` (`src/cost_attribution/handler.py:369`, `:375`, `:382`). Canonical model at `src/cost_attribution/models.py:217`.
+**Producer:** `src/cost_attribution/handler.py:289` (`_accumulate_usage`; the inner `_update` at `:348` writes atomic `ADD` increments); keys use the real `gateway-usage` table schema (issue #261): `scope_id = "team#<team>"`, `"user#<user>"`, or `"team#<team>#model#<model>"`, all with `period_date = "<YYYY-MM>"` (`src/cost_attribution/handler.py:293-299`). Canonical model at `src/cost_attribution/models.py:215`.
 
 **Consumer(s):**
-- `src/budget_enforcement/handler.py:125` — reads `total_cost_usd` at `USAGE#TEAM#{team}` / `PERIOD#{period}`; model-level at `src/budget_enforcement/handler.py:139`.
-- `src/usage_api/handler.py:42` — reads the team row; `src/usage_api/handler.py:101` maps `total_tokens`/`input_tokens`/`output_tokens`/`cached_tokens`/`total_cost_usd`/`request_count`; scans `#MODEL#` rows at `src/usage_api/handler.py:62`.
-- `src/chargeback_report/handler.py:56` — scans `pk begins_with USAGE#TEAM#`, `sk = PERIOD#<month>`; builds summaries at `src/chargeback_report/handler.py:134`.
-- `src/team_registration/routes.py:262` — reads `total_cost_usd` for the usage summary.
+- `src/budget_enforcement/handler.py:170` — reads `total_cost_usd` at `scope_id=team#{team}` / `period_date={period}`; model-level at `src/budget_enforcement/handler.py:191`.
+- `src/usage_api/handler.py:40` — reads the team row and maps `total_tokens`/`input_tokens`/`output_tokens`/`cached_tokens`/`total_cost_usd`/`request_count`; scans `team#{team}#model#` rows at `src/usage_api/handler.py:80`.
+- `src/chargeback_report/handler.py:55` — scans `scope_id begins_with "team#"`, `period_date == month`, excluding per-model rows (`#model#`) so team totals are not double-counted (`src/chargeback_report/handler.py:73`).
+- `src/team_registration/routes.py:257` — reads `total_cost_usd` for the usage summary.
 
 **Shape:**
 ```python
-# src/cost_attribution/models.py:217
+# src/cost_attribution/models.py:215
 class UsageRecord(BaseModel):
-    """Accumulated usage for a given entity+period stored in DynamoDB.
+    """Accumulated usage for a given entity+period in the ``gateway-usage`` table.
 
-    PK: ``USAGE#<entity_type>#<entity_id>``  SK: ``PERIOD#<YYYY-MM>``
+    Keyed by the real Terraform schema (issue #261): hash=``scope_id``,
+    range=``period_date``.
     """
 
-    pk: str = Field(description="Partition key, e.g. USAGE#TEAM#my-team")
-    sk: str = Field(description="Sort key, e.g. PERIOD#2026-03")
+    scope_id: str = Field(description="Partition key, e.g. team#my-team")
+    period_date: str = Field(description="Sort key, e.g. 2026-03")
     total_tokens: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -171,34 +172,39 @@ class UsageRecord(BaseModel):
 ```
 
 **Assumptions consumers make:**
-- Readers assume `total_cost_usd` may be a string or absent and coerce via `Decimal(str(item.get("total_cost_usd", "0")))`, defaulting to `0.00` on failure (`src/budget_enforcement/handler.py:130`, `src/usage_api/handler.py:138`, `src/team_registration/routes.py:266`).
-- Readers assume the exact `pk`/`sk` string format and rebuild the key literally; `usage_api` even re-parses the model name back out of the PK by splitting on `#MODEL#` (`src/usage_api/handler.py:119`).
-- Consumers assume the current period is `datetime.now(UTC).strftime("%Y-%m")` (`src/budget_enforcement/handler.py:124`, `src/usage_api/handler.py:81`) — the same format the writer uses (`src/cost_attribution/handler.py:302`).
+- Readers assume `total_cost_usd` may be a string or absent and coerce via `Decimal(str(item.get("total_cost_usd", "0")))`, defaulting to `0.00` on failure (`src/budget_enforcement/handler.py:186`, `src/usage_api/handler.py`, `src/team_registration/routes.py:266`).
+- Readers assume the exact `scope_id` string format and rebuild the key literally; `usage_api` re-parses the model name back out of the key by splitting on `#model#` (`src/usage_api/handler.py:135-143`).
+- Consumers assume the current period is `datetime.now(UTC).strftime("%Y-%m")` — the same format the writer uses.
 
-**Drift risk:** The `pk`/`sk` prefix strings are duplicated as f-strings across five modules with no shared constant, so a prefix change in the writer silently yields empty reads (budget checks pass, usage shows zero); centralize the key builders in one module and have every reader/writer import them.
+**Drift risk:** The `scope_id` prefix strings (`team#`, `user#`, `#model#`, `ratelimit#`) are duplicated as f-strings across the writer and readers with no shared constant, so a prefix change in the writer silently yields empty reads (budget checks pass, usage shows zero); centralize the key builders in one module and have every reader/writer import them.
 
-## DynamoDB budget record (`BUDGET#<team>` / `CONFIG`)
+## DynamoDB budget record (`budget_id` / `scope`, `scope-index` GSI)
 
-**Producer:** `src/team_registration/routes.py:149` seeds the record on team registration; `src/cost_attribution/handler.py:481` updates `alerts_sent`. Canonical model at `src/cost_attribution/models.py:178`.
+**Producer:** `src/budget_admin/routes.py:142` creates budgets keyed by `budget_id` (uuid) with `scope="CONFIG"`, `scope_type`, `scope_id`, and `budget_usd`; `src/team_registration/routes.py:155` seeds a budget in the same shape on team registration (issue #261 converged the writers). Canonical model at `src/cost_attribution/models.py:171`.
 
 **Consumer(s):**
-- `src/budget_enforcement/handler.py:117` — reads `monthly_budget_usd`, `warn_threshold_pct`, `hard_limit_pct`, `model_limits`, `rpm`, `tokens_per_day` (`src/budget_enforcement/handler.py:242-252`).
-- `src/cost_attribution/handler.py:393` — reads `monthly_budget_usd`, `alert_thresholds`, `alerts_sent` (`src/cost_attribution/handler.py:426-432`).
-- `src/usage_api/handler.py:49` — reads `monthly_budget_usd` (`src/usage_api/handler.py:165`).
-- `src/team_registration/routes.py:252` — reads `monthly_budget_usd` for the usage summary.
-- `src/chargeback_report/handler.py:83` — reads budget limits, accepting `monthly_budget_usd` or `monthly_usd`, keyed by `scope_id` or `team` (`src/chargeback_report/handler.py:87-88`).
+- `src/budget_enforcement/handler.py:143` — looks the team budget up on the `scope-index` GSI (`scope == "CONFIG" AND scope_id == team`) and reads budget, thresholds, `model_limits`, `rpm`, `tokens_per_day`.
+- `src/cost_attribution/handler.py:394` — the same GSI lookup; reads budget, `alert_thresholds`, `alerts_sent`.
+- `src/usage_api/handler.py:51` — the same GSI lookup for `monthly_budget_usd`/`budget_usd`.
+- `src/team_registration/routes.py:257` — the same GSI lookup for the usage summary.
+- `src/chargeback_report/handler.py:83` — reads budget limits, accepting `budget_usd` or `monthly_budget_usd`.
 
 **Shape:**
 ```python
-# src/cost_attribution/models.py:178
+# src/cost_attribution/models.py:171
 class BudgetRecord(BaseModel):
-    """A budget configuration stored in DynamoDB.
+    """A budget configuration stored in the ``gateway-budgets`` table.
 
-    PK: ``BUDGET#<team>``  SK: ``CONFIG``
+    Keyed by the real Terraform schema (issue #261): hash=``budget_id`` (uuid),
+    range=``scope`` (always "CONFIG" for config rows). The entity kind is in
+    ``scope_type`` and the entity id in ``scope_id``; a lookup by team goes
+    through the ``scope-index`` GSI (HASH=``scope``, RANGE=``scope_id``).
     """
 
-    pk: str = Field(description="Partition key, e.g. BUDGET#my-team")
-    sk: str = Field(default="CONFIG", description="Sort key")
+    budget_id: str = Field(description="Partition key, a uuid")
+    scope: str = Field(default="CONFIG", description="Sort key")
+    scope_type: str = Field(default="team", description="Entity kind: team | user | project")
+    scope_id: str = Field(description="Entity id, e.g. the team name")
     team: str
     cost_center: str = Field(default="")
     tenant_tier: TenantTier = Field(default=TenantTier.STANDARD)
@@ -211,11 +217,11 @@ class BudgetRecord(BaseModel):
 ```
 
 **Assumptions consumers make:**
-- The seed writer stores `warn_threshold_pct` / `hard_limit_pct` as plain ints (`src/team_registration/routes.py:157`) while the model + `budget_enforcement` read them as `float(...)` (`src/budget_enforcement/handler.py:245`), so consumers assume numeric-coercible, not typed, values.
-- `budget_enforcement` treats `model_limits` as a `dict[model -> {monthly_usd, daily_tokens}]` and skips malformed entries (`src/budget_enforcement/handler.py:161`), but the seed writer never writes `model_limits`, so consumers assume its absence means "no per-model caps".
-- `cost_attribution` assumes `alerts_sent` is a mutable list it may extend and write back to dedupe SNS alerts (`src/cost_attribution/handler.py:477`).
+- Readers accept the budget amount under either `budget_usd` (what the writers store) or `monthly_budget_usd`, coercing via `Decimal(str(...))` (`src/team_registration/routes.py:280`, `src/budget_enforcement/handler.py:318`), so consumers assume numeric-coercible, not typed, values.
+- `budget_enforcement` treats `model_limits` as a `dict[model -> {monthly_usd, daily_tokens}]` and skips malformed entries, but the seed writer never writes `model_limits`, so consumers assume its absence means "no per-model caps".
+- `cost_attribution` assumes `alerts_sent` is a mutable list it may extend and write back to dedupe SNS alerts.
 
-**Drift risk:** `budget_admin` writes a **structurally different** budget item — `Key={"budget_id":…, "scope":"CONFIG"}` with `scope_type`/`scope_id`/`budget_usd` (`src/budget_admin/routes.py:152-163`) — not the `BUDGET#<team>`/`CONFIG` + `monthly_budget_usd` shape the enforcement path reads; a budget created via `budget_admin` is invisible to `budget_enforcement`, and only `chargeback_report` bridges the two by reading both key/field spellings (`src/chargeback_report/handler.py:87`). Converge the two writers on one item shape (or document `budget_admin` as a separate table) so admin-created budgets actually enforce.
+**Drift risk:** The writers were converged onto one item shape by issue #261 (a moto-backed round-trip test proves an admin-created budget is enforced against accumulated usage), but the `budget_usd` vs `monthly_budget_usd` field aliasing survives in every reader; a new reader that checks only one spelling reintroduces the invisible-budget bug. Keep the dual-spelling read (or migrate the data to one field) whenever a new consumer is added.
 
 ## AuditEvent (Firehose → Iceberg audit trail)
 
@@ -309,7 +315,7 @@ class RateLimitResult(BaseModel):
 - The caller assumes `rate_limiter` emits its own denial metric but **no** audit event, so `budget_enforcement` owns the deny-audit to avoid double-counting the same denial (`src/rate_limiter/handler.py:6`, `src/budget_enforcement/handler.py:366`).
 - `tokens_per_day_limit == -1` means unlimited and skips the daily check (`src/rate_limiter/handler.py:190`), matching the tier-config sentinel (`src/budget_enforcement/models.py:22`).
 
-**Drift risk:** `rate_limiter` shares the usage table but partitions it under `RATE#RPM#` / `RATE#TOKENS#` prefixes with TTLs (`src/rate_limiter/handler.py:47`, `:105`); a change to those prefixes or the `if_not_exists` counter expression would silently reset windows — keep the counter key schema and the deny-audit ownership documented alongside the `check_rate_limit` signature.
+**Drift risk:** `rate_limiter` shares the usage table but partitions it under `ratelimit#rpm#` / `ratelimit#tokens#` `scope_id` prefixes with TTLs (`src/rate_limiter/handler.py:69`, `:109`); a change to those prefixes or the `if_not_exists` counter expression would silently reset windows — keep the counter key schema and the deny-audit ownership documented alongside the `check_rate_limit` signature.
 
 ## `TokenPrice` + `PRICING_TABLE`
 

@@ -1,5 +1,7 @@
 # Webhook adapter: Portkey hook contract to agentgateway guardrail contract
 
+> **Status (post-migration):** the migration chose the "native handler mode" described at the bottom of this note. `src/budget_enforcement/handler.py` now speaks the agentgateway `{action}` contract directly via `gwcore.agentgateway`, and no `content_scanner` Lambda exists in `src/`. The adapter analysis below is preserved as the spike-time record.
+
 This is the make-or-break seam. The existing `budget_enforcement` and
 `content_scanner` Lambdas speak Portkey's `before_request_hooks` contract.
 agentgateway speaks a different guardrail-webhook contract. They do not line up.

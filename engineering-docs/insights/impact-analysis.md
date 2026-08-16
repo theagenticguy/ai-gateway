@@ -2,7 +2,7 @@
 
 This file answers one question: *if I touch X, what else do I have to think about?*
 
-**"High-impact surface"** here means a symbol or module whose change ripples outward across the codebase, ranked by **inbound direct-import count from the shared `gwcore` package plus preamble-flagged data-plane contracts**. `ai-gateway` is a set of 12 single-purpose Lambda services (`src/*/handler.py`) sitting on one shared foundation package, `src/gwcore/` (`src/gwcore/__init__.py:1`). Every service handler imports from `gwcore`, so a signature change to a `gwcore` export is the widest blast radius in the repo. The counts below come from `codegraph impact <symbol>` cross-checked against `grep -rn "from gwcore" src` — the number of *service files* that directly import a submodule is the selection metric, because that is the count of Lambdas that must be re-tested and re-deployed on a breaking change.
+**"High-impact surface"** here means a symbol or module whose change ripples outward across the codebase, ranked by **inbound direct-import count from the shared `gwcore` package plus preamble-flagged data-plane contracts**. `ai-gateway` is a set of 11 single-purpose Lambda services (`src/*/handler.py`) sitting on one shared foundation package, `src/gwcore/` (`src/gwcore/__init__.py:1`). Every service handler imports from `gwcore`, so a signature change to a `gwcore` export is the widest blast radius in the repo. The counts below come from `codegraph impact <symbol>` cross-checked against `grep -rn "from gwcore" src` — the number of *service files* that directly import a submodule is the selection metric, because that is the count of Lambdas that must be re-tested and re-deployed on a breaking change.
 
 The eight surfaces are the six `gwcore` submodules with the highest service-file fan-in (`logging` 12, `telemetry` 11, `audit` 11, `auth` 9, `errors` 9, `responses` 8), plus two preamble-flagged contract surfaces: the agentgateway config renderer (`routing_config.models.RoutingConfig.to_agentgateway_backend`) and the agentgateway guardrail-webhook helpers (`gwcore.agentgateway`). `gwcore.cache.TTLCache` has a high raw `codegraph impact` number (147) but that is transitive module-reachability noise: its only in-`src` caller is `gwcore.auth`, so it is routed to `## Other notable surfaces`.
 
@@ -141,7 +141,7 @@ Blast-radius notes:
 
 Defined at: `src/gwcore/logging.py:39` (`get_logger`), `src/gwcore/logging.py:51` (`correlation_id`), `src/gwcore/logging.py:57` (`bind`)
 
-Structured JSON logging with a per-request correlation id. This is the single most-imported submodule: **all 12 service files** import at least `get_logger` (`grep -rn "from gwcore.logging"`). `codegraph impact get_logger` reports 22 affected symbols.
+Structured JSON logging with a per-request correlation id. This is the single most-imported submodule: **all 11 service packages** import at least `get_logger` (`grep -rn "from gwcore.logging"`). `codegraph impact get_logger` reports 22 affected symbols.
 
 | Downstream | Type | Touch on change | Citation |
 | --- | --- | --- | --- |

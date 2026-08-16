@@ -4,9 +4,9 @@ Terraform root module for the AI Gateway — deploys VPC, ALB, ECS Fargate, Cogn
 
 ## Architecture
 
-This root module composes 15 local sub-modules. The core data plane is always deployed; the remaining modules are feature-gated by input variables (see the Inputs table below).
+This root module composes 17 local sub-modules (an eighteenth, `modules/api_foundation`, exists on disk but is not yet wired into `main.tf`). The core data plane is always deployed; the remaining modules are feature-gated by input variables (see the Inputs table below).
 
-**Core (always deployed):**
+**Core (always instantiated; some gate their resources internally):**
 
 | Module | Purpose |
 |--------|---------|
@@ -14,12 +14,12 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | `modules/auth` | Cognito User Pool, M2M client, ALB JWT validation |
 | `modules/compute` | ECS Fargate, ECR, IAM roles, Secrets Manager |
 | `modules/observability` | KMS-encrypted CloudWatch log groups and dashboard |
-| `modules/guardrails` | Bedrock Guardrails for inline content safety filtering (ApplyGuardrail) |
-| `modules/appconfig` | Feature flags and dynamic configuration toggles |
-| `modules/cost_attribution` | Lambda pipeline attributing spend per team via CloudWatch metrics |
-| `modules/inspector` | Continuous ECR vulnerability scanning |
+| `modules/guardrails` | Bedrock Guardrails for inline content safety filtering (`enable_guardrails`, default true) |
+| `modules/appconfig` | Feature flags and dynamic configuration toggles (`enable_appconfig`) |
+| `modules/cost_attribution` | Lambda pipeline attributing spend per team via CloudWatch metrics (`enable_cost_attribution`) |
+| `modules/inspector` | Continuous ECR vulnerability scanning (`enable_inspector`) |
 
-**Optional (feature-gated):**
+**Optional (feature-gated at the root):**
 
 | Module | Purpose | Enabled by |
 |--------|---------|-----------|
@@ -30,6 +30,8 @@ This root module composes 15 local sub-modules. The core data plane is always de
 | `modules/budgets` | DynamoDB tables for budget definitions and usage tracking | `enable_budgets` |
 | `modules/chargeback` | Monthly chargeback report pipeline | `enable_chargeback` (+ `enable_budgets`) |
 | `modules/audit_log` | Kinesis Firehose → S3 (Parquet) with Glue Catalog | `enable_audit_log` |
+| `modules/audit_pipeline` | Firehose → Iceberg (S3 Tables) audit pipeline (ADR-016/017) | `enable_audit_pipeline` |
+| `modules/audit_query` | Athena audit query surface (workgroup, named queries, results bucket) | `enable_audit_query` (+ `enable_audit_pipeline`) |
 
 <!-- BEGIN_TF_DOCS -->
 

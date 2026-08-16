@@ -91,7 +91,7 @@ uv run admin-cli teams list
 uv run admin-cli teams create \
   --set team_name=payments-svc \
   --set contact_email=payments@example.com \
-  --set tier=premium
+  --set tier=high
 
 # 3) Create a budget from a file, then page through budgets
 uv run admin-cli budgets create --body @budget.json

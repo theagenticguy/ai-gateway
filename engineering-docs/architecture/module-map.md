@@ -8,14 +8,16 @@
 - `src/gwcore/responses.py` (145 LOC)
 - `src/gwcore/audit.py` (119 LOC)
 - `src/gwcore/telemetry.py` (114 LOC)
+- `src/gwcore/agentgateway.py` (108 LOC)
 - `src/gwcore/cache.py` (91 LOC)
 - `src/gwcore/errors.py` (83 LOC)
 - `src/gwcore/logging.py` (59 LOC)
-- `src/gwcore/__init__.py` (40 LOC)
+- `src/gwcore/tiers.py` (50 LOC, canonical `Tier` enum + `TIER_DEFAULTS`: sandbox/standard/high/unlimited; added by issue #260 as the single source of truth for tier quotas and budgets)
+- `src/gwcore/__init__.py` (46 LOC)
 
 ## cost_attribution
 
-`cost_attribution` is a CloudWatch Logs subscription Lambda that parses gateway access logs, derives per-request cost and token metrics, publishes billing CloudWatch metrics with Provider/Model/Team dimensions, accumulates usage in DynamoDB, fires SNS budget alerts, and writes usage records to the audit Firehose (`src/cost_attribution/handler.py:1`). It is event-driven with no HTTP surface and no authorization (`src/cost_attribution/handler.py:6`). Cost is computed from a token pricing table for LLM providers and models, defined in `pricing.py` and cached for warm-Lambda reuse (`src/cost_attribution/pricing.py:1`). It is the largest module in the tree at 1198 LOC across 4 files (`src/cost_attribution/handler.py:665`).
+`cost_attribution` is a CloudWatch Logs subscription Lambda that parses gateway access logs, derives per-request cost and token metrics, publishes billing CloudWatch metrics with Provider/Model/Team dimensions, accumulates usage in DynamoDB, fires SNS budget alerts, and writes usage records to the audit Firehose (`src/cost_attribution/handler.py:1`). It is event-driven with no HTTP surface and no authorization (`src/cost_attribution/handler.py:6`). Cost is computed from a token pricing table for LLM providers and models, defined in `pricing.py` and cached for warm-Lambda reuse (`src/cost_attribution/pricing.py:1`). It is the largest service module in the tree at roughly 1200 LOC across 4 files (`src/cost_attribution/handler.py:1`).
 
 - `src/cost_attribution/handler.py` (665 LOC)
 - `src/cost_attribution/pricing.py` (301 LOC)
