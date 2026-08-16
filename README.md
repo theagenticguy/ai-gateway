@@ -114,7 +114,10 @@ in Secrets Manager and are injected into the task at runtime.
 **Control plane.** Eleven Lambda services behind an API Gateway REST API with
 a Cognito authorizer handle team registration, budget administration and
 enforcement, rate limiting, routing config, pricing, usage, chargeback
-reports, cost attribution, admin tokens, and pre-token claims. They share one
+reports, cost attribution, admin tokens, and pre-token claims. Eight are
+deployed by the Terraform stack today; rate limiting, the usage API, and
+pricing administration are implemented and tested in `src/` but not yet wired
+to Lambda resources (each says so in its `__init__.py`). They share one
 Python package, [`src/gwcore/`](src/gwcore/): one authentication path, one
 response/error/pagination contract, in-process + ETag caching, an append-only
 audit trail (Kinesis Firehose to Apache Iceberg on S3 Tables), and uniform
