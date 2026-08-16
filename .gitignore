@@ -60,6 +60,10 @@ node_modules/
 # Build artifacts
 # ──────────────────────────────────────────────
 sbom.*.json
+# `mise run security:sbom` writes here (3 MB of generated inventory). Regenerated
+# from the lockfiles on demand and published by CI as an artifact, so committing it
+# would only add a large diff to every dependency bump.
+sbom/
 trivy-results.*
 .cache/trivy/
 
