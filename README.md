@@ -1,249 +1,212 @@
 # AI Gateway
 
+[![CI/CD Pipeline](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/theagenticguy/ai-gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/theagenticguy/ai-gateway/actions/workflows/codeql.yml)
+[![codecov](https://codecov.io/gh/theagenticguy/ai-gateway/graph/badge.svg)](https://codecov.io/gh/theagenticguy/ai-gateway)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/theagenticguy/ai-gateway/badge)](https://scorecard.dev/viewer/?uri=github.com/theagenticguy/ai-gateway)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12221/badge)](https://www.bestpractices.dev/en/projects/12221)
-[![CI/CD Pipeline](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/theagenticguy/ai-gateway/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/theagenticguy/ai-gateway/graph/badge.svg)](https://codecov.io/gh/theagenticguy/ai-gateway)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Release](https://img.shields.io/github/v/release/theagenticguy/ai-gateway)](https://github.com/theagenticguy/ai-gateway/releases)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-fe5196.svg)](https://www.conventionalcommits.org)
 
-## Overview
+One endpoint for every AI coding agent in your organization, on your own AWS
+account. The gateway routes OpenAI-format and Anthropic-format requests to
+Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI, authenticates teams with
+short-lived Cognito tokens instead of shared provider keys, and meters every
+request into per-team budgets, rate limits, and chargeback reports.
 
-AI Gateway is a lightweight LLM inference gateway on AWS that routes AI agent requests through [agentgateway](https://github.com/agentgateway/agentgateway) to multiple model providers -- Bedrock, OpenAI, Anthropic, Google, and Azure OpenAI -- via a unified API. It serves both the OpenAI Chat Completions format (`/v1/chat/completions`) and the Anthropic Messages format (`/v1/messages`) natively, so every major coding agent works out of the box. The data plane moved from Portkey OSS to agentgateway in [ADR-017](adr/017-agentgateway-data-plane-spike.md); the control plane and identity layer are unchanged.
+Claude Code, Codex CLI, OpenCode, Goose, Continue.dev, and LangChain all work
+against it with nothing but a base URL and a token, because it serves both
+`/v1/messages` (Anthropic Messages) and `/v1/chat/completions` (OpenAI Chat
+Completions) natively.
 
-Authentication uses Cognito M2M (`client_credentials`) with ALB-native JWT validation, eliminating the need for API Gateway and its per-request costs.
+**Documentation:** [user guide, developer guide, and reference](https://theagenticguy.github.io/ai-gateway/) ·
+**Decisions:** [17 ADRs](adr/) · **Deep dive:** [engineering-docs/](engineering-docs/README.md)
 
-## Architecture
+## Quick start
 
-The infrastructure follows a single-region, two-AZ deployment on AWS:
-
-- **VPC** -- Two public subnets (ALB) and two private subnets (ECS tasks), with a single NAT Gateway for outbound internet and VPC endpoints for ECR, CloudWatch Logs, Secrets Manager, and S3.
-- **ALB** -- Application Load Balancer in public subnets with TLS 1.3, WAF v2 (AWS Managed Rules + IP rate limiting), and native JWT validation.
-- **Cognito** -- User Pool with M2M `client_credentials` grant, custom OAuth scopes, and JWKS endpoint for ALB signature verification.
-- **ECS Fargate** -- agentgateway container (port 8787, readiness on 15021) with an AWS OpenTelemetry Collector sidecar. Config is delivered inline; routing, providers, guardrail webhooks, and access-log shaping live in the rendered agentgateway YAML. Autoscales on CPU utilization and ALB request count.
-- **CloudWatch** -- Log groups for gateway and OTel collector, saved Logs Insights queries, and an operational dashboard (requests, errors, latency, top endpoints by provider).
-- **Secrets Manager** -- Stores provider API keys (OpenAI, Anthropic, Google, Azure) injected into ECS tasks at runtime.
-
-The deployment is split into two planes ([ADR-014](adr/014-two-plane-architecture-split.md)): the **data plane** above carries inference traffic on the ALB, while a **control plane** of Lambda services behind an API Gateway REST API (with a Cognito authorizer) handles teams, budgets, routing, pricing, and usage. All eleven control-plane services share one Python package, `src/gwcore/`, that provides a single authentication path, a consistent response/error/pagination contract, in-process + ETag caching, an append-only audit trail (Kinesis Firehose → Apache Iceberg on S3 Tables), and uniform EMF metrics + structured logging. See [ADR-016](adr/016-control-plane-api-foundation.md).
-
-Detailed architecture diagrams live in the [developer guide](docs/src/content/docs/developer-guide/architecture.md); a deep-dive engineering reference (module map, data flows, contracts, impact analysis) lives under [`engineering-docs/`](engineering-docs/README.md).
-
-## Prerequisites
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| [mise](https://mise.jdx.dev/) | latest | Tool version manager (installs all other tools) |
-| [uv](https://docs.astral.sh/uv/) | latest | Python package manager |
-| [Terraform](https://www.terraform.io/) | ~> 1.14 | Infrastructure as code (installed via mise) |
-| [AWS CLI](https://aws.amazon.com/cli/) | v2 | AWS operations |
-| [Docker](https://www.docker.com/) | latest | Container builds and local testing |
-
-mise will install pinned versions of Python 3.13, Terraform 1.14.8, lefthook, checkov, trivy, hadolint, and gitleaks automatically from `mise.toml`.
-
-## Quick Start
+Deploying the gateway (platform operator path):
 
 ```bash
-# Clone the repository
 git clone git@github.com:theagenticguy/ai-gateway.git
 cd ai-gateway
+mise install          # pinned toolchain: Python 3.13, Terraform, uv, every scanner
+mise run install      # Python deps + git hooks
 
-# Install all tool versions defined in mise.toml
-mise install
-
-# Install Python dependencies
-uv sync
-
-# Install git hooks
-lefthook install
-
-# Initialize Terraform
 cd infrastructure
-terraform init -backend-config=environments/dev.tfvars
-
-# Preview infrastructure changes
+terraform init        # backend is s3; pass -backend-config for your state bucket
 terraform plan -var-file=environments/dev.tfvars
+terraform apply -var-file=environments/dev.tfvars
 ```
+
+Connecting an agent to a deployed gateway (user path):
+
+```bash
+./scripts/gateway-setup.sh    # interactive wizard: connectivity, auth, agent config
+```
+
+or by hand: fetch a token and point your agent at the ALB.
+
+```bash
+export GATEWAY_TOKEN=$(./scripts/get-gateway-token.sh)
+
+# Claude Code
+export ANTHROPIC_BASE_URL=https://<alb-dns>
+export ANTHROPIC_AUTH_TOKEN=$GATEWAY_TOKEN
+
+# OpenAI-format agents: base URL https://<alb-dns>/v1, key = the same token
+export OPENAI_API_KEY=$GATEWAY_TOKEN
+```
+
+Per-agent instructions (all six agents, plus token caching) are in the
+[agent setup guide](docs/src/content/docs/user-guide/agent-setup.md).
+
+## Why it exists
+
+Teams adopting coding agents hit the same three problems: provider API keys
+get shared and never rotated, nobody can attribute spend to a team, and every
+agent speaks a different API format. The usual answer is a hosted LLM proxy,
+which puts an external vendor in the middle of every prompt.
+
+This project is that proxy as first-party infrastructure: a Terraform stack
+you deploy into your own account, with identity on Cognito, transport on an
+ALB, and the data plane on [agentgateway](https://github.com/agentgateway/agentgateway),
+a CNCF-sandbox Rust proxy. No request leaves your VPC except to the model
+provider you routed it to.
+
+We evaluated LiteLLM first and rejected it ([ADR-001](adr/001-portkey-oss-over-litellm.md)):
+at evaluation time (March 2026) it carried 14 known CVEs including a critical
+RCE, and a supply-chain compromise was disclosed days later. The original
+Portkey OSS data plane was replaced by agentgateway in
+[ADR-017](adr/017-agentgateway-data-plane-spike.md); LiteLLM was never a
+dependency at any layer.
+
+## How it works
+
+Two planes, split in [ADR-014](adr/014-two-plane-architecture-split.md):
+
+```text
+agent ── Bearer JWT ──> ALB (TLS 1.3, WAF, native JWT validation)
+                          │
+                          ▼
+                  ECS Fargate: agentgateway + OTel collector sidecar
+                          │
+        Bedrock / OpenAI / Anthropic / Google / Azure OpenAI
+
+admin ── Cognito ──> API Gateway ──> 11 Lambda services (gwcore)
+                                      teams · budgets · rate limits · routing
+                                      pricing · usage · chargeback · audit
+```
+
+**Data plane.** The ALB validates the Cognito JWT natively (signature against
+JWKS, `iss`, `exp`, `nbf`, `iat`, and the required scope), so a bad token is
+rejected before anything downstream runs, at no per-request cost
+([ADR-005](adr/005-alb-jwt-validation-over-api-gateway.md)). Valid requests
+reach agentgateway on ECS Fargate, which serves both API formats, applies
+routing and guardrail webhooks from rendered config, and emits traces,
+metrics, and access logs through an OpenTelemetry collector sidecar. The VPC
+is single-region, two-AZ, with one NAT gateway and VPC endpoints for ECR,
+CloudWatch Logs, Secrets Manager, and S3
+([ADR-003](adr/003-single-nat-gw-with-vpc-endpoints.md)). Provider keys live
+in Secrets Manager and are injected into the task at runtime.
+
+**Control plane.** Eleven Lambda services behind an API Gateway REST API with
+a Cognito authorizer handle team registration, budget administration and
+enforcement, rate limiting, routing config, pricing, usage, chargeback
+reports, cost attribution, admin tokens, and pre-token claims. They share one
+Python package, [`src/gwcore/`](src/gwcore/): one authentication path, one
+response/error/pagination contract, in-process + ETag caching, an append-only
+audit trail (Kinesis Firehose to Apache Iceberg on S3 Tables), and uniform
+EMF metrics and structured logging
+([ADR-016](adr/016-control-plane-api-foundation.md)).
+
+**Authentication.** Each team gets its own Cognito app client
+([ADR-008](adr/008-multi-tenant-client-isolation.md)). A client exchanges its
+ID and secret for a signed JWT (1-hour TTL, `client_credentials` grant) and
+sends it as a Bearer token; the ALB does the rest. Human SSO federates through
+Identity Center ([ADR-013](adr/013-identity-center-saml-federation.md)).
+
+Full diagrams live in the
+[architecture guide](docs/src/content/docs/developer-guide/architecture.md);
+module maps, contracts, and impact analysis live under
+[`engineering-docs/`](engineering-docs/README.md).
 
 ## Development
 
-All project tasks are defined in `mise.toml` and run with `mise run <task>`:
+Everything runs through [mise](https://mise.jdx.dev/): `mise install` brings
+in the pinned toolchain, and every task below is `mise run <task>`.
 
-| Task | Command | Description |
-|------|---------|-------------|
-| `install` | `mise run install` | Install Python dependencies and git hooks |
-| `dev` | `mise run dev` | Run the API gateway locally with hot reload (port 8000) |
-| `test` | `mise run test` | Run the test suite with pytest |
-| `lint` | `mise run lint` | Run ruff linter and format check |
-| `format` | `mise run format` | Auto-format Python (ruff) and Terraform (fmt) |
-| `typecheck` | `mise run typecheck` | Run pyright type checker |
-| `security` | `mise run security` | Run all security scans (SAST, secrets, IaC, Dockerfile) |
-| `security:sast` | `mise run security:sast` | SAST scan with semgrep |
-| `security:secrets` | `mise run security:secrets` | Secret detection with gitleaks |
-| `security:iac` | `mise run security:iac` | IaC security scan with checkov |
-| `security:dockerfile` | `mise run security:dockerfile` | Lint Dockerfiles with hadolint |
-| `security:image` | `mise run security:image` | Scan container image with trivy |
-| `security:fs` | `mise run security:fs` | Filesystem vulnerability scan with trivy |
-| `security:osv` | `mise run security:osv` | Scan lockfiles against OSV vulnerability database |
-| `security:sbom-rescan` | `mise run security:sbom-rescan` | Rescan SBOM with Grype for newly disclosed CVEs |
-| `tf:init` | `mise run tf:init` | Initialize Terraform |
-| `tf:plan` | `mise run tf:plan` | Terraform plan (dry-run) |
-| `tf:fmt` | `mise run tf:fmt` | Format Terraform files |
-| `tf:validate` | `mise run tf:validate` | Validate Terraform configuration |
-| `ci` | `mise run ci` | Full CI pipeline (lint, typecheck, test, security) |
-| `ci:lint` | `mise run ci:lint` | Validate GitHub Actions workflows with actionlint |
-| `ci:validate` | `mise run ci:validate` | Validate all CI + quality gates in one shot |
+| Task | What it does |
+|------|--------------|
+| `install` | Python deps (uv) + git hooks (lefthook) |
+| `test` | pytest suite |
+| `lint` / `format` | ruff check + format (and terraform fmt) |
+| `typecheck` | pyright over `src/` |
+| `security` | every scanner below, one command |
+| `ci` | lint + typecheck + test + security |
+| `tf:plan` / `tf:validate` | Terraform dry-run / validation |
+| `docs:serve` / `docs:build` | Starlight docs site, local / production |
+| `deps:upgrade` | bump all ecosystems and regenerate every lockfile |
 
-### Git Hooks
+There is no local `dev` server task: the data plane is agentgateway, and its
+local loop is the spike compose file
+(`docker compose -f spikes/agentgateway-data-plane/docker-compose.yaml up`).
 
-[Lefthook](https://github.com/evilmartians/lefthook) manages git hooks. All hooks run in parallel for speed.
+Git hooks (lefthook, all parallel): pre-commit runs ruff, pyright, gitleaks,
+hadolint, terraform fmt/validate/docs, SPDX license headers, and actionlint on
+what you staged; pre-push runs pytest, semgrep, checkov, trivy, and the
+dependency-license gate; commit-msg enforces
+[Conventional Commits](https://www.conventionalcommits.org/).
 
-**pre-commit** (runs on every commit):
+## Security and supply chain
 
-| Check | Scope |
-|-------|-------|
-| ruff lint + auto-fix | `*.py` staged files |
-| ruff format | `*.py` staged files |
-| pyright | `src/` |
-| gitleaks | staged changes |
-| hadolint | `Dockerfile*` staged files |
-| terraform fmt | `infrastructure/**/*.tf` |
-| terraform validate | `infrastructure/**/*.tf` |
+Every gate runs in three places where it applies: locally (`mise run
+security`), in git hooks, and in CI. An ignore file entry without a written
+reason is treated as a finding.
 
-**pre-push** (runs before push):
+| Concern | Tools | Enforced where |
+|---------|-------|----------------|
+| SAST | Semgrep, Bandit, CodeQL | CI (SARIF), pre-push |
+| Secrets | Gitleaks | pre-commit, CI |
+| IaC | Checkov, TFLint | pre-push, CI |
+| Container | Hadolint, Trivy, Amazon Inspector (ECR) | pre-commit, CI, continuous |
+| Dependencies | pip-audit, OSV-Scanner (every lockfile, recursively), Dependency Review, Dependabot (5 ecosystems) | CI, PR-time, weekly |
+| License policy | `scripts/check-licenses.py`: SPDX-normalized allowlist, copyleft denied by family, exemptions require evidence | CI (fails the build), pre-push |
+| License headers | `scripts/check-license-headers.py`: every tracked `.py`/`.sh`/`.tf` carries the SPDX line | CI, pre-commit |
+| SBOM | Syft (CycloneDX + SPDX over the source tree: npm, PyPI, and pinned Actions), Grype rescan with `.grype.yaml` | CI artifact, nightly rescan |
+| Workflows | actionlint, all Actions pinned to commit SHAs | CI, pre-commit |
+| Release integrity | Cosign keyless signing, SLSA build provenance attestations, per-release SBOMs | release workflow |
+| Posture | OpenSSF Scorecard | weekly |
 
-| Check | Scope |
-|-------|-------|
-| pytest | `tests/` (fail-fast) |
-| semgrep | Full repository |
-| checkov | `infrastructure/**/*.tf` |
-| trivy fs | Full repository |
+A nightly workflow rescans the latest SBOM and image against updated
+vulnerability databases, and an advisory-triggered workflow re-runs the scan
+when a new CVE lands. Rationale in
+[ADR-004](adr/004-security-pipeline-composition.md); disclosure policy in
+[SECURITY.md](.github/SECURITY.md).
 
-**commit-msg** (validates commit message format):
+## Repository map
 
-Enforces [Conventional Commits](https://www.conventionalcommits.org/) format: `<type>(<scope>): <description>`. Supported types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
-
-## Security
-
-The project implements a multi-layered security scanning pipeline across development, CI, and deployment.
-
-| Layer | Tool | What It Covers |
-|-------|------|----------------|
-| SAST | [Semgrep](https://semgrep.dev/) | Python code analysis (OWASP Top 10, security audit rules) via container |
-| SAST | [Bandit](https://bandit.readthedocs.io/) | Python-specific security linter with SARIF upload |
-| SAST | [CodeQL](https://codeql.github.com/) | GitHub-native semantic code analysis (security-extended + quality) |
-| Secrets | [Gitleaks](https://gitleaks.io/) | Prevents secrets from entering the repository (SARIF upload) |
-| IaC | [Checkov](https://www.checkov.io/) | Terraform security and compliance (2,500+ policies) |
-| IaC | [TFLint](https://github.com/terraform-linters/tflint) | Terraform linting with AWS ruleset |
-| Dockerfile | [Hadolint](https://github.com/hadolint/hadolint) | Dockerfile best practices with ShellCheck integration |
-| Container | [Trivy](https://trivy.dev/) | Vulnerability scanning of container images (HIGH + CRITICAL) |
-| Filesystem | [Trivy](https://trivy.dev/) | Repository filesystem scan for misconfigurations and vulnerabilities |
-| Dependencies | [pip-audit](https://github.com/pypa/pip-audit) | Python dependency vulnerability audit |
-| Dependencies | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning (uv.lock + pnpm-lock.yaml) against OSV database |
-| Dependencies | [Dependency Review](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check (denies GPL-3.0, AGPL-3.0) |
-| Dependencies | [Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated updates for Python, npm, Terraform, Actions, and Docker |
-| Licenses | [pip-licenses](https://github.com/raimon49/pip-licenses) | License compliance reporting (JSON + Markdown) |
-| SBOM | [Syft](https://github.com/anchore/syft) | CycloneDX + SPDX software bill of materials generation |
-| Signing | [Cosign](https://github.com/sigstore/cosign) | Keyless image signing via Sigstore OIDC |
-| Supply chain | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
-| SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
-| ECR Scanning | [Amazon Inspector](https://aws.amazon.com/inspector/) | Continuous container image scanning in ECR (re-evaluates on new CVEs) |
-| Provenance | [GitHub Attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) | SLSA build provenance for released container images |
-
-All GitHub Actions are pinned to SHA hashes. Dependabot monitors 5 ecosystems (Python, npm, Terraform, Actions, Docker) weekly. In CI, scanning follows a layered pipeline: **SAST** (Semgrep + Bandit + Gitleaks), **dependency audit** (pip-audit + OSV-Scanner + Trivy FS), **IaC** (Checkov + TFLint), **container** (Hadolint + Trivy + SBOM), and **compliance** (license check). A nightly **rescan** workflow re-evaluates the latest SBOM and container image against updated vulnerability databases using Grype, OSV-Scanner, and Trivy. Amazon Inspector provides continuous ECR scanning in production. See [ADR-004](adr/004-security-pipeline-composition.md) for the full rationale.
-
-## Infrastructure
-
-All Terraform configuration lives in the `infrastructure/` directory.
-
-| File | Purpose |
-|------|---------|
-| `providers.tf` | AWS provider configuration with default resource tags |
-| `versions.tf` | Terraform and provider version constraints (AWS ~> 6.22) |
-| `variables.tf` | Core input variables (region, environment, VPC CIDR, ECS sizing) |
-| `variables_auth.tf` | Authentication variables (Cognito pool ID, JWT auth toggle) |
-| `vpc.tf` | VPC with 2 AZs, public/private subnets, single NAT Gateway, VPC endpoints |
-| `alb.tf` | Application Load Balancer, HTTPS/HTTP listeners, target group for gateway |
-| `alb_auth.tf` | ALB JWT validation listener (Cognito-backed, conditionally enabled) |
-| `cognito.tf` | Cognito User Pool, resource server (OAuth scopes), M2M client, domain |
-| `ecs.tf` | ECS Fargate cluster, service, agentgateway data-plane + OTel sidecar containers, autoscaling |
-| `ecr.tf` | ECR repository with immutable tags, scan-on-push, lifecycle policy |
-| `iam.tf` | Task execution role (ECR + Secrets Manager) and task role (Bedrock + observability) |
-| `secrets.tf` | Secrets Manager entries for provider API keys (OpenAI, Anthropic, Google, Azure) |
-| `waf.tf` | WAFv2 Web ACL with AWS Managed Rules, IP reputation list, and per-IP rate limiting |
-| `cloudwatch.tf` | Log groups for gateway and OTel collector |
-| `dashboard.tf` | CloudWatch saved queries and operational dashboard |
-| `outputs.tf` | ALB DNS, ECS cluster/service names, ECR URL, Cognito endpoints |
-| `otel-config.yaml` | OpenTelemetry Collector configuration (traces to X-Ray, metrics to EMF, logs to CloudWatch) |
-
-Environment-specific variable files are in `infrastructure/environments/` (`dev.tfvars`, `prod.tfvars`).
-
-## Authentication Flow
-
-The gateway uses Cognito machine-to-machine (M2M) authentication with ALB-native JWT validation:
-
-1. **Token request** -- The client calls the Cognito `/oauth2/token` endpoint with `client_credentials` grant type, providing a client ID and secret.
-2. **Token issuance** -- Cognito returns a signed JWT access token (1-hour TTL) with the `https://gateway.internal/invoke` scope.
-3. **Request** -- The client sends requests to the ALB with `Authorization: Bearer <jwt>`.
-4. **ALB validation** -- The ALB validates the JWT signature against Cognito's JWKS endpoint, checks `iss`, `exp`, `nbf`, `iat`, and the required `scope` claim. Invalid tokens receive a 401 response directly from the ALB.
-5. **Forwarding** -- Valid requests are forwarded to the ECS Fargate target group running the agentgateway data plane.
-
-This approach adds zero additional cost and zero additional latency compared to API Gateway-based JWT validation. See [ADR-005](adr/005-alb-jwt-validation-over-api-gateway.md) and [ADR-007](adr/007-terraform-provider-upgrade-for-jwt.md) for details.
-
-## Why Not LiteLLM?
-
-We evaluated LiteLLM and rejected it in [ADR-001](adr/001-portkey-oss-over-litellm.md). At evaluation time (March 2026), LiteLLM had 14 known CVEs including critical RCE and active SSRF exploitation, systemic memory leaks, and brittle database migrations. Days after our decision, [NetSPI disclosed a supply-chain compromise](https://www.netspi.com/blog/executive-blog/ai-ml-pentesting/litellm-supply-chain-compromise/) affecting LiteLLM (March 25, 2026), further validating this choice. The data plane has since moved to agentgateway ([ADR-017](adr/017-agentgateway-data-plane-spike.md)); LiteLLM is not a dependency at any layer.
-
-## ADRs
-
-Architectural Decision Records are in the `adr/` directory.
-
-| ADR | Title | Status |
-|-----|-------|--------|
-| [001](adr/001-portkey-oss-over-litellm.md) | Portkey OSS as LLM Gateway Proxy | Accepted |
-| [002](adr/002-python-slim-over-chainguard.md) | python:3.13-slim Over Chainguard for Container Base Image | Accepted |
-| [003](adr/003-single-nat-gw-with-vpc-endpoints.md) | Single NAT Gateway + VPC Endpoints for Cost Optimization | Accepted |
-| [004](adr/004-security-pipeline-composition.md) | 3-Phase Container Security Pipeline | Accepted |
-| [005](adr/005-alb-jwt-validation-over-api-gateway.md) | ALB JWT Validation Over API Gateway for Auth | Accepted |
-| [006](adr/006-portkey-dual-format-api.md) | Portkey OSS Natively Serves Both OpenAI and Anthropic API Formats | Accepted |
-| [007](adr/007-terraform-provider-upgrade-for-jwt.md) | Upgrade AWS Terraform Provider to >= 6.22 for ALB JWT Validation | Accepted |
-| [008](adr/008-multi-tenant-client-isolation.md) | Multi-Tenant Client Isolation via Per-Team Cognito App Clients | Accepted |
-| [009](adr/009-provider-routing-strategy.md) | Provider Routing Strategy | Accepted |
-| [010](adr/010-cost-attribution-pipeline.md) | Cost Attribution Pipeline via Lambda + CloudWatch Metrics | Accepted |
-| [011](adr/011-bedrock-guardrails-integration.md) | Bedrock Guardrails Integration for Content Safety Filtering | Accepted |
-| [012](adr/012-response-cache-strategy.md) | Response Cache Strategy with ElastiCache Redis | Superseded by 017 |
-| [013](adr/013-identity-center-saml-federation.md) | Identity Center SAML/OIDC Federation for User SSO | Accepted |
-| [014](adr/014-two-plane-architecture-split.md) | Two-Plane Architecture Split (ALB Inference + API Gateway Admin) | Accepted |
-| [015](adr/015-openai-responses-bedrock-mantle-proxy.md) | OpenAI Responses → Bedrock mantle proxy (openai provider + custom_host, no fork) | Accepted |
-| [016](adr/016-control-plane-api-foundation.md) | Control-Plane API Foundation (`gwcore` shared package) | Accepted |
-| [017](adr/017-agentgateway-data-plane-spike.md) | agentgateway as the data plane (replaces Portkey OSS) | Accepted |
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/get-gateway-token.sh` | Obtains a Cognito M2M access token via `client_credentials` grant. Requires `GATEWAY_CLIENT_ID`, `GATEWAY_CLIENT_SECRET`, and `GATEWAY_TOKEN_ENDPOINT` environment variables. Outputs the raw JWT to stdout for use as a Bearer token. |
-| `scripts/cw-queries.sh` | Runs CloudWatch Logs Insights queries against the gateway log group. Supports individual queries (`requests`, `errors`, `latency`, `endpoints`) or `all`. Configurable via `LOG_GROUP`, `START_TIME`, and `END_TIME` environment variables. |
-
-## Agent Compatibility
-
-The gateway supports six AI coding agents across two API formats. See [docs/src/content/docs/user-guide/agent-setup.md](docs/src/content/docs/user-guide/agent-setup.md) for detailed configuration instructions.
-
-| Agent | API Format | Endpoint |
-|-------|-----------|----------|
-| Claude Code | Anthropic Messages | `/v1/messages` |
-| OpenCode | OpenAI Chat Completions | `/v1/chat/completions` |
-| Goose | OpenAI Chat Completions | `/v1/chat/completions` |
-| Continue.dev | OpenAI Chat Completions | `/v1/chat/completions` |
-| LangChain | OpenAI Chat Completions | `/v1/chat/completions` |
-| Codex CLI | OpenAI Chat Completions | `/v1/chat/completions` |
+```text
+infrastructure/    Terraform: VPC, ALB, Cognito, ECS, WAF, control plane (see its README)
+src/               gwcore + 11 control-plane Lambda services
+tests/             pytest suite for src/
+clients/           admin CLI (Python) and Codex client config
+scripts/           token fetch, onboarding wizard, health check, CI gates
+docs/              Starlight documentation site (pnpm)
+adr/               17 architectural decision records
+engineering-docs/  generated deep-dive reference (module map, contracts, flows)
+spikes/            dated proof-of-concept notes (agentgateway data plane)
+```
 
 ## Contributing
 
-1. Fork the repository.
-2. Create a feature branch from `main`.
-3. Make your changes and ensure all quality gates pass (`mise run ci`).
-4. Open a pull request against `main`.
-5. All CI checks must pass before merge. The pipeline runs lint, IaC security scanning, container image scanning, and deploys to production on merge to `main`.
+Fork, branch from `main`, make the change, and open a PR. `mise run ci` is
+the local equivalent of the pipeline; all checks must pass before merge, and
+merge to `main` deploys. Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-This project is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+[Apache-2.0](LICENSE). Every source file carries an
+`SPDX-License-Identifier` line, and dependency licenses are enforced against
+an allowlist in CI.
