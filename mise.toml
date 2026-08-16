@@ -102,7 +102,13 @@ run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
 
 [tasks."security:fs"]
 description = "Filesystem vulnerability scan with trivy"
-run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+# --skip-dirs .venv: trivy's secret pass flags moto's bundled fake CA keys
+# (moto_proxy/ca.key and friends) inside the installed venv, so the task failed
+# on every machine that had run `uv sync` while passing in CI, which scans a
+# fresh checkout with no venv. The venv is an installed copy of what uv.lock
+# already declares, and uv.lock is scanned; the repo's own tree still gets the
+# full vuln + secret pass.
+run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .venv ."
 
 [tasks."security:deps"]
 description = "Audit Python dependencies for known vulnerabilities"

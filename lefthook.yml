@@ -48,7 +48,9 @@ pre-push:
       glob: "infrastructure/**/*.tf"
       run: uvx checkov -d infrastructure/ --framework terraform --compact --quiet
     trivy-fs:
-      run: trivy fs --severity HIGH,CRITICAL --exit-code 1 --quiet .
+      # --skip-dirs .venv for the same reason as mise's security:fs: moto's
+      # bundled fake CA keys inside an installed venv fail the secret pass.
+      run: trivy fs --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .venv --quiet .
     licenses:
       glob: "{uv.lock,pyproject.toml}"
       run: ./scripts/check-licenses.py
