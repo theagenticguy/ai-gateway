@@ -181,50 +181,63 @@ Interface endpoints are secured by a dedicated security group that allows HTTPS 
 | **Immutable tags** | ECR `image_tag_mutability = "IMMUTABLE"` prevents tag overwriting |
 | **KMS encryption** | ECR images are encrypted at rest with a dedicated KMS key |
 | **Lifecycle policy** | Only the last 10 images are retained; older images are automatically expired |
-| **Cosign signing** | The CI pipeline signs images with Sigstore cosign (keyless) after push |
+| **Cosign signing** | The release workflow signs images with Sigstore cosign (keyless) after push |
 
 ## Security Scanning Pipeline
 
-The CI/CD pipeline runs 12 security tools across three phases. All findings are uploaded as SARIF to the GitHub Security tab.
+The CI/CD pipeline runs these security gates across three phases. Findings are uploaded as SARIF to the GitHub Security tab where the tool supports it.
 
 | Tool | Phase | Target | Purpose |
 |---|---|---|---|
 | **Semgrep** | Pre-build | Python source | SAST: OWASP Top 10, security audit, Python-specific rules |
+| **Bandit** | Pre-build | Python source | SAST: Python security linting (report-only, SARIF upload) |
 | **Gitleaks** | Pre-build | Git history | Secret detection in code and commit history |
+| **pip-audit** | Pre-build | `uv.lock` export | Known-vulnerability audit of locked Python dependencies |
+| **OSV-Scanner** | Pre-build | Lockfiles | Scans `uv.lock` and `docs/pnpm-lock.yaml` against the OSV database |
+| **Trivy fs** | Pre-build | Repository | Filesystem vulnerability scan (CRITICAL, HIGH severity) |
+| **License policy** | Pre-build | Python dependencies | `scripts/check-licenses.py` fails on any license outside the allowlist |
+| **License headers** | Pre-build | `.py`/`.sh`/`.tf` files | `scripts/check-license-headers.py` requires the SPDX line on every tracked source file |
+| **Syft (source)** | Pre-build | Source tree | Source SBOM generation (CycloneDX + SPDX, retained 90 days) |
+| **Grype** | Pre-build | Source SBOM | Vulnerability scan of the source SBOM; accepted findings live in `.grype.yaml` |
+| **actionlint** | Pre-build | Workflow files | GitHub Actions workflow linting (shellcheck included) |
 | **Checkov** | Pre-build | Terraform | IaC misconfiguration scanning (CIS, SOC2 benchmarks) |
 | **Hadolint** | Pre-build | Dockerfiles | Dockerfile best-practice linting |
 | **TFLint** | Pre-build | Terraform | Terraform linting and provider-specific checks |
-| **Trivy** | Pre-build | Container image | Vulnerability scanning (CRITICAL, HIGH severity) |
-| **Syft** | Pre-build | Container image | SBOM generation (CycloneDX format, retained 90 days) |
+| **Trivy** | Post-build | Container image | Image vulnerability scanning (CRITICAL, HIGH severity) |
+| **Syft (image)** | Post-build | Container image | Image SBOM generation (CycloneDX format, retained 90 days) |
 | **CodeQL** | Post-build | Python source | Semantic code analysis (security + quality queries) |
 | **Scorecard** | Post-build | Repository | OpenSSF supply-chain security assessment |
 | **Dependency Review** | Post-build | PR diffs | Vulnerability and license check on dependency changes |
-| **Dependabot** | Continuous | All ecosystems | Automated dependency updates (Python, Terraform, GitHub Actions) |
-| **Cosign** | Post-push | ECR image | Keyless image signing with Sigstore |
+| **Dependabot** | Continuous | All ecosystems | Automated dependency updates (Python, Terraform, GitHub Actions, npm, Docker) |
+| **Cosign** | Release | Published image | Keyless image signing with Sigstore |
 
 ### Pipeline Flow
 
 ```mermaid
 flowchart LR
-    subgraph prebuild["Phase 1: Pre-Build"]
+    subgraph prebuild["Phase 1: CI Gates (every push and PR)"]
         direction TB
-        Q["Code Quality\nRuff, Pyright"]
-        SAST["SAST\nSemgrep, Gitleaks"]
+        Q["Code Quality\nRuff, Pyright, Pytest"]
+        SAST["SAST + Secrets\nSemgrep, Bandit, Gitleaks"]
+        DEPS["Dependencies\npip-audit, OSV-Scanner"]
+        LIC["Licenses\nPolicy + SPDX headers"]
+        SUPPLY["Supply Chain\nSyft SBOM, Grype"]
+        WFL["Workflow Lint\nactionlint"]
         IAC["IaC Security\nCheckov, TFLint,\nTerraform validate"]
         CONT["Container Security\nHadolint, Trivy, Syft"]
     end
 
-    subgraph build["Phase 2: Build and Push"]
+    subgraph release["Phase 2: Release (tag push)"]
         direction TB
-        ECR["Pull, Tag, Push\nto ECR"]
+        ECR["Build, Tag, Push\nto GHCR/ECR"]
         SIGN["Cosign Sign\nKeyless"]
     end
 
-    subgraph postbuild["Phase 3: Post-Build"]
+    subgraph scheduled["Phase 3: Scheduled"]
         direction TB
-        DEPLOY["Deploy to ECS\nRolling Update"]
         CQL["CodeQL Analysis\nWeekly Schedule"]
         SC["OpenSSF Scorecard\nWeekly Schedule"]
+        RESCAN["Advisory Rescan\nGrype + OSV, Daily"]
     end
 
     subgraph continuous["Continuous"]
@@ -233,13 +246,12 @@ flowchart LR
         DR["Dependency Review\nPR Gate"]
     end
 
-    Q & SAST & IAC & CONT --> build
+    Q & SAST & DEPS & LIC & SUPPLY & WFL & IAC & CONT --> release
     ECR --> SIGN
-    SIGN --> DEPLOY
     CQL ~~~ SC
     DEP ~~~ DR
 ```
 
 :::note
-The pre-build jobs (quality, SAST, IaC, container) run in parallel on every push and PR. The build-and-push job only runs on pushes to `main` and gates on all pre-build jobs passing. CodeQL and Scorecard also run on a weekly schedule to catch newly disclosed vulnerabilities.
+The CI gate jobs run in parallel on every push and PR. Image build, push, and signing run in the release workflow on tag pushes. CodeQL and Scorecard run on a weekly schedule, and the advisory rescan workflow rescans the latest SBOM and image daily to catch newly disclosed vulnerabilities.
 :::

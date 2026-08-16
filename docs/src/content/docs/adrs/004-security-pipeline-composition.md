@@ -5,9 +5,13 @@ sidebar:
   order: 4
 ---
 
-**Status**: Accepted
+**Status**: Accepted (amended)
 **Date**: 2026-03-18
 **Deciders**: AI Engineering NAMER
+
+:::note[Update 2026-08]
+The "skip grype" and "skip osv-scanner" calls below were later reversed. The pipeline now runs grype against a syft-generated source SBOM (`security:sbom-rescan`, with accepted findings in `.grype.yaml`) and osv-scanner recursively over every lockfile (`security:osv`). License policy (`security:licenses`), SPDX header (`security:headers`), and actionlint (`security:actionlint`) gates were added at the same time. The 3-phase container pipeline itself stands.
+:::
 
 ## Context
 

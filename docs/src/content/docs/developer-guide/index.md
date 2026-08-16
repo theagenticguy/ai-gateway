@@ -13,8 +13,8 @@ This section is for contributors and developers who want to modify, extend, or u
 | [Contributing](contributing.md) | Fork-and-branch workflow, commit conventions, PR requirements, and the full mise task reference |
 | [Architecture](architecture.md) | System architecture with Mermaid diagrams, module boundaries, request and auth flows |
 | [ADR Index](adr-index.md) | All Architecture Decision Records with summaries and rationale |
-| [CI/CD Pipeline](ci-cd.md) | The 6-job CI pipeline, additional workflows, release process, and Dependabot config |
-| [Code Quality](code-quality.md) | Ruff, pyright, pytest, Terraform quality gates, git hooks, and the 12-tool security scanning stack |
+| [CI/CD Pipeline](ci-cd.md) | The 11-job CI pipeline, additional workflows, release process, and Dependabot config |
+| [Code Quality](code-quality.md) | Ruff, pyright, pytest, Terraform quality gates, git hooks, and the security scanning stack |
 
 ## Quick Development Setup
 
@@ -23,7 +23,7 @@ This section is for contributors and developers who want to modify, extend, or u
 git clone git@github.com:theagenticguy/ai-gateway.git
 cd ai-gateway
 
-# 2. Install all tool versions (Python 3.13, Terraform 1.10.5, lefthook, etc.)
+# 2. Install all tool versions (Python 3.13, Terraform 1.14.8, lefthook, etc.)
 mise install
 
 # 3. Install Python dependencies and git hooks
@@ -42,9 +42,9 @@ mise run ci
 After setup, your environment includes:
 
 - **Python 3.13** with a `.venv` managed by uv
-- **Terraform 1.10.5** with all providers pinned in `versions.tf`
+- **Terraform 1.14.8** with all providers pinned in `versions.tf`
 - **lefthook** git hooks (pre-commit, pre-push, commit-msg)
-- **Security tools**: trivy, hadolint, gitleaks, checkov (all installed via mise)
+- **Security tools**: trivy, grype, syft, osv-scanner, hadolint, gitleaks, checkov, actionlint (all installed via mise)
 
 ## Project Layout
 
@@ -72,13 +72,13 @@ ai-gateway/
       routing/            # Dynamic routing config (renders agentgateway backend)
       team_registration/  # Self-service team onboarding
     environments/         # Per-environment tfvars (dev, prod)
-  scripts/                # Operational scripts (token retrieval, CW queries)
+  scripts/                # Operational scripts (token retrieval, CW queries) + license gates
   .github/
-    workflows/            # CI/CD, CodeQL, dependency-review, release, scorecard, docs
+    workflows/            # CI/CD, CodeQL, dependency-review, release, scorecard, docs, advisory rescan, image watcher
     dependabot.yml        # Automated dependency updates
     CODEOWNERS            # Review requirements
     SECURITY.md           # Vulnerability reporting policy
-  mise.toml               # Tool versions + 25+ project tasks
+  mise.toml               # Tool versions + 45+ project tasks
   lefthook.yml            # Git hook definitions
   pyproject.toml          # Python project metadata + dev dependencies
   ruff.toml               # Linter/formatter configuration
