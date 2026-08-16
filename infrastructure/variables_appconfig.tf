@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # AppConfig — Root-level variables for feature flag management
 # =============================================================================

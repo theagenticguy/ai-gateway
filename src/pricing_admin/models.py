@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic models for pricing administration."""
 
 from __future__ import annotations

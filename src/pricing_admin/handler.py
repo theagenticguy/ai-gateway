@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pricing admin Lambda — dynamic pricing overrides, migrated onto gwcore (ADR-016).
 
 DynamoDB overrides take priority over the static ``cost_attribution.pricing``

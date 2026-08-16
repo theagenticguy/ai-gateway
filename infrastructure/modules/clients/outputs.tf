@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "client_ids" {
   description = "Map of team name to Cognito app client ID"
   value = {

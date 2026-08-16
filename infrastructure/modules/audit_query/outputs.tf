@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "workgroup_name" {
   description = "Name of the audit Athena workgroup (set as AUDIT_ATHENA_WORKGROUP on the query Lambda)."
   value       = var.enable_audit_query ? aws_athena_workgroup.audit[0].name : ""

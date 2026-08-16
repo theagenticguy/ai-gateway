@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the admin_token exchange handler (ADR-016).
 
 Covers: successful mint with team-scoped audience-bound JWT, TTL clamping,

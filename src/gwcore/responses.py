@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Response envelope, error mapping, and cursor pagination.
 
 One consistent contract for every control-plane handler:

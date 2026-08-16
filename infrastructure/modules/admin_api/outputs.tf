@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "api_id" {
   description = "ID of the Admin REST API"
   value       = var.enable_admin_api ? aws_api_gateway_rest_api.admin[0].id : ""

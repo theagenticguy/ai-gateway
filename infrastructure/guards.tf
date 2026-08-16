@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Deploy-time guard rails enforced at plan/apply via lifecycle preconditions.
 #
 # These fail the plan (rather than silently producing an unsafe deployment) when

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "firehose_stream_name" {
   description = "Name of the audit Firehose delivery stream (gwcore.audit AUDIT_FIREHOSE_STREAM)"
   value       = var.enable_audit_pipeline ? aws_kinesis_firehose_delivery_stream.audit[0].name : ""

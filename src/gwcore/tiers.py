@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Canonical tenant-tier vocabulary and quota defaults (single source of truth).
 
 The gateway is deployed by an org for its OWN internal teams — it is not a SaaS

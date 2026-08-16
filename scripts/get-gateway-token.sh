@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # get-gateway-token.sh — Obtain a Cognito M2M access token for the AI Gateway.
 #

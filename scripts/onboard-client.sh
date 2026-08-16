@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # onboard-client.sh -- Retrieve Cognito credentials for an onboarded team.
 #

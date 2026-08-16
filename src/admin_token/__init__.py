@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """admin_token — short-lived, team-scoped, audience-bound token exchange.
 
 Backs the ``gateway refresh --audience <claude|codex>`` flow (ADR-016): a

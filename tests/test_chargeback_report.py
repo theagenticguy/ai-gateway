@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the monthly chargeback report generator.
 
 Covers report generation with mock DynamoDB data, HTML rendering,

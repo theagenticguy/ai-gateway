@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Admin API — Root-level variables for the admin API Gateway plane
 # =============================================================================

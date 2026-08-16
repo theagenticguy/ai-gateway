@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Root Module — wires together networking, auth, compute, and observability
 # =============================================================================

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Team registration Lambda — self-service onboarding API, on gwcore (ADR-016).
 
 Authorization is enforced in-handler via gwcore (previously it was not —

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Thin admin CLI for the AI Gateway control plane.
 
 Standalone client: it wraps the control-plane admin API (``/teams``,

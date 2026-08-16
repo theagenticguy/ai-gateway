@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "application_id" {
   description = "ID of the AppConfig application"
   value       = var.enable_appconfig ? aws_appconfig_application.this[0].id : null

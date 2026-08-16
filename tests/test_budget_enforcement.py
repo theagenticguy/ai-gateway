@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the budget enforcement Lambda.
 
 Covers JWT extraction, budget checking (within budget, at threshold, exceeded),

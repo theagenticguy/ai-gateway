@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # gateway-setup.sh — Interactive onboarding wizard for AI Gateway.
 #

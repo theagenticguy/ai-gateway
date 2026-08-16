@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the routing config Lambda.
 
 Covers model validation, custom-config CRUD operations, and handler routing

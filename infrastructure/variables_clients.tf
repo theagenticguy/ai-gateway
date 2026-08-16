@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 variable "client_configs" {
   description = <<-EOT
     Map of team configurations for per-team Cognito app clients.

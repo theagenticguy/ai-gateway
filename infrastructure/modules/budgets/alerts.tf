@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # E.6: Budget Alerts — SNS topic for budget threshold notifications
 # =============================================================================

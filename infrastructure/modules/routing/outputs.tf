@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "routing_configs_table_name" {
   description = "Name of the routing configs DynamoDB table"
   value       = var.enable_routing_api ? aws_dynamodb_table.routing_configs[0].name : null

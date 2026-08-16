@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Guardrails — Root-level variables for Bedrock Guardrails configuration
 # =============================================================================

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typed exception hierarchy for the control plane.
 
 Handlers raise these; ``gwcore.responses.error_response`` maps them to HTTP

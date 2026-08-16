@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Authentication and authorization for the control plane.
 
 Two verification modes, one ``Principal`` (ADR-016):

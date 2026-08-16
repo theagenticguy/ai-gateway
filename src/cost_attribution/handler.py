@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Lambda handler for AI Gateway cost attribution.
 
 A CloudWatch Logs subscription Lambda: it parses gateway access logs, derives

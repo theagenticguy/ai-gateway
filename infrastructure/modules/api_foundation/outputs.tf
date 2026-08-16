@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "stage_invoke_url" {
   description = "Invoke URL of the control-plane stage"
   value       = var.enable_api_foundation ? aws_api_gateway_stage.control[0].invoke_url : ""

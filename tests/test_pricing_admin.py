@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the Pricing Admin REST API.
 
 Covers all CRUD routes: list, get, upsert, delete.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "teams_table_name" {
   description = "Name of the teams DynamoDB table"
   value       = var.enable_team_registration ? aws_dynamodb_table.teams[0].name : null

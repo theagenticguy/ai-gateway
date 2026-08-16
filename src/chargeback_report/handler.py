@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Lambda handler for monthly chargeback report generation.
 
 Triggered by Step Functions on the 1st of each month. Queries DynamoDB

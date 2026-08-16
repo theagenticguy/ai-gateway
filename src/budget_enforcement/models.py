@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic v2 request/response models for budget enforcement Lambda."""
 
 from __future__ import annotations

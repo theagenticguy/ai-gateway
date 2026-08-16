@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """JWT claim extraction utilities (base64 decode only, no verification).
 
 ALB already verifies the JWT signature before forwarding to the gateway,

@@ -2,6 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["fastapi", "uvicorn"]
 # ///
+# SPDX-License-Identifier: Apache-2.0
 """Mock webhook adapter for the agentgateway data-plane PoC.
 
 Stands in for the real adapter that fronts the budget_enforcement and

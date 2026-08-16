@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Chargeback — Root-level variables for monthly chargeback report pipeline
 # =============================================================================

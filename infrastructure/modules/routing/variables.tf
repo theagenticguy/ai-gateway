@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 variable "project_name" {
   description = "Project name used for resource naming"
   type        = string

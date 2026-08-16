@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic v2 models for monthly chargeback report generation."""
 
 from __future__ import annotations

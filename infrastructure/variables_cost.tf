@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 variable "enable_cost_attribution" {
   description = "Whether to deploy the cost attribution Lambda pipeline"
   type        = bool

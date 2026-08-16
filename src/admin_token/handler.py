@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """POST /auth/token — exchange a verified SSO session for a gateway token.
 
 Flow (ADR-016):

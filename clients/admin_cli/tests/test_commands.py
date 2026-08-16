@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the cyclopts command layer — body building + CLI dispatch/exit codes.
 
 The command tree is driven with token lists (``app.meta([...])``) and the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "guardrail_id" {
   description = "ID of the Bedrock Guardrail"
   value       = var.enable_guardrails ? aws_bedrock_guardrail.this[0].guardrail_id : null

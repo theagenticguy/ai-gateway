@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the agentgateway guardrail-webhook contract path (ADR-017).
 
 Covers the contract budget_enforcement speaks: request parsing from

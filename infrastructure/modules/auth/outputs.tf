@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "cognito_user_pool_id" {
   description = "Cognito User Pool ID"
   value       = aws_cognito_user_pool.gateway.id

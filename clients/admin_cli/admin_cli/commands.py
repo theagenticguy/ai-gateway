@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Cyclopts command tree for the admin CLI.
 
 Maps 1:1 onto the control-plane admin API. Every command forwards a JSON body

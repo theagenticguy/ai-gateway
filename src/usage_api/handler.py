@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Real-time usage self-service API — migrated onto gwcore (ADR-016).
 
 Read-only access to team usage data in DynamoDB (current period, trailing

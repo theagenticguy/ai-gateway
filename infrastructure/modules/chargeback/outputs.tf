@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "report_bucket" {
   description = "Name of the S3 bucket storing chargeback reports"
   value       = var.enable_chargeback ? aws_s3_bucket.reports[0].id : null
