@@ -37,9 +37,11 @@ PYTHONUNBUFFERED = "1"
 description = "Install all project dependencies and git hooks"
 run = ["uv sync", "lefthook install"]
 
-[tasks.dev]
-description = "Run the API gateway in development mode"
-run = "uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+# There is deliberately no `dev` task. The old one launched `app.main:app`, a
+# FastAPI proxy that was deleted when the data plane moved to agentgateway
+# (ADR-017), so it failed on ModuleNotFoundError for anyone who ran it. The
+# local data-plane loop is the spike compose file:
+# `docker compose -f spikes/agentgateway-data-plane/docker-compose.yaml up`.
 
 [tasks.test]
 description = "Run test suite"
