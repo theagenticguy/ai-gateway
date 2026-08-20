@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Auth + HTTP for the AI Gateway admin CLI.
 
 ``GatewayClient`` acquires a Cognito M2M ``client_credentials`` access token,

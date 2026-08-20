@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic models for the usage self-service API."""
 
 from __future__ import annotations

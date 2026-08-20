@@ -44,11 +44,15 @@ This project runs automated security scans on every push and pull request:
 | Container | [Trivy](https://trivy.dev/) | Vulnerability scanning of container images (HIGH + CRITICAL) |
 | Filesystem | [Trivy](https://trivy.dev/) | Repository filesystem scan for misconfigurations |
 | Dependencies | [pip-audit](https://github.com/pypa/pip-audit) | Python dependency vulnerability audit |
-| Dependencies | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning (uv.lock + pnpm-lock.yaml) against OSV database |
+| Dependencies | [OSV-Scanner](https://github.com/google/osv-scanner) | Lockfile scanning (uv.lock + pnpm-lock.yaml in CI; `mise run security:osv` scans every lockfile in the tree recursively, including clients/admin_cli/uv.lock) |
 | Dependencies | [Dependency Review](https://github.com/actions/dependency-review-action) | PR-time vulnerability and license check |
 | Dependencies | [Dependabot](https://docs.github.com/en/code-security/dependabot) | Automated updates for Python, npm, Terraform, Actions, Docker |
-| Licenses | [pip-licenses](https://github.com/raimon49/pip-licenses) | License compliance reporting (JSON + Markdown) |
-| SBOM | [Syft](https://github.com/anchore/syft) | CycloneDX + SPDX software bill of materials generation |
+| Licenses | `scripts/check-licenses.py` | Enforcing license policy: SPDX-normalized allowlist, copyleft denied by family, evidenced exemptions only (fails the `licenses` CI job and the pre-push hook) |
+| Licenses | [pip-licenses](https://github.com/raimon49/pip-licenses) | License compliance reporting (JSON + Markdown artifacts) |
+| License headers | `scripts/check-license-headers.py` | Every tracked .py/.sh/.tf file carries `SPDX-License-Identifier: Apache-2.0` (pre-commit hook + `supply-chain` CI job) |
+| SBOM | [Syft](https://github.com/anchore/syft) | CycloneDX + SPDX software bill of materials generation: a source-tree SBOM in the `supply-chain` CI job (uploaded as the `sbom-source` artifact, 90-day retention) and an image SBOM in the container job and release workflow |
+| SBOM Scan | [Grype](https://github.com/anchore/grype) | Scans the source SBOM on every push/PR in the `supply-chain` job; fail threshold and accepted findings live in `.grype.yaml` |
+| Workflow lint | [actionlint](https://github.com/rhysd/actionlint) | GitHub Actions workflow linting with ShellCheck (`workflow-lint` CI job + pre-commit hook) |
 | Signing | [Cosign](https://github.com/sigstore/cosign) | Keyless image signing via Sigstore OIDC |
 | Supply chain | [OpenSSF Scorecard](https://scorecard.dev/) | Supply chain security posture assessment |
 | SBOM Rescan | [Grype](https://github.com/anchore/grype) | Nightly SBOM re-scan against updated vulnerability databases |
@@ -64,4 +68,6 @@ Container base images used in CI workflows are pinned by digest to prevent tag r
 - Terraform providers are version-constrained in `versions.tf` and all child modules
 - Dependabot monitors 5 ecosystems (Python, npm, Terraform, Actions, Docker) weekly
 - The Dependency Review action blocks PRs introducing HIGH+ severity vulnerabilities or GPL-3.0/AGPL-3.0 licenses
-- OSV-Scanner checks both `uv.lock` and `docs/pnpm-lock.yaml` lockfiles
+- The license policy gate (`scripts/check-licenses.py`) enforces an SPDX-normalized allowlist over all installed Python dependencies; strong and network copyleft families (GPL, AGPL, LGPL, SSPL, CDDL, EPL, CPL, OSL, EUPL) are denied, and the single exemption (atheris) carries documented evidence
+- OSV-Scanner checks `uv.lock` and `docs/pnpm-lock.yaml` in CI; the local `mise run security:osv` task discovers and scans every lockfile recursively, so new lockfiles are covered without editing the task
+- Grype findings accepted as false positives are recorded in `.grype.yaml`, each with the reason and the date it was checked

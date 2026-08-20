@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 variable "enable_appconfig" {
   description = "Whether to create AppConfig resources for scanner feature flags"
   type        = bool

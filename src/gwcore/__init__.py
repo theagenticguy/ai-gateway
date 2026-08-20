@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """gwcore — shared foundation for the AI Gateway control plane.
 
 One authentication/authorization path, a consistent response + pagination

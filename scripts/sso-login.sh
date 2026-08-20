@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 #
 # sso-login.sh — SSO browser login for AI Gateway via Cognito.
 #

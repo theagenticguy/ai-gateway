@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the team registration self-service API.
 
 Covers registration (happy path, duplicate name, invalid tier),

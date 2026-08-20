@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the admin CLI client — no live network, everything mocked.
 
 Uses stdlib ``httpx.MockTransport`` (no respx dependency): one stateful handler

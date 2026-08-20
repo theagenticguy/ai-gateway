@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Round-trip regression test for issue #261.
 
 Admin-created budgets were invisible to enforcement because the two services

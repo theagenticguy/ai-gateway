@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HTML template renderer for monthly chargeback reports.
 
 Produces clean, printable HTML with inline CSS for email compatibility.

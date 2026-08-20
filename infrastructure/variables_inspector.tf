@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Inspector — Amazon Inspector enhanced ECR scanning
 
 variable "enable_inspector" {

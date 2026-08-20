@@ -126,7 +126,7 @@ export COGNITO_DOMAIN="my-gateway"  AWS_REGION="us-east-1"
 uv run admin-cli teams create \
   --set team_name=payments-svc \
   --set contact_email=payments@example.com \
-  --set tier=premium
+  --set tier=high
 
 # Create a budget from a file, then page through budgets
 uv run admin-cli budgets create --body @budget.json
@@ -149,5 +149,3 @@ The CLI is tested with no live network or AWS: `tests/test_client.py` uses stdli
 - [reference/public-api](public-api.md) — the control-plane HTTP routes every command calls, and the `gwcore` `ADMIN_SCOPE` / `ControlPlaneError` surface the CLI mirrors.
 - [insights/contract-map](../insights/contract-map.md) — the HTTP response and error envelopes the CLI parses.
 - [architecture/module-map](../architecture/module-map.md) — the `src/` service packages behind each admin route.
-</content>
-</invoke>

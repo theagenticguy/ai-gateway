@@ -234,7 +234,7 @@ When you update the task definition (via `terraform apply` or `aws ecs update-se
 4. Stops old tasks
 
 :::note
-The CI/CD pipeline (`ci.yml`) automates this for pushes to `main`: it pulls the pinned upstream agentgateway image by digest, re-tags it into ECR, then calls `aws ecs update-service --force-new-deployment` and waits for stability.
+The release workflow (`release.yml`) publishes the image on tag pushes: it pulls the pinned upstream agentgateway image by digest, re-tags it, and pushes it to GHCR (and ECR when AWS credentials are configured). Rolling the new image out to ECS is a `terraform apply` or a manual force-new-deployment, as shown below.
 :::
 
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Budget Admin API — Lambda handler, migrated onto gwcore (ADR-016).
 
 Authorization is now enforced here via gwcore (it previously was not —

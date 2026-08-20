@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Append-only audit trail for control-plane mutations and authz decisions.
 
 Every mutating call and every authorization decision (allow *and* deny) emits a

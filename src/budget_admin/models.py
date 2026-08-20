@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic v2 models for the Budget Admin API request/response validation."""
 
 from __future__ import annotations

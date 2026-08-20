@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Entry point for ``admin-cli`` (console script) and ``python -m admin_cli``.
 
 The console script target is ``admin_cli.__main__:app.meta`` (see pyproject),

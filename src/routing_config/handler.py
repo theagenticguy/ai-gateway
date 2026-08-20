@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Routing config Lambda — provider routing strategies, migrated onto gwcore (ADR-016).
 
 Custom routing configs live in DynamoDB, persisted as the rendered agentgateway

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Grype configuration for the SBOM rescan (`mise run security:sbom-rescan`).
+#
+# Every entry here states why the finding is accepted. An ignore without a reason
+# is a finding someone silenced, so the reason and the date it was checked are
+# part of the rule.
+fail-on-severity: high
+
+ignore:
+  # GHSA-5xr6-xhww-33m4 — artifact poisoning in dawidd6/action-download-artifact,
+  # "vulnerable: < 6", first patched in v6.
+  #
+  # False positive caused by SHA pinning, which is the practice that makes the
+  # action safe in the first place. `.github/workflows/rescan-on-advisory.yml`
+  # pins the action at b6e2e70617bc3265edd6dab6c906732b2f1ae151, and
+  # `gh api repos/dawidd6/action-download-artifact/git/ref/tags/v21` answers that
+  # exact SHA, so the pinned version is v21 — fifteen major versions past the fix.
+  # Syft records a commit SHA as the component version because that is what the
+  # workflow file says, and grype cannot order a SHA against "< 6", so it reports
+  # the advisory rather than resolving the comparison. Verified 2026-08-16.
+  #
+  # This is scoped to the one package: a real future advisory against this action
+  # would carry a different GHSA id and still fail the gate.
+  - vulnerability: GHSA-5xr6-xhww-33m4
+    package:
+      name: dawidd6/action-download-artifact
+      type: github-action

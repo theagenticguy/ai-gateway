@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Property-based fuzz tests for the cost attribution handler.
 
 Uses hypothesis to generate random inputs and verify the handler

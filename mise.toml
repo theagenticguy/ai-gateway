@@ -13,6 +13,10 @@ python = "3.13"
 "aqua:evilmartians/lefthook" = "2.1.4"
 "aqua:zricethezav/gitleaks" = "8.30.1"
 "aqua:rhysd/actionlint" = "1.7.11"
+# Produces the SBOM that `security:sbom-rescan` scans. Pinned like every other
+# scanner here: an SBOM generator that moves under you changes the inventory
+# without anyone editing the inventory.
+"aqua:anchore/syft" = "1.43.0"
 
 # IaC
 "aqua:hashicorp/terraform" = "1.14.8"
@@ -33,9 +37,11 @@ PYTHONUNBUFFERED = "1"
 description = "Install all project dependencies and git hooks"
 run = ["uv sync", "lefthook install"]
 
-[tasks.dev]
-description = "Run the API gateway in development mode"
-run = "uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+# There is deliberately no `dev` task. The old one launched `app.main:app`, a
+# FastAPI proxy that was deleted when the data plane moved to agentgateway
+# (ADR-017), so it failed on ModuleNotFoundError for anyone who ran it. The
+# local data-plane loop is the spike compose file:
+# `docker compose -f spikes/agentgateway-data-plane/docker-compose.yaml up`.
 
 [tasks.test]
 description = "Run test suite"
@@ -60,7 +66,19 @@ run = "uv run pyright src/"
 
 [tasks.security]
 description = "Run all security scans"
-depends = ["security:sast", "security:secrets", "security:iac", "security:dockerfile", "security:fs", "security:deps", "security:osv"]
+depends = [
+  "security:sast",
+  "security:secrets",
+  "security:iac",
+  "security:dockerfile",
+  "security:fs",
+  "security:deps",
+  "security:osv",
+  "security:sbom-rescan",
+  "security:licenses",
+  "security:headers",
+  "security:actionlint",
+]
 
 [tasks."security:sast"]
 description = "SAST scan with semgrep"
@@ -84,19 +102,74 @@ run = "trivy image --severity HIGH,CRITICAL --exit-code 1 ai-gateway:latest"
 
 [tasks."security:fs"]
 description = "Filesystem vulnerability scan with trivy"
-run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+# --skip-dirs .venv: trivy's secret pass flags moto's bundled fake CA keys
+# (moto_proxy/ca.key and friends) inside the installed venv, so the task failed
+# on every machine that had run `uv sync` while passing in CI, which scans a
+# fresh checkout with no venv. The venv is an installed copy of what uv.lock
+# already declares, and uv.lock is scanned; the repo's own tree still gets the
+# full vuln + secret pass.
+run = "trivy fs --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .venv ."
 
 [tasks."security:deps"]
 description = "Audit Python dependencies for known vulnerabilities"
 run = "uv export --no-dev --no-hashes > /tmp/requirements.txt && uvx pip-audit -r /tmp/requirements.txt --strict --desc"
 
+[tasks."security:sbom"]
+description = "CycloneDX + SPDX SBOMs into sbom/ (gitignored; CI publishes them as artifacts)"
+# The rescan below used to read a `sbom.cyclonedx.json` that nothing in this repo
+# produced. The only SBOM was built inside the `security-container` CI job from the
+# built image and uploaded as an artifact, so `mise run security:sbom-rescan`
+# failed locally with "no such file" for anyone who ran it. This task is the
+# missing producer, and it covers the source tree rather than the image: it finds
+# the npm and Python dependency graphs and the pinned GitHub Actions, which an
+# image scan by construction cannot see.
+#
+# The excludes are the difference between an SBOM of what ships and an inventory of
+# the workshop: `.terraform/` holds vendored provider binaries, `node_modules/` and
+# `.venv/` are installed copies of what the lockfiles already declare.
+run = """
+mkdir -p sbom
+syft . \
+  --exclude './**/node_modules/**' \
+  --exclude './.venv/**' \
+  --exclude './infrastructure/**/.terraform/**' \
+  -o cyclonedx-json=sbom/ai-gateway.cdx.json \
+  -o spdx-json=sbom/ai-gateway.spdx.json -q
+"""
+
 [tasks."security:sbom-rescan"]
-description = "Rescan latest SBOM with Grype (catches newly disclosed CVEs)"
-run = "grype sbom.cyclonedx.json --fail-on high"
+description = "Rescan the SBOM with Grype (catches newly disclosed CVEs)"
+depends = ["security:sbom"]
+# `fail-on-severity` and every accepted finding live in `.grype.yaml`, each with the
+# reason it is accepted and the date it was checked.
+run = "grype sbom:sbom/ai-gateway.cdx.json -q"
 
 [tasks."security:osv"]
-description = "Scan lockfiles against OSV vulnerability database"
-run = "osv-scanner scan --lockfile uv.lock --lockfile docs/pnpm-lock.yaml"
+description = "Scan every lockfile in the tree against the OSV database"
+# `scan source -r .` rather than two `--lockfile` flags. The explicit list named
+# `uv.lock` and `docs/pnpm-lock.yaml` and therefore skipped
+# `clients/admin_cli/uv.lock` (21 packages) entirely, and it would skip the next
+# lockfile anyone adds — a scanner whose coverage is a hand-maintained list drifts
+# silently the moment the tree grows. Recursive discovery found all three.
+run = "osv-scanner scan source -r ."
+
+[tasks."security:licenses"]
+description = "Fail on a dependency license we have not accepted"
+# The CI `licenses` job printed a table and exited 0 whatever it said. This is the
+# enforcing version; the allowlist, the denied families, and the one evidenced
+# exemption live in the script.
+run = "./scripts/check-licenses.py"
+
+[tasks."security:headers"]
+description = "Every tracked .py/.sh/.tf file carries the SPDX license line"
+run = "./scripts/check-license-headers.py"
+
+[tasks."security:actionlint"]
+description = "Lint GitHub Actions workflows (shellcheck included)"
+# Present as `ci:lint` and reachable from `ci:validate`, but no workflow ran it, so
+# a broken workflow was caught by being broken in production. Named here so it sits
+# with the other gates and runs under `mise run security`.
+run = "actionlint"
 
 # ──────────────────────────────────────────────
 # Terraform tasks

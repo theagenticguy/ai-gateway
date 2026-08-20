@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Athena read path for the control-plane audit trail (ADR-016/017).
 
 Backs ``GET /audit``. Runs a parameterized Athena query against the S3 Tables

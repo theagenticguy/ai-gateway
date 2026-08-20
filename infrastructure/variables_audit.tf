@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Audit Log — Root-level variables for the Firehose-to-S3 audit pipeline
 # =============================================================================

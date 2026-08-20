@@ -10,7 +10,9 @@ sidebar:
 **Stack Context**: Python 3.13, uv, ECS Fargate, Terraform, Portkey OSS (data plane)
 
 :::note[Historical research snapshot]
-This is a point-in-time research report from 2026-03-18, when the data plane was Portkey OSS. The data plane has since been migrated to [agentgateway](https://github.com/agentgateway/agentgateway) (a Rust LLM/MCP proxy; see ADR-017). The Python tooling, uv, security-pipeline, and git-hook findings below are unaffected by that migration -- only the proxy container changed. Treat any "Portkey" mention here as the original data plane, not the current one.
+This is a point-in-time research report from 2026-03-18, when the data plane was Portkey OSS. The data plane has since been migrated to [agentgateway](https://github.com/agentgateway/agentgateway) (a Rust LLM/MCP proxy; see ADR-017). The Python tooling, uv, and git-hook findings below are unaffected by that migration -- only the proxy container changed. Treat any "Portkey" mention here as the original data plane, not the current one.
+
+Two recommendations below were later reversed: the project now runs grype (rescanning a syft-generated source SBOM, `mise run security:sbom-rescan`) and osv-scanner (recursively over every lockfile, `mise run security:osv`). See [Code Quality](/ai-gateway/developer-guide/code-quality/) for the current gate list.
 :::
 
 ---

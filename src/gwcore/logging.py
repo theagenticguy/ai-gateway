@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Structured JSON logging with a per-request correlation id.
 
 One logger shape across the plane: every line is JSON with a ``correlation_id``

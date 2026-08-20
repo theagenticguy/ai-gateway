@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Rate limiting enforcement using DynamoDB atomic counters.
 
 Provides RPM (requests-per-minute) and daily token limit checks via the

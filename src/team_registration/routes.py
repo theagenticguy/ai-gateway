@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Route implementations for the team registration API (migrated onto gwcore).
 
 Each function encapsulates the Cognito / DynamoDB interaction for one route.

@@ -30,6 +30,12 @@ pre-commit:
       glob: "infrastructure/**/*.tf"
       run: terraform-docs markdown table --output-file README.md --output-mode inject infrastructure/ && git add infrastructure/README.md
       stage_fixed: true
+    license-headers:
+      glob: "*.{py,sh,tf}"
+      run: ./scripts/check-license-headers.py
+    workflow-lint:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint
 
 pre-push:
   parallel: true
@@ -42,7 +48,12 @@ pre-push:
       glob: "infrastructure/**/*.tf"
       run: uvx checkov -d infrastructure/ --framework terraform --compact --quiet
     trivy-fs:
-      run: trivy fs --severity HIGH,CRITICAL --exit-code 1 --quiet .
+      # --skip-dirs .venv for the same reason as mise's security:fs: moto's
+      # bundled fake CA keys inside an installed venv fail the secret pass.
+      run: trivy fs --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .venv --quiet .
+    licenses:
+      glob: "{uv.lock,pyproject.toml}"
+      run: ./scripts/check-licenses.py
 
 commit-msg:
   commands:

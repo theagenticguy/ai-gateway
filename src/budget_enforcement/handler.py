@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pre-request budget enforcement Lambda (Function URL).
 
 An agentgateway guardrail webhook (ADR-017): the data plane calls it before

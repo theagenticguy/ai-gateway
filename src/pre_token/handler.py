@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Lambda handler for Cognito Pre-Token-Generation V2 trigger.
 
 Extracts IdP group memberships from the trigger event and maps them

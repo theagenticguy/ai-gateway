@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """agentgateway guardrail-webhook contract helpers (ADR-017).
 
 agentgateway POSTs ``{"body": {"messages": [...]}}`` to the guardrail webhook

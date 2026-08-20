@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # -----------------------------------------------------------------------------
 # Identity Providers — SAML 2.0 + OIDC federation
 #

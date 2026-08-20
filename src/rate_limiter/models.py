@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic v2 models for rate limiting."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 variable "user_pool_id" {
   description = "Cognito User Pool ID to create clients in"
   type        = string

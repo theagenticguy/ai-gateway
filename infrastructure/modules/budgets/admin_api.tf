@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # Budget Admin API Lambda — REST API for budget management via Function URL
 # =============================================================================

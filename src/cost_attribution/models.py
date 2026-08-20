@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic v2 models for cost attribution input/output validation."""
 
 from __future__ import annotations

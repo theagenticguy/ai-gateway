@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "budgets_table_name" {
   description = "Name of the budgets DynamoDB table"
   value       = var.enable_budgets ? aws_dynamodb_table.budgets[0].name : null

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the Budget Admin REST API (migrated onto gwcore, ADR-016).
 
 Covers all 7 routes, real in-handler authorization (admin allowed, non-admin

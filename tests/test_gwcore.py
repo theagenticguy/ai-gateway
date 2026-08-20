@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the gwcore control-plane foundation (ADR-016).
 
 Covers: typed errors → HTTP envelope, response builders, ETag/304, cursor

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """In-process TTL cache for warm-Lambda reuse.
 
 A module-scoped cache that survives across invocations on a warm Lambda and

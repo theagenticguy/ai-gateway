@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Route implementations for the Budget Admin API (migrated onto gwcore).
 
 Each function corresponds to a REST endpoint and interacts with DynamoDB

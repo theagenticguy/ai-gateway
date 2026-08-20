@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for the Pre-Token-Generation V2 Lambda handler."""
 
 from __future__ import annotations

@@ -47,7 +47,23 @@ ignore = [
 "src/budget_enforcement/handler.py" = ["PLR0911"]  # multi-gate enforcement logic requires 7 return paths
 
 [lint.isort]
-known-first-party = ["app"]
+# The twelve packages under src/: gwcore plus the eleven control-plane services.
+# The old value, "app", named the deleted FastAPI proxy (ADR-017) and matched
+# nothing, so first-party imports were being sorted as third-party.
+known-first-party = [
+    "gwcore",
+    "admin_token",
+    "budget_admin",
+    "budget_enforcement",
+    "chargeback_report",
+    "cost_attribution",
+    "pre_token",
+    "pricing_admin",
+    "rate_limiter",
+    "routing_config",
+    "team_registration",
+    "usage_api",
+]
 
 [format]
 quote-style = "double"

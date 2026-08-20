@@ -19,6 +19,7 @@
 - [ ] `mise run lint` passes
 - [ ] `mise run typecheck` passes
 - [ ] `mise run test` passes (if applicable)
+- [ ] `mise run security` passes (if application or dependency change)
 - [ ] `terraform validate` passes (if infrastructure change)
 - [ ] Manual testing: <!-- describe -->
 

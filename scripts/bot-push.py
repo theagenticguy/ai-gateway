@@ -2,6 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["PyJWT", "cryptography", "requests"]
 # ///
+# SPDX-License-Identifier: Apache-2.0
 """Push local changes to GitHub as verified bot commits.
 
 Uses the GitHub Git Data API so commits are automatically signed by

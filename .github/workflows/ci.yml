@@ -252,13 +252,20 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: License check
-        run: uv run --frozen --with pip-licenses==4.4.0 pip-licenses
+      # Enforcing, where this job previously only reported. `pip-licenses` printed a
+      # table, the job uploaded it, and the exit code was 0 whatever the table said,
+      # so a GPL dependency entering the tree produced a green tick. The allowlist,
+      # the denied families, and the one evidenced exemption live in the script.
+      - name: License policy check
+        run: ./scripts/check-licenses.py
 
+      # Kept because a human reading the actual list is useful even when the gate is
+      # green, and because it is the diff to consult when the gate turns red.
       - name: Generate reports
+        if: always()
         run: |
-          uv run --frozen --with pip-licenses==4.4.0 pip-licenses --format=json --output-file=license-report.json
-          uv run --frozen --with pip-licenses==4.4.0 pip-licenses --format=markdown --output-file=license-report.md
+          uv run --frozen --with 'pip-licenses>=5.0.0' pip-licenses --from=mixed --format=json --output-file=license-report.json
+          uv run --frozen --with 'pip-licenses>=5.0.0' pip-licenses --from=mixed --format=markdown --output-file=license-report.md
 
       - name: Upload reports
         if: always()
@@ -269,6 +276,84 @@ jobs:
             license-report.json
             license-report.md
           retention-days: 7
+
+  # ────────────────────────────────────────────────────────────
+  # 2e. Supply chain — source SBOM, license headers, workflow lint
+  # ────────────────────────────────────────────────────────────
+  # Separate from `security-container`, which builds an SBOM of the built image.
+  # That one cannot see the npm and Python dependency graphs or the pinned GitHub
+  # Actions, and it was also the only SBOM in the repo, which is why
+  # `mise run security:sbom-rescan` failed locally on a file that nothing produced.
+  supply-chain:
+    name: Supply Chain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      # Every tracked .py/.sh/.tf file carries `SPDX-License-Identifier: Apache-2.0`.
+      # Before this gate none of the 165 did, so a file copied out of the repo
+      # arrived with no license statement at all.
+      - name: License headers
+        run: ./scripts/check-license-headers.py
+
+      - name: Generate source SBOM
+        run: |
+          mkdir -p sbom
+          syft . \
+            --exclude './**/node_modules/**' \
+            --exclude './.venv/**' \
+            --exclude './infrastructure/**/.terraform/**' \
+            -o cyclonedx-json=sbom/ai-gateway.cdx.json \
+            -o spdx-json=sbom/ai-gateway.spdx.json -q
+
+      # Accepted findings and the fail threshold live in `.grype.yaml`, each with the
+      # reason it is accepted and the date it was checked.
+      - name: Scan SBOM with Grype
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: sbom/ai-gateway.cdx.json
+          fail-build: true
+          severity-cutoff: high
+          # Named rather than left to auto-detection, so the one accepted finding is
+          # visible in the workflow that depends on it. `.grype.yaml` carries the
+          # reason and the date for each entry.
+          config: .grype.yaml
+
+      - name: Upload source SBOM
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-source
+          path: sbom/
+          retention-days: 90
+
+  # ────────────────────────────────────────────────────────────
+  # 2f. Workflow lint — actionlint
+  # ────────────────────────────────────────────────────────────
+  # `mise run ci:lint` has always existed and no workflow ran it, so a mistake in a
+  # workflow file was found by the workflow misbehaving.
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: actionlint
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          fail-on-error: true
 
   # ────────────────────────────────────────────────────────────
   # 3. IaC Security — Terraform / Infrastructure

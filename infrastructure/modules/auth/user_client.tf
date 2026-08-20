@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # -----------------------------------------------------------------------------
 # User App Client — authorization_code flow for interactive SSO
 #

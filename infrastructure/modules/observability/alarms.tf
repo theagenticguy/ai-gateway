@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # =============================================================================
 # CloudWatch Alarms — configurable thresholds, SNS notifications
 # =============================================================================

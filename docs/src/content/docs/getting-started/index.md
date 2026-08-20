@@ -29,7 +29,8 @@ git clone git@github.com:theagenticguy/ai-gateway.git
 cd ai-gateway
 
 # Install all tool versions defined in mise.toml
-# (Python 3.13, Terraform 1.10.5, lefthook, checkov, trivy, hadolint, gitleaks)
+# (Python 3.13, Terraform 1.14.8, lefthook, checkov, trivy, grype, syft,
+#  osv-scanner, hadolint, gitleaks, actionlint)
 mise install
 ```
 

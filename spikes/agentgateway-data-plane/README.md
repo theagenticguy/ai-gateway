@@ -2,6 +2,8 @@
 
 Phase 0 PoC for [ADR-017](../../adr/017-agentgateway-data-plane-spike.md). Proves locally that agentgateway can fill Portkey's slot behind the existing gwcore control plane, and exercises the one seam that does not line up: the guardrail webhook contract.
 
+> **Status (post-migration):** the migration shipped. `src/budget_enforcement` now speaks the agentgateway `{action}` contract natively via `gwcore.agentgateway`, so the adapter shim explored here was not needed in production, and no `content_scanner` Lambda exists in `src/`. The notes below are the spike-time record.
+
 ## What this proves
 
 1. **agentgateway runs as a single container** and serves both `/v1/chat/completions` and `/v1/messages` on one port (the dual surface ADR-006 requires).

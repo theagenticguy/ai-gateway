@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CloudWatch EMF metrics + OTEL GenAI-convention span attributes.
 
 Metrics are emitted as CloudWatch Embedded Metric Format (EMF) — a structured

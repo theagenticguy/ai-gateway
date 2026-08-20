@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 output "firehose_stream_name" {
   description = "Name of the Kinesis Firehose delivery stream for audit logs"
   value       = try(aws_kinesis_firehose_delivery_stream.audit[0].name, "")

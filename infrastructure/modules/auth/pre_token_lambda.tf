@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # -----------------------------------------------------------------------------
 # Pre-Token-Generation Lambda (V2 trigger)
 #
