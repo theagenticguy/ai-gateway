@@ -52,7 +52,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.download-sbom.outcome == 'failure'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Build custom gateway image (SBOM fallback)
         if: steps.download-sbom.outcome == 'failure'
@@ -87,7 +87,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Grype SARIF
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         continue-on-error: true
         with:
@@ -97,7 +97,7 @@ jobs:
       # ── OSV-Scanner: check lockfiles against OSV database ──
       - name: OSV-Scanner lockfile scan
         id: osv
-        uses: google/osv-scanner-action/osv-scanner-action@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
+        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
           scan-args: |-
             --lockfile=uv.lock
@@ -107,7 +107,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload OSV-Scanner SARIF
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         continue-on-error: true
         with:
@@ -196,7 +196,7 @@ jobs:
         run: grep -E '^[A-Z_][A-Z0-9_]*=' versions.env >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Build custom gateway image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -224,7 +224,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         continue-on-error: true
         with:
